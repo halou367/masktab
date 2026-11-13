@@ -30,3 +30,7 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); }
 #toast { position:fixed; left:50%; bottom:14px; transform:translateX(-50%) translateY(20px); background:#323232; color:#fff; padding:8px 14px; border-radius:8px; opacity:0; transition:.2s; pointer-events:none; max-width:90%; z-index:9; }
 #toast.show { opacity:1; transform:translateX(-50%); } #toast.bad { background:#b3261e; }
 .dot { width:10px; height:10px; border-radius:50%; flex:none; }
+.tg { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--sub); padding:3px 4px; border-radius:8px; }
+.tg i { width:26px; height:14px; border-radius:99px; background:var(--line); position:relative; transition:background .15s; flex:none; }
+.tg i::after { content:''; position:absolute; left:2px; top:2px; width:10px; height:10px; border-radius:50%; background:#fff; box-shadow:0 0 0 1px rgba(0,0,0,.15); transition:left .15s; }
+.tg.on { color:var(--fg); } .tg.on i { background:var(--accent); } .tg.on i::after { left:14px; }

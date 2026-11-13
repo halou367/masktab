@@ -1,0 +1,180 @@
+; MaskTab 的 Windows 安装程序（NSIS 3）。
+;
+; 构建（见 .github/workflows/ci.yml）：
+;   makensis /INPUTCHARSET UTF8 /DVERSION=0.1.23 /DVERSION4=0.1.23.0 /DSRC=<含 masktab.exe 的目录> /DOUT=<输出>\MaskTab-Setup.exe installer\masktab.nsi
+;   完整包再加：/DFULL /DKVER=<内核版本> /DMVER=<mihomo 版本> /DKERNEL=<解压好的内核目录> /DMIHOMO=<mihomo.exe>
+;   路径一律用绝对路径（makensis 的相对路径是相对脚本所在目录的）。两个组件用 go run ./cmd/pack 准备。
+;
+; 两种安装包用同一个脚本：
+;   普通包：只有 masktab.exe（几 MB）。升级 MaskTab 用它。缺的组件由 MaskTab 首次运行时下载。
+;   完整包（-DFULL）：另带浏览器内核与代理内核，装完不需要再下载任何东西。
+;
+; 覆盖安装的规则（"只更新变了的部分"）：
+;   - masktab.exe：总是替换。
+;   - 代理内核 mihomo.exe：已装的版本与包里的版本相同就跳过。
+;   - 浏览器内核：这个版本已经在（无论是以前装的还是 MaskTab 自己下载的）就跳过；版本变了才装新的，并删掉旧版本。
+;   - data 目录（实例、登录状态、订阅、扩展、设置）：安装与升级都不碰；卸载时默认保留。
+;
+; 装到当前用户目录，不需要管理员权限。静默安装：MaskTab-Setup.exe /S /D=C:\某目录（/D 必须在最后，不加引号）。
+
+Unicode true
+ManifestDPIAware true
+RequestExecutionLevel user
+SetCompressor /SOLID lzma
+SetCompressorDictSize 64
+
+!include "MUI2.nsh"
+!include "LogicLib.nsh"
+!include "FileFunc.nsh"
+
+!ifndef VERSION
+  !define VERSION "0.0.0"
+!endif
+!ifndef VERSION4
+  !define VERSION4 "0.0.0.0"
+!endif
+!ifndef SRC
+  !define SRC "dist"
+!endif
+!ifndef OUT
+  !define OUT "MaskTab-Setup.exe"
+!endif
+!define APP "MaskTab"
+!define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MaskTab"
+
+Name "${APP} ${VERSION}"
+OutFile "${OUT}"
+InstallDir "$LOCALAPPDATA\Programs\MaskTab"
+InstallDirRegKey HKCU "Software\MaskTab" "InstallDir"
+BrandingText "${APP} ${VERSION}"
+VIProductVersion "${VERSION4}"
+VIAddVersionKey "ProductName" "${APP}"
+VIAddVersionKey "FileDescription" "${APP} 安装程序"
+VIAddVersionKey "FileVersion" "${VERSION}"
+VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "LegalCopyright" ""
+
+!define MUI_ABORTWARNING
+!define MUI_FINISHPAGE_RUN "$INSTDIR\masktab.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "运行 MaskTab"
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "SimpChinese"
+
+; 让正在运行的 MaskTab 自己退出（关闭全部窗口、保存状态），再等可执行文件解除占用。
+!macro StopRunning
+  ${If} ${FileExists} "$INSTDIR\masktab.exe"
+    DetailPrint "正在关闭运行中的 MaskTab…"
+    nsExec::Exec '"$INSTDIR\masktab.exe" -quit'
+    Pop $0
+    StrCpy $1 0
+    ${Do}
+      ClearErrors
+      FileOpen $0 "$INSTDIR\masktab.exe" a
+      ${IfNot} ${Errors}
+        FileClose $0
+        ${ExitDo}
+      ${EndIf}
+      IntOp $1 $1 + 1
+      ${If} $1 > 20
+        nsExec::Exec 'taskkill /F /IM masktab.exe'
+        Pop $0
+        Sleep 1000
+        ${ExitDo}
+      ${EndIf}
+      Sleep 500
+    ${Loop}
+  ${EndIf}
+!macroend
+
+Section "MaskTab" SecMain
+  SectionIn RO
+  !insertmacro StopRunning
+  SetOutPath "$INSTDIR"
+  SetOverwrite on
+  File "${SRC}/masktab.exe"
+
+!ifdef FULL
+  ; ---- 代理内核：版本相同就跳过 ----
+  ${If} ${FileExists} "$INSTDIR\mihomo.exe"
+  ${AndIf} ${FileExists} "$INSTDIR\mihomo-${MVER}.ver"
+    DetailPrint "代理内核 ${MVER} 已是最新，跳过"
+  ${Else}
+    DetailPrint "安装代理内核 ${MVER}"
+    nsExec::Exec 'taskkill /F /IM mihomo.exe'
+    Pop $0
+    Delete "$INSTDIR\mihomo-*.ver"
+    File "/oname=mihomo.exe" "${MIHOMO}"
+    FileOpen $0 "$INSTDIR\mihomo-${MVER}.ver" w
+    FileClose $0
+  ${EndIf}
+
+  ; ---- 浏览器内核：这个版本已经在就跳过（包括 MaskTab 自己下载到 data\kernel 的）----
+  ${If} ${FileExists} "$INSTDIR\kernel\fingerprint-chromium\${KVER}\installed.ok"
+  ${OrIf} ${FileExists} "$INSTDIR\data\kernel\fingerprint-chromium\${KVER}\*.*"
+    DetailPrint "浏览器内核 ${KVER} 已存在，跳过"
+  ${Else}
+    DetailPrint "安装浏览器内核 ${KVER}（文件较多，需要一两分钟）"
+    ; 删掉旧版本（版本号不同的目录）与上次没装完的残留
+    FindFirst $0 $1 "$INSTDIR\kernel\fingerprint-chromium\*.*"
+    ${DoWhile} $1 != ""
+      ${If} $1 != "."
+      ${AndIf} $1 != ".."
+        RMDir /r "$INSTDIR\kernel\fingerprint-chromium\$1"
+      ${EndIf}
+      FindNext $0 $1
+    ${Loop}
+    FindClose $0
+    SetOutPath "$INSTDIR\kernel\fingerprint-chromium\${KVER}"
+    SetDetailsPrint textonly
+    File /r "${KERNEL}/*.*"
+    SetDetailsPrint both
+    FileOpen $0 "$INSTDIR\kernel\fingerprint-chromium\${KVER}\installed.ok" w
+    FileClose $0
+    SetOutPath "$INSTDIR"
+  ${EndIf}
+!endif
+
+  ; ---- 快捷方式、卸载信息 ----
+  CreateShortcut "$SMPROGRAMS\MaskTab.lnk" "$INSTDIR\masktab.exe"
+  CreateShortcut "$DESKTOP\MaskTab.lnk" "$INSTDIR\masktab.exe"
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+  WriteRegStr HKCU "Software\MaskTab" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "Software\MaskTab" "Version" "${VERSION}"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "MaskTab"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\masktab.exe"
+  WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegStr HKCU "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
+  ${GetSize} "$INSTDIR" "/S=0K /G=0" $0 $1 $2
+  IntFmt $0 "0x%08X" $0
+  WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
+SectionEnd
+
+Section "Uninstall"
+  !insertmacro StopRunning
+  nsExec::Exec 'taskkill /F /IM mihomo.exe'
+  Pop $0
+  Delete "$INSTDIR\masktab.exe"
+  Delete "$INSTDIR\mihomo.exe"
+  Delete "$INSTDIR\mihomo-*.ver"
+  RMDir /r "$INSTDIR\kernel"
+  Delete "$SMPROGRAMS\MaskTab.lnk"
+  Delete "$DESKTOP\MaskTab.lnk"
+  DeleteRegKey HKCU "${UNINST_KEY}"
+  DeleteRegKey HKCU "Software\MaskTab"
+  ; 浏览器数据默认保留（静默卸载时一定保留）；重新安装到同一目录后原样可用。
+  ${If} ${FileExists} "$INSTDIR\data\*.*"
+    MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "同时删除全部浏览器数据吗？$\n$\n包括各实例的登录状态、书签、扩展、订阅与设置，删除后无法恢复。$\n选择「否」会保留在：$INSTDIR\data" /SD IDNO IDNO keepdata
+    RMDir /r "$INSTDIR\data"
+    keepdata:
+  ${EndIf}
+  Delete "$INSTDIR\uninstall.exe"
+  RMDir "$INSTDIR"
+SectionEnd

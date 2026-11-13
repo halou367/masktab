@@ -17,6 +17,11 @@ var FS embed.FS
 //go:embed all:search
 var SearchFS embed.FS
 
+// SetupPage 是"组件准备"进度页。首次运行还没有浏览器内核时，由核心服务提供给系统默认浏览器打开。
+//
+//go:embed setup/setup.html
+var SetupPage []byte
+
 // ID 是伴随扩展的固定扩展 ID，由 ext/manifest.json 里的 key 决定（单元测试会校验两者一致）。
 // 核心服务用它校验请求来源（硬规则 R-4）。
 const ID = "doepfdknoapkdegjpopaicigcdnhlifp"

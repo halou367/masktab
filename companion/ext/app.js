@@ -36,6 +36,9 @@ function exits() {
     h('form', { class: 'item', onsubmit: (ev) => { ev.preventDefault(); const f = new FormData(ev.target); toast('正在拉取订阅…'); act(async () => { await api('POST', '/api/subscriptions', { name: f.get('name'), url: f.get('url'), kind: f.get('kind') }); ev.target.reset(); }, '订阅已添加'); } },
       h('input', { name: 'name', placeholder: '名称', style: { width: '120px' } }), h('input', { name: 'url', class: 'grow', placeholder: '订阅地址 https://…', required: true }),
       h('select', { name: 'kind', title: '订阅类型' }, h('option', { value: '' }, '自动识别'), h('option', { value: 'edgetunnel' }, 'edgetunnel'), h('option', { value: 'generic' }, '通用')), h('button', { class: 'ib on', title: '添加订阅' }, icon('plus'))),
+    (() => { const seen = new Set(), cs = st.subscriptions.flatMap((x) => x.nodes).filter((n) => n.custom && !seen.has(n.id) && seen.add(n.id));
+      return cs.length ? [h('h2', { style: { marginTop: '26px' } }, icon('bolt'), '自定义地址'), cs.map((n) => h('div', { class: 'item' }, h('span', { class: 'no', style: { minWidth: '160px' } }, `${n.server}:${n.port}`), h('span', { class: 'sub grow' }, n.label || ''),
+        ibtn('trash', '删除', () => act(() => api('DELETE', `/api/addresses/${n.id}`)), 'danger')))] : null; })(),
     h('h2', { style: { marginTop: '26px' } }, icon('globe'), '出口列表（ProxyIP / SOCKS5 / HTTP）'),
     h('form', { onsubmit: (ev) => { ev.preventDefault(); const ta = ev.target.querySelector('textarea'); act(async () => { const r = await api('POST', '/api/exits', { text: ta.value }); toast(`新增 ${r.added} 条`); ta.value = ''; }); } },
       h('textarea', { placeholder: '每行一条，可多行粘贴：\nproxyip=10.28.138.41\n7.cf.3666888.xyz #备注\nsocks5://user:pass@1.2.3.4:1080\nhttp://user:pass@1.2.3.4:8080' }),

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/halou367/masktab/internal/kernel"
@@ -49,11 +50,16 @@ type Runtime struct {
 	startedAt  int64 // 本次启动时刻（毫秒），用来判断伴随扩展后台是否一直没起来
 }
 
+// Setup 是组件准备的进度。Error 只表示"浏览器内核没准备好"（此时任何窗口都开不了）；
+// 代理内核的问题单独放在 CoreError，不会被后面的步骤覆盖。
 type Setup struct {
-	Stage string `json:"stage"` // "" | mihomo | kernel | ready | error
-	Done  int64  `json:"done"`
-	Total int64  `json:"total"`
-	Error string `json:"error,omitempty"`
+	Stage     string   `json:"stage"` // "" | mihomo | kernel | unpack | ready | error
+	Done      int64    `json:"done"`
+	Total     int64    `json:"total"`
+	Source    string   `json:"source,omitempty"` // 当前下载途径
+	Error     string   `json:"error,omitempty"`
+	CoreError string   `json:"coreError,omitempty"`
+	Log       []string `json:"log,omitempty"` // 最近的尝试记录
 }
 
 type Event struct {
@@ -75,7 +81,8 @@ type App struct {
 	Exits     []*model.ExitEntry
 	Exts      []*model.GlobalExtension
 	rt        map[string]*Runtime
-	delays    map[string]int // 出站名 → 延迟
+	scan      map[string]*model.NodeScan // 测速用出站名 → 最近一次延迟 / 出口 / 失败原因（落盘在 state/scan.json）
+	scanning  map[string]bool            // 正在测速的订阅
 	setup     Setup
 	events    []Event
 	seq       int64
@@ -84,8 +91,13 @@ type App struct {
 	quitting  bool
 
 	cfgMu     sync.Mutex
+	cfgGen    atomic.Int64 // 每次 mihomo 重载配置加一（重载会重置全部策略组，进行中的测速据此重试）
 	core      *proxy.Core
 	coreOK    bool
+	scanPorts []int
+	scanPool  chan int
+	setupMu   sync.Mutex
+	kernelUp  chan struct{} // 内核就绪后关闭
 	kernelExe string
 	adapter   kernel.Adapter
 	apiPort   int
@@ -173,8 +185,8 @@ type fileWrap[T any] struct {
 
 // Open 载入数据目录；首次运行创建普通实例 #0。
 func Open(dir, exeDir, version string) (*App, error) {
-	a := &App{Dir: dir, ExeDir: exeDir, Version: version, rt: map[string]*Runtime{}, delays: map[string]int{},
-		waiters: map[chan struct{}]bool{}, connSeen: map[string][2]int64{}, token: randToken(24)}
+	a := &App{Dir: dir, ExeDir: exeDir, Version: version, rt: map[string]*Runtime{}, scan: map[string]*model.NodeScan{}, scanning: map[string]bool{},
+		kernelUp: make(chan struct{}), waiters: map[chan struct{}]bool{}, connSeen: map[string][2]int64{}, token: randToken(24)}
 	for _, d := range []string{"config", "kernel", "profiles", "extensions", "ext-master", "runtime", "core", "state"} {
 		if err := os.MkdirAll(a.p(d), 0o755); err != nil {
 			return nil, err
@@ -198,6 +210,10 @@ func Open(dir, exeDir, version string) (*App, error) {
 	var wx fileWrap[[]*model.GlobalExtension]
 	load("extensions.json", &wx)
 	a.Exts = wx.Items
+	readJSON(a.p("state", "scan.json"), &a.scan)
+	if a.scan == nil {
+		a.scan = map[string]*model.NodeScan{}
+	}
 	a.adapter = kernel.Get(a.Settings.Kernel)
 	if a.inst0() == nil {
 		a.mu.Lock()
@@ -345,7 +361,7 @@ func (a *App) newInstanceLocked(kind string) *model.Instance {
 		FP:     model.FP{Seed: base64.StdEncoding.EncodeToString(seed), DisableSpoofing: []string{}},
 		TZ:     model.TZ{Mode: "auto", Source: a.Settings.TZSourceDefault},
 		Locale: model.Locale{Mode: "follow-exit"},
-		Proxy:  model.InstProxy{State: "off", AddressMode: a.Settings.AddressModeDefault},
+		Proxy:  model.InstProxy{State: "off", Auto: true, AddressMode: a.Settings.AddressModeDefault},
 	}
 	if kind == "normal" {
 		in.Color = "#5F6368"

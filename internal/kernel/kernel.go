@@ -22,6 +22,8 @@ type Launch struct {
 	Seed                uint32
 	HardwareConcurrency int
 	PlatformVersion     string
+	Platform            string // 空 = 与本机一致
+	Brand               string // 空 = Chrome
 	DisableSpoofing     []string
 	Timezone            string
 	Lang                string
@@ -61,6 +63,16 @@ func hostPlatform() string {
 	}
 	return "linux"
 }
+
+func orDefault(v, d string) string {
+	if v == "" {
+		return d
+	}
+	return v
+}
+
+// HostPlatform 返回本机系统在指纹参数里的名字（windows | macos | linux）。
+func HostPlatform() string { return hostPlatform() }
 
 // commonArgs 是两种内核共用的参数。硬规则 R-1 在这里落实。
 func commonArgs(l Launch) []string {
@@ -118,8 +130,8 @@ func (fpChromium) Args(l Launch) []string {
 	if !l.Normal {
 		a = append(a,
 			fmt.Sprintf("--fingerprint=%d", l.Seed),
-			"--fingerprint-platform="+hostPlatform(),
-			"--fingerprint-brand=Chrome",
+			"--fingerprint-platform="+orDefault(l.Platform, hostPlatform()),
+			"--fingerprint-brand="+orDefault(l.Brand, "Chrome"),
 		)
 		if l.HardwareConcurrency > 0 {
 			a = append(a, fmt.Sprintf("--fingerprint-hardware-concurrency=%d", l.HardwareConcurrency))

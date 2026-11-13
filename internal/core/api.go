@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,12 +33,22 @@ func (a *App) Serve() error {
 	mux := http.NewServeMux()
 	a.routes(mux)
 	origin := "chrome-extension://" + companion.ID
+	self := fmt.Sprintf("http://127.0.0.1:%d", a.apiPort)
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/ping" {
 			_, _ = w.Write([]byte(`{"app":"masktab"}`))
 			return
 		}
-		if o := r.Header.Get("Origin"); o != "" && o != origin {
+		if r.URL.Path == "/setup" && r.Method == http.MethodGet { // 组件准备进度页：静态页面，不含任何数据；令牌由页面从 # 后读取
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(companion.SetupPage)
+			return
+		}
+		// 进度页是本服务自己提供的页面（系统浏览器打开），只放行它用到的三个接口；仍然要带令牌。
+		if o := r.Header.Get("Origin"); o == self && (r.URL.Path == "/api/setup" || r.URL.Path == "/api/setup/retry" || r.URL.Path == "/api/quit") {
+			// 同源请求，不需要 CORS 头
+		} else if o != "" && o != origin {
 			http.Error(w, "forbidden origin", http.StatusForbidden)
 			return
 		} else if o != "" {
@@ -81,27 +93,40 @@ func body(r *http.Request, v any) error {
 
 type instView struct {
 	*model.Instance
-	RT *Runtime `json:"rt"`
+	RT   *Runtime `json:"rt"`
+	Info *fpInfo  `json:"fpInfo,omitempty"`
 }
 
+// fpInfo 是界面上"指纹信息"展示的内容：按当前设置，下次启动时这个实例会呈现的样子。
+type fpInfo struct {
+	Seed     uint32 `json:"seed"`
+	Platform string `json:"platform"`
+	Brand    string `json:"brand"`
+	Cores    int    `json:"cores"`
+	TZ       string `json:"tz"`   // 空 = 系统时区
+	Lang     string `json:"lang"` // 空 = 系统语言
+}
+
+// nodeView 是节点列表里的一行：地址（优选 IP）、备注 / Host、延迟、出口。
 type nodeView struct {
-	Key    string `json:"key"`
-	Name   string `json:"name"`
-	Server string `json:"server"`
-	Type   string `json:"type"`
-	Delay  int    `json:"delay"`
+	ID     string        `json:"id"`
+	Server string        `json:"server"`
+	Port   int           `json:"port"`
+	Label  string        `json:"label"`
+	Host   string        `json:"host,omitempty"`
+	Type   string        `json:"type,omitempty"`
+	Custom bool          `json:"custom,omitempty"`
+	Delay  int           `json:"delay"`
+	Exit   *model.IPInfo `json:"exit,omitempty"`
+	Err    string        `json:"err,omitempty"`
 }
 
 type subView struct {
 	*model.Subscription
 	Nodes     []nodeView `json:"nodes"`
 	NodeCount int        `json:"nodeCount"`
+	Scanning  bool       `json:"scanning"`
 	Template  any        `json:"template,omitempty"`
-}
-
-type addrView struct {
-	*model.Address
-	Delay int `json:"delay"`
 }
 
 type extView struct {
@@ -117,7 +142,17 @@ func (a *App) State(me string) map[string]any {
 	var mine *instView
 	for _, in := range a.Instances {
 		r := *a.rtLocked(in.ID)
-		v := instView{in, &r}
+		v := instView{Instance: in, RT: &r}
+		if in.Kind != "normal" {
+			tz, lang, _ := expectTZ(in, r.Probe)
+			v.Info = &fpInfo{Seed: seed32(in.FP.Seed), Platform: in.FP.Platform, Brand: in.FP.Brand, Cores: cores(in), TZ: tz, Lang: lang}
+			if v.Info.Platform == "" {
+				v.Info.Platform = kernel.HostPlatform()
+			}
+			if v.Info.Brand == "" {
+				v.Info.Brand = "Chrome"
+			}
+		}
 		insts = append(insts, v)
 		if in.ID == me {
 			mine = &v
@@ -125,17 +160,13 @@ func (a *App) State(me string) map[string]any {
 	}
 	subs := []subView{}
 	for _, s := range a.Subs {
-		v := subView{Subscription: s, NodeCount: len(s.Nodes), Nodes: []nodeView{}}
-		if s.Kind != "edgetunnel" {
-			for _, n := range s.Nodes {
-				v.Nodes = append(v.Nodes, nodeView{n.Key, n.Name, fmt.Sprint(n.Raw["server"]), fmt.Sprint(n.Raw["type"]), a.delays[nodeName(s, n.Key)]})
-			}
+		v := subView{Subscription: s, Nodes: []nodeView{}, Scanning: a.scanning[s.ID]}
+		for _, n := range a.nodesLocked(s) {
+			sc := a.scanLocked(n.Name)
+			v.Nodes = append(v.Nodes, nodeView{ID: n.ID, Server: n.Server, Port: n.Port, Label: n.Label, Host: n.Host, Type: n.Type, Custom: n.Custom, Delay: sc.Delay, Exit: sc.Exit, Err: sc.Err})
 		}
+		v.NodeCount = len(v.Nodes)
 		subs = append(subs, v)
-	}
-	addrs := []addrView{}
-	for _, ad := range a.Addresses {
-		addrs = append(addrs, addrView{ad, a.delays[addrName(ad)]})
 	}
 	exts := []extView{}
 	for _, x := range a.Exts {
@@ -150,15 +181,17 @@ func (a *App) State(me string) map[string]any {
 		exitsOut = []*model.ExitEntry{}
 	}
 	return map[string]any{
-		"me": mine, "instances": insts, "subscriptions": subs, "addresses": addrs, "exits": exitsOut, "extensions": exts,
+		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts,
 		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version,
 		"kernel": map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": kernel.KernelVersion, "path": a.kernelExe},
-		"core":   map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion},
+		"core":   map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
 	}
 }
 
 type proxyPatch struct {
 	State, SubscriptionID, ExitID, ExitIP, AddressMode, AddressID, Host, NodeKey *string
+	NodeID                                                                       *string // 节点列表里的一行（优选 IP 的 id 或节点的 key）：手动选中即关闭"自动"
+	Auto                                                                         *bool
 }
 
 type instPatch struct {
@@ -170,7 +203,10 @@ type instPatch struct {
 	FP     *struct {
 		HardwareConcurrency *int
 		PlatformVersion     *string
+		Platform            *string
+		Brand               *string
 		DisableSpoofing     *[]string
+		NewSeed             bool // 换一套新指纹
 	}
 }
 
@@ -222,8 +258,32 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 			in.FP.HardwareConcurrency = *p.FP.HardwareConcurrency
 		}
 		setIf(&in.FP.PlatformVersion, p.FP.PlatformVersion)
+		if p.FP.Platform != nil {
+			switch *p.FP.Platform {
+			case "", "windows", "macos", "linux":
+				in.FP.Platform = *p.FP.Platform
+			}
+		}
+		if p.FP.Brand != nil {
+			switch *p.FP.Brand {
+			case "", "Chrome", "Edge", "Opera", "Vivaldi":
+				in.FP.Brand = *p.FP.Brand
+			}
+		}
 		if p.FP.DisableSpoofing != nil {
-			in.FP.DisableSpoofing = *p.FP.DisableSpoofing
+			ok := []string{}
+			for _, v := range *p.FP.DisableSpoofing {
+				switch v {
+				case "font", "audio", "canvas", "clientrects", "gpu":
+					ok = append(ok, v)
+				}
+			}
+			in.FP.DisableSpoofing = ok
+		}
+		if p.FP.NewSeed {
+			seed := make([]byte, 32)
+			_, _ = rand.Read(seed)
+			in.FP.Seed = base64.StdEncoding.EncodeToString(seed)
 		}
 		restart("fingerprint")
 	}
@@ -243,6 +303,16 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 		setIf(&in.Proxy.AddressID, pp.AddressID)
 		setIf(&in.Proxy.Host, pp.Host)
 		setIf(&in.Proxy.NodeKey, pp.NodeKey)
+		if pp.Auto != nil {
+			in.Proxy.Auto = *pp.Auto
+		}
+		if pp.NodeID != nil {
+			setNode(in, a.subLocked(in.Proxy.SubscriptionID), *pp.NodeID)
+			in.Proxy.Auto = false
+			if in.Proxy.AddressMode == "same-as-exit" {
+				in.Proxy.AddressMode = "custom"
+			}
+		}
 		if in.Proxy.State == "on" && in.Proxy.SubscriptionID == "" {
 			a.defaultProxyLocked(in)
 			if in.Proxy.SubscriptionID == "" {
@@ -366,7 +436,6 @@ func (a *App) routes(mux *http.ServeMux) {
 			a.DeleteSubscription(s.ID)
 		}
 		if err == nil {
-			go a.TestAddresses()
 			reply(w, map[string]any{"id": s.ID, "kind": s.Kind, "nodes": len(s.Nodes)}, nil)
 			return
 		}
@@ -378,7 +447,26 @@ func (a *App) routes(mux *http.ServeMux) {
 		case "refresh":
 			reply(w, nil, a.RefreshSubscription(id, r.URL.Query().Get("force") == "1"))
 		case "test":
-			go a.TestNodes(id)
+			if !a.coreOK {
+				reply(w, nil, errors.New("代理内核没有运行，无法测速"))
+				return
+			}
+			go a.Scan(id)
+			reply(w, nil, nil)
+		case "ech": // ?off=1 关闭 / ?off=0 恢复使用订阅里的 ECH
+			a.mu.Lock()
+			if sub := a.subLocked(id); sub != nil {
+				sub.ECHOff = r.URL.Query().Get("off") == "1"
+				a.saveLocked("subscriptions")
+				a.bumpLocked("state", "")
+			}
+			a.mu.Unlock()
+			go func() {
+				a.Scan(id)
+				for _, iid := range a.activeIDs() {
+					a.refresh(iid)
+				}
+			}()
 			reply(w, nil, nil)
 		case "default":
 			a.mu.Lock()
@@ -477,8 +565,9 @@ func (a *App) routes(mux *http.ServeMux) {
 		a.mu.Unlock()
 		reply(w, nil, a.applyConfig())
 	})
-	mux.HandleFunc("POST /api/addresses/test", func(w http.ResponseWriter, r *http.Request) {
-		go a.TestAddresses()
+	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) { reply(w, a.setupInfo(), nil) })
+	mux.HandleFunc("POST /api/setup/retry", func(w http.ResponseWriter, r *http.Request) {
+		a.RetrySetup()
 		reply(w, nil, nil)
 	})
 	mux.HandleFunc("DELETE /api/addresses/{id}", func(w http.ResponseWriter, r *http.Request) {

@@ -23,6 +23,7 @@ type InstProxy struct {
 	SubscriptionID string `json:"subscriptionId,omitempty"`
 	ExitID         string `json:"exitId,omitempty"`
 	ExitIP         string `json:"exitIp,omitempty"`
+	Auto           bool   `json:"auto"`        // 自动选节点：启动时或当前节点不通时，换成延迟最低的可用节点
 	AddressMode    string `json:"addressMode"` // same-as-exit | custom
 	AddressID      string `json:"addressId,omitempty"`
 	Host           string `json:"host,omitempty"`
@@ -30,7 +31,9 @@ type InstProxy struct {
 }
 
 type FP struct {
-	Seed                string   `json:"seed"` // 32 字节 base64
+	Seed                string   `json:"seed"`               // 32 字节 base64
+	Platform            string   `json:"platform,omitempty"` // windows | macos | linux；空 = 与本机一致
+	Brand               string   `json:"brand,omitempty"`    // Chrome | Edge | Opera | Vivaldi；空 = Chrome
 	HardwareConcurrency int      `json:"hardwareConcurrency,omitempty"`
 	PlatformVersion     string   `json:"platformVersion,omitempty"`
 	DisableSpoofing     []string `json:"disableSpoofing"`
@@ -73,6 +76,9 @@ type Subscription struct {
 	Nodes       []ProxyNode `json:"nodes"`
 	Template    *Template   `json:"template,omitempty"`
 	Hosts       []string    `json:"hosts"`
+	// ECHOff：不使用订阅里的 ECH。全部节点都因 ECH 连不上时由测速自动置上（这个网络拿不到或用不了 ECH 配置），也可以手动开关。
+	ECHOff bool `json:"echOff,omitempty"`
+	HasECH bool `json:"hasEch,omitempty"` // 订阅里的节点带 ECH
 }
 
 type Address struct {
@@ -108,6 +114,14 @@ type IPInfo struct {
 	Timezone string `json:"timezone,omitempty"`
 	Org      string `json:"org,omitempty"`
 	Approx   bool   `json:"approx,omitempty"` // 时区来自"国家→默认时区"兜底表
+}
+
+// NodeScan 是一个节点（优选 IP）最近一次测速 / 出口探测的结果。
+type NodeScan struct {
+	Delay int     `json:"delay"`          // 毫秒；0 未测；-1 不通
+	Exit  *IPInfo `json:"exit,omitempty"` // 经该节点访问非 Cloudflare 站点时对方看到的 IP
+	Err   string  `json:"err,omitempty"`  // 不通的原因
+	At    int64   `json:"at,omitempty"`
 }
 
 type ExitProbe struct {

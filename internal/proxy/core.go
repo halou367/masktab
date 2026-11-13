@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -174,6 +175,42 @@ func (c *Core) Delay(name, testURL string, timeoutMs int) (int, error) {
 	var r struct{ Delay int }
 	_ = json.Unmarshal(b, &r)
 	return r.Delay, nil
+}
+
+// LastError 从 mihomo 的日志里找出某个策略组在 since 之后最近一次拨号失败的原因（"error: " 之后的文字）。
+func (c *Core) LastError(group string, since time.Time) string {
+	f, err := os.Open(filepath.Join(c.Dir, "mihomo.log"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err == nil && st.Size() > 96<<10 {
+		_, _ = f.Seek(-96<<10, io.SeekEnd)
+	}
+	b, _ := io.ReadAll(f)
+	lines := bytes.Split(b, []byte("\n"))
+	mark := []byte("dial " + group + " ")
+	for i := len(lines) - 1; i >= 0; i-- {
+		ln := lines[i]
+		if !bytes.Contains(ln, mark) {
+			continue
+		}
+		if j := bytes.Index(ln, []byte(`time="`)); j >= 0 && len(ln) > j+36 {
+			if k := bytes.IndexByte(ln[j+6:], '"'); k > 0 {
+				if t, err := time.Parse(time.RFC3339Nano, string(ln[j+6:j+6+k])); err == nil && t.Before(since.Add(-time.Second)) {
+					return ""
+				}
+			}
+		}
+		if j := bytes.Index(ln, []byte(" error: ")); j >= 0 {
+			msg := string(bytes.TrimRight(ln[j+8:], "\"\r "))
+			if k := strings.LastIndex(msg, "connect error: "); k >= 0 {
+				msg = msg[k+15:]
+			}
+			return msg
+		}
+	}
+	return ""
 }
 
 // Conn 是 /connections 里的一条连接（只取用到的字段）。

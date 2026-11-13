@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MaskTab · 正在准备</title>
+<style>
+:root{--bg:#f6f8fa;--card:#fff;--fg:#1f1f1f;--sub:#5f6368;--line:#e0e3e7;--accent:#1a73e8;--bad:#d93025;--good:#188038}
+@media (prefers-color-scheme:dark){:root{--bg:#202124;--card:#292a2d;--fg:#e8eaed;--sub:#9aa0a6;--line:#3c4043;--accent:#8ab4f8;--bad:#f28b82;--good:#81c995}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:14px/1.6 system-ui,"Segoe UI","Microsoft YaHei",sans-serif}
+.card{width:min(560px,92vw);background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px 30px}
+h1{font-size:19px;font-weight:600;margin:0 0 4px}.sub{color:var(--sub);font-size:13px}
+.bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:20px 0 8px}.bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:99px;transition:width .3s}
+.bar.busy i{width:35%;animation:slide 1.2s ease-in-out infinite}@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+.row{display:flex;justify-content:space-between;gap:12px;font-variant-numeric:tabular-nums}
+.steps{margin:18px 0 0;padding:0;list-style:none}.steps li{display:flex;gap:10px;align-items:center;padding:5px 0}.dot{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);flex:none;display:grid;place-items:center;font-size:11px}
+li.done .dot{background:var(--good);border-color:var(--good);color:#fff}li.now .dot{border-color:var(--accent)}li.fail .dot{background:var(--bad);border-color:var(--bad);color:#fff}
+.err{margin-top:16px;padding:10px 12px;border:1px solid var(--bad);border-radius:10px;color:var(--bad);font-size:13px;word-break:break-all}
+details{margin-top:14px;font-size:12px;color:var(--sub)}details div{margin:6px 0;word-break:break-all}code{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.btns{display:flex;gap:10px;margin-top:20px}button{font:inherit;border-radius:99px;padding:7px 20px;border:1px solid var(--line);background:none;color:var(--fg);cursor:pointer}button.main{background:var(--accent);border-color:var(--accent);color:#fff}button[hidden]{display:none}
+</style></head><body>
+<div class="card">
+  <h1 id="title">正在准备 MaskTab</h1>
+  <div class="sub" id="lead">首次使用需要准备两个组件，已经有的会直接跳过。</div>
+  <div class="bar" id="bar"><i></i></div>
+  <div class="row sub"><span id="what"></span><span id="num"></span></div>
+  <ul class="steps">
+    <li id="s-core"><span class="dot"></span><span>代理内核 mihomo</span><span class="sub" id="t-core"></span></li>
+    <li id="s-kernel"><span class="dot"></span><span>浏览器内核 <span id="kver"></span></span><span class="sub" id="t-kernel"></span></li>
+  </ul>
+  <div class="err" id="err" hidden></div>
+  <div class="btns"><button class="main" id="retry" hidden>重试</button><button id="quit" hidden>退出 MaskTab</button></div>
+  <details><summary>下载途径与手动安装</summary>
+    <div>下载时依次尝试：直连 → 本机已有的代理（系统代理、7890、7897、10809、10808、18080 等常见端口）→ GitHub 镜像。换途径时从断点继续，下载完成后校验文件。</div>
+    <div id="log"></div>
+    <div id="manual"></div>
+  </details>
+</div>
+<script>
+const token = location.hash.slice(1), $ = (id) => document.getElementById(id);
+const api = (method, path) => fetch(path, { method, headers: { 'X-MaskTab-Token': token } }).then((r) => r.json());
+const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+let last = { done: 0, at: Date.now(), speed: 0 }, gone = 0;
+function step(id, state, text) { $('s-' + id).className = state; $('s-' + id).querySelector('.dot').textContent = state === 'done' ? '✓' : state === 'fail' ? '!' : ''; $('t-' + id).textContent = text || ''; }
+function render(d) {
+  const s = d.setup, dl = s.stage === 'mihomo' || s.stage === 'kernel';
+  $('kver').textContent = d.kernelVersion;
+  const pct = dl && s.total > 0 ? Math.min(100, s.done * 100 / s.total) : 0;
+  const now = Date.now();
+  if (dl && now - last.at >= 1000) { last = { done: s.done, at: now, speed: Math.max(0, (s.done - last.done) * 1000 / (now - last.at)) }; }
+  $('bar').className = 'bar' + (s.stage === 'unpack' || (dl && !(s.total > 0)) ? ' busy' : '');
+  $('bar').firstElementChild.style.width = (d.kernelReady ? 100 : pct) + '%';
+  $('what').textContent = d.kernelReady ? '' : s.stage === 'unpack' ? '正在解压…' : dl ? `正在下载${s.stage === 'kernel' ? '浏览器内核' : '代理内核'} · ${s.source || ''}` : '';
+  $('num').textContent = dl && s.total > 0 ? `${mb(s.done)} / ${mb(s.total)} · ${pct.toFixed(0)}%${last.speed ? ' · ' + mb(last.speed) + '/s' : ''}` : '';
+  step('core', d.coreOk ? 'done' : s.coreError ? 'fail' : s.stage === 'mihomo' ? 'now' : '', d.coreOk ? '已就绪' : s.coreError ? '未就绪' : '');
+  step('kernel', d.kernelReady ? 'done' : s.error ? 'fail' : (s.stage === 'kernel' || s.stage === 'unpack') ? 'now' : '', d.kernelReady ? '已就绪' : s.error ? '未就绪' : '');
+  const errs = [s.error, s.coreError].filter(Boolean);
+  $('err').hidden = !errs.length; $('err').textContent = errs.join('\n');
+  const failed = !!s.error || (!!s.coreError && d.kernelReady);
+  $('retry').hidden = !failed; $('quit').hidden = !s.error;
+  $('log').textContent = (s.log || []).join('\n'); $('log').style.whiteSpace = 'pre-wrap';
+  $('manual').textContent = `手动安装：下载 ${d.kernelUrl} 解压到 ${d.kernelDir}；下载 ${d.coreUrl} 解压出的可执行文件放到 ${d.coreDir}。然后点"重试"。`;
+  if (d.kernelReady && !s.coreError) { $('title').textContent = 'MaskTab 已就绪'; $('lead').textContent = '浏览器窗口已经打开，这个页面可以关掉了。'; }
+  else if (s.error) { $('title').textContent = '组件没有准备好'; $('lead').textContent = '可以开着本机的代理软件后点"重试"，或按下面的说明手动安装。'; }
+  else { $('title').textContent = '正在准备 MaskTab'; $('lead').textContent = '首次使用需要准备两个组件，已经有的会直接跳过。'; }
+}
+async function tick() {
+  try { render(await api('GET', '/api/setup')); gone = 0; }
+  catch { if (++gone > 3) { $('title').textContent = 'MaskTab 已退出'; $('lead').textContent = '这个页面可以关掉了。'; $('what').textContent = ''; $('num').textContent = ''; $('retry').hidden = $('quit').hidden = true; return; } }
+  setTimeout(tick, 700);
+}
+$('retry').onclick = () => api('POST', '/api/setup/retry');
+$('quit').onclick = () => api('POST', '/api/quit').catch(() => {});
+tick();
+</script></body></html>

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,89 +24,6 @@ import (
 	"github.com/halou367/masktab/internal/probe"
 	"github.com/halou367/masktab/internal/proxy"
 )
-
-func (a *App) setSetup(stage string, done, total int64, err string) {
-	a.mu.Lock()
-	a.setup = Setup{stage, done, total, err}
-	a.mu.Unlock()
-}
-
-func firstFile(paths ...string) string {
-	for _, p := range paths {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p
-		}
-	}
-	return ""
-}
-
-// EnsureTools 找到或下载 mihomo 与浏览器内核，并启动 mihomo。任何一步失败都把原因留在 setup 里并返回。
-func (a *App) EnsureTools() error {
-	hc := &http.Client{}
-	mirror := a.Settings.Mirror
-	progress := func(stage string) kernel.Progress {
-		last := int64(-1)
-		return func(done, total int64) {
-			a.setSetup(stage, done, total, "")
-			if pct := done * 10 / max(total, 1); pct != last {
-				last = pct
-				log.Printf("下载 %s：%d / %d MB", stage, done>>20, total>>20)
-			}
-		}
-	}
-	bin := firstFile(filepath.Join(a.ExeDir, kernel.MihomoName()), a.p("core", kernel.MihomoName()))
-	if bin == "" {
-		log.Printf("没有找到 mihomo，开始下载 %s", kernel.MihomoURL())
-		var err error
-		if bin, err = kernel.InstallMihomo(hc, mirror, a.p("core"), progress("mihomo")); err != nil {
-			a.setSetup("error", 0, 0, "下载 mihomo 失败："+err.Error())
-			log.Printf("下载 mihomo 失败：%v（可手动把 %s 放到程序同目录）", err, kernel.MihomoName())
-			bin = ""
-		}
-	}
-	pidFile := a.p("core", "mihomo.pid")
-	if b, err := os.ReadFile(pidFile); err == nil { // 上次异常退出遗留的 mihomo
-		if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); isOurProcess(pid, kernel.MihomoName(), a.p("core")) {
-			log.Printf("清理上次遗留的 mihomo 进程 %d", pid)
-			terminate(pid, true)
-		}
-	}
-	if bin != "" {
-		c := &proxy.Core{Bin: bin, Dir: a.p("core"), Port: freePort(), Secret: randToken(16)}
-		c.OnRestart = func() {
-			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)
-			go func() { _ = a.applyConfig() }()
-		}
-		if _, err := c.WriteConfig(proxy.Generate(proxy.Input{ControlPort: c.Port, Secret: c.Secret})); err != nil {
-			return err
-		}
-		if err := c.Start(); err != nil {
-			a.setSetup("error", 0, 0, err.Error())
-			log.Printf("mihomo 启动失败：%v", err)
-		} else {
-			a.core, a.coreOK = c, true
-			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)
-			go a.statsLoop()
-		}
-	}
-	exe := kernel.Find(a.p("kernel"), a.Settings.KernelPath)
-	if exe == "" {
-		exe = kernel.Find(filepath.Join(a.ExeDir, "kernel"), "")
-	}
-	if exe == "" {
-		log.Printf("没有找到浏览器内核，开始下载 %s（约 180 MB）", kernel.KernelURL())
-		var err error
-		if exe, err = kernel.InstallKernel(hc, mirror, a.p("kernel"), progress("kernel")); err != nil {
-			a.setSetup("error", 0, 0, "下载内核失败："+err.Error())
-			return fmt.Errorf("下载内核失败：%w（可手动下载后解压到 %s）", err, a.p("kernel"))
-		}
-	}
-	a.kernelExe = exe
-	a.setSetup("ready", 0, 0, "")
-	log.Printf("内核：%s", exe)
-	go a.exitRefreshLoop()
-	return nil
-}
 
 // Start 打开普通窗口 #0，并恢复上次未正常关闭的实例（F-INST-1、F-SESSION）。
 func (a *App) Start() {
@@ -200,6 +116,9 @@ func (a *App) Launch(id string) error {
 	}
 	var pr *model.ExitProbe
 	if a.coreOK {
+		if masked && state == "on" {
+			a.autoPick(id, nil) // "自动"：还没选节点或当前节点不通时，换成最快的可用节点
+		}
 		if err := a.applyConfig(); err != nil {
 			return fail(err.Error())
 		}
@@ -208,18 +127,37 @@ func (a *App) Launch(id string) error {
 		a.mu.Unlock()
 		if masked && state == "on" { // 出口探测完成、时区确定之前不得启动浏览器进程（F-INST-4）
 			if res.want == "REJECT" {
-				return fail("不能启动：" + res.err)
+				return fail("没能打开：" + res.err)
 			}
-			p := probe.Run(pport, eps)
-			if p.Error != "" {
-				p = probe.Run(pport, eps) // 重试一次
+			tried := map[string]bool{}
+			var p model.ExitProbe
+			why := ""
+			for try := 0; try < 3; try++ {
+				start := time.Now()
+				p = probe.Run(pport, eps)
+				if p.Error == "" {
+					break
+				}
+				why = friendlyErr(a.core.LastError(proxy.Group("p"+short(id)), start), nil)
+				a.mu.Lock()
+				tried[currentNode(in, a.subLocked(in.Proxy.SubscriptionID))] = true
+				a.mu.Unlock()
+				if !a.autoPick(id, tried) { // 没开"自动"，或没有别的可用节点：原节点再试一次
+					if try > 0 {
+						break
+					}
+					continue
+				}
+				if err := a.applyConfig(); err != nil {
+					return fail(err.Error())
+				}
 			}
 			pr = &p
 			a.mu.Lock()
 			fixed := in.TZ.Mode == "fixed" && in.TZ.Fixed != ""
 			a.mu.Unlock()
 			if p.Error != "" && !fixed {
-				return fail("不能启动：" + p.Error + "（代理不通。可换节点 / 出口后重试，或把时区改为固定值后强行启动）")
+				return fail("没能打开：代理不通（" + why + "）。请换一个节点或出口后再试。")
 			}
 		}
 	}
@@ -228,7 +166,7 @@ func (a *App) Launch(id string) error {
 	r.Probe = pr
 	l := kernel.Launch{
 		ProfileDir: a.p("profiles", in.ID), No: in.No, Normal: !masked, Color: hexColor(in.Color),
-		Seed: seed32(in.FP.Seed), HardwareConcurrency: cores(in), PlatformVersion: in.FP.PlatformVersion,
+		Seed: seed32(in.FP.Seed), HardwareConcurrency: cores(in), PlatformVersion: in.FP.PlatformVersion, Platform: in.FP.Platform, Brand: in.FP.Brand,
 		DisableSpoofing: in.FP.DisableSpoofing, Timezone: tz, Lang: lang,
 		NewTabURL: "chrome-extension://" + companion.ID + "/newtab.html",
 	}

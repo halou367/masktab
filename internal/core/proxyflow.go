@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/halou367/masktab/internal/exits"
@@ -13,6 +12,31 @@ import (
 	"github.com/halou367/masktab/internal/proxy"
 	"github.com/halou367/masktab/internal/subscription"
 )
+
+// noECH 在订阅关闭了 ECH 时，返回去掉 ech-opts 的出站副本；否则原样返回。
+func noECH(sub *model.Subscription, ps ...map[string]any) []map[string]any {
+	if sub == nil || !sub.ECHOff {
+		return ps
+	}
+	out := make([]map[string]any, 0, len(ps))
+	for _, p := range ps {
+		if _, ok := p["ech-opts"]; !ok {
+			out = append(out, p)
+			continue
+		}
+		c := make(map[string]any, len(p))
+		for k, v := range p {
+			if k != "ech-opts" {
+				c[k] = v
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// maxNodesPerSub 是一个通用订阅写进 mihomo 配置的节点数上限。
+const maxNodesPerSub = 500
 
 func nodeName(sub *model.Subscription, key string) string {
 	return "s-" + short(sub.ID) + "-" + short(key)
@@ -116,7 +140,7 @@ func (a *App) applyConfig() error {
 		}
 		res := a.resolveLocked(inst)
 		sid := short(inst.ID)
-		in.Proxies = append(in.Proxies, res.proxies...)
+		in.Proxies = append(in.Proxies, noECH(a.subLocked(inst.Proxy.SubscriptionID), res.proxies...)...)
 		in.Instances = append(in.Instances,
 			proxy.InstCfg{ID: sid, Port: inst.Port, Members: res.members},
 			proxy.InstCfg{ID: "p" + sid, Port: r.probePort, Members: res.members}) // 探测通道：与主通道同出站，但不受断流影响
@@ -133,7 +157,25 @@ func (a *App) applyConfig() error {
 		wants[proxy.Group(sid)] = main
 		wants[proxy.Group("p"+sid)] = res.want
 	}
-	// 每个优选 IP 一条测速用出站（不带出口参数），这样"全部测速"不需要重载。
+	// 全部订阅的全部节点都写进配置（edgetunnel：每个优选 IP 一条不带出口参数的出站）：
+	// 测速、探测出口不依赖"有没有实例正在用这个订阅"，也不需要为此重载配置。
+	for _, sub := range a.Subs {
+		if sub.Kind == "edgetunnel" && sub.Template != nil {
+			continue
+		}
+		for i, n := range sub.Nodes {
+			if i >= maxNodesPerSub {
+				break
+			}
+			p := map[string]any{}
+			for k, v := range n.Raw {
+				p[k] = v
+			}
+			p["name"] = nodeName(sub, n.Key)
+			in.Proxies = append(in.Proxies, noECH(sub, p)...)
+			in.ScanMembers = append(in.ScanMembers, nodeName(sub, n.Key))
+		}
+	}
 	for _, ad := range a.Addresses {
 		sub := a.subLocked(ad.SubscriptionID)
 		if sub == nil {
@@ -146,17 +188,21 @@ func (a *App) applyConfig() error {
 		if len(sub.Hosts) > 0 {
 			host = sub.Hosts[0]
 		}
-		in.Proxies = append(in.Proxies, subscription.BuildOutbound(addrName(ad), *sub.Template, ad.Server, ad.Port, host, sub.Template.BasePath))
+		in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(addrName(ad), *sub.Template, ad.Server, ad.Port, host, sub.Template.BasePath))...)
+		in.ScanMembers = append(in.ScanMembers, addrName(ad))
 	}
+	in.ScanPorts = a.scanPorts
 	a.mu.Unlock()
 	changed, err := a.core.WriteConfig(proxy.Generate(in))
 	if err != nil {
 		return err
 	}
 	if changed {
+		a.cfgGen.Add(1)
 		if err := a.core.Reload(); err != nil {
 			return fmt.Errorf("mihomo 重载失败：%w", err)
 		}
+		a.cfgGen.Add(1)
 	}
 	for g, w := range wants {
 		if err := a.core.Select(g, w); err != nil {
@@ -215,7 +261,9 @@ func expectTZ(in *model.Instance, pr *model.ExitProbe) (tz, lang, country string
 
 // refresh 在实例的代理选择变化后调用：先断流 → 应用配置 → 经探测通道测延迟与出口 →
 // 时区与启动时一致才放行；不一致保持断流并标记"需重启"（F-ISO-4）。
-func (a *App) refresh(id string) {
+func (a *App) refresh(id string) { a.refreshTry(id, map[string]bool{}, 0) }
+
+func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	a.mu.Lock()
 	in := a.instLocked(id)
 	if in == nil {
@@ -235,6 +283,9 @@ func (a *App) refresh(id string) {
 	sid, pport, state := short(id), r.probePort, in.Proxy.State
 	a.bumpLocked("state", id)
 	a.mu.Unlock()
+	if try == 0 {
+		a.autoPick(id, tried) // "自动"：当前节点不通时先换成最快的可用节点
+	}
 	if err := a.applyConfig(); err != nil {
 		a.setErr(id, err.Error())
 		return
@@ -258,7 +309,24 @@ func (a *App) refresh(id string) {
 	}
 	var pr model.ExitProbe
 	if want.want != "REJECT" {
+		start := time.Now()
 		pr = probe.Run(pport, eps)
+		if pr.Error != "" && state == "on" {
+			if why := a.core.LastError(proxy.Group("p"+sid), start); why != "" {
+				pr.Error = friendlyErr(why, nil)
+			} else {
+				pr.Error = "代理不通"
+			}
+			if try < 2 { // "自动"：换下一个可用节点再试，最多换两次
+				a.mu.Lock()
+				tried[currentNode(in, a.subLocked(in.Proxy.SubscriptionID))] = true
+				a.mu.Unlock()
+				if a.autoPick(id, tried) {
+					a.refreshTry(id, tried, try+1)
+					return
+				}
+			}
+		}
 	} else {
 		pr = model.ExitProbe{At: now(), Error: want.err}
 	}
@@ -298,57 +366,6 @@ func (a *App) setErr(id, msg string) {
 	a.rtLocked(id).Error = msg
 	a.bumpLocked("state", id)
 	a.mu.Unlock()
-}
-
-// TestAddresses 并发测全部优选 IP 的延迟。
-func (a *App) TestAddresses() {
-	a.mu.Lock()
-	var names []string
-	for _, ad := range a.Addresses {
-		names = append(names, addrName(ad))
-	}
-	url := a.Settings.DelayURL
-	a.mu.Unlock()
-	a.testNames(names, url)
-}
-
-// TestNodes 并发测一个通用订阅全部节点的延迟（节点须已在配置里，即至少有一个活动实例在用该订阅）。
-func (a *App) TestNodes(subID string) {
-	a.mu.Lock()
-	var names []string
-	if s := a.subLocked(subID); s != nil {
-		for _, n := range s.Nodes {
-			names = append(names, nodeName(s, n.Key))
-		}
-	}
-	url := a.Settings.DelayURL
-	a.mu.Unlock()
-	a.testNames(names, url)
-}
-
-func (a *App) testNames(names []string, url string) {
-	if !a.coreOK {
-		return
-	}
-	sem := make(chan struct{}, 8)
-	var wg sync.WaitGroup
-	for _, n := range names {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(n string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			d, err := a.core.Delay(n, url, 4000)
-			if err != nil {
-				d = -1
-			}
-			a.mu.Lock()
-			a.delays[n] = d
-			a.mu.Unlock()
-		}(n)
-	}
-	wg.Wait()
-	a.bump("state", "")
 }
 
 // statsLoop 每 2 秒按入站名把连接流量归到实例（V6 已在 Linux 上验证 metadata.inboundName 可用）。
@@ -410,12 +427,8 @@ func (a *App) fillProxyLocked(in *model.Instance, sub *model.Subscription) {
 	if sub.Kind != "edgetunnel" {
 		if in.Proxy.NodeKey == "" || !hasNode(sub, in.Proxy.NodeKey) {
 			in.Proxy.NodeKey = ""
-			best := -1
-			for _, n := range sub.Nodes {
-				d := a.delays[nodeName(sub, n.Key)]
-				if in.Proxy.NodeKey == "" || (d > 0 && (best <= 0 || d < best)) {
-					in.Proxy.NodeKey, best = n.Key, d
-				}
+			if in.Proxy.NodeKey = a.bestNodeLocked(sub, nil); in.Proxy.NodeKey == "" && len(sub.Nodes) > 0 {
+				in.Proxy.NodeKey = sub.Nodes[0].Key // 还没测过速：先取第一个，"自动"会在启动时换成最快的
 			}
 		}
 		return
@@ -480,18 +493,19 @@ func contains(s []string, v string) bool {
 	return false
 }
 
+// bestAddrLocked 返回订阅里延迟最低的优选 IP；都没测过时取第一个。
 func (a *App) bestAddrLocked(subID string) string {
-	best, bestD := "", 0
-	for _, ad := range a.Addresses {
-		if ad.SubscriptionID != subID && ad.Source != "custom" {
-			continue
-		}
-		d := a.delays[addrName(ad)]
-		if best == "" || (d > 0 && (bestD <= 0 || d < bestD)) {
-			best, bestD = ad.ID, d
-		}
+	sub := a.subLocked(subID)
+	if sub == nil {
+		return ""
 	}
-	return best
+	if id := a.bestNodeLocked(sub, nil); id != "" {
+		return id
+	}
+	if nodes := a.nodesLocked(sub); len(nodes) > 0 {
+		return nodes[0].ID
+	}
+	return ""
 }
 
 // activeIDs 返回当前写入了 mihomo 配置的实例。

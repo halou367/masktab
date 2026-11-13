@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +41,22 @@ func TestGenerate(t *testing.T) {
 	}
 	if cfg.Rules[0] != "MATCH,REJECT" || cfg.Listeners[0]["proxy"] != "g-a" || cfg.Listeners[0]["listen"] != "127.0.0.1" {
 		t.Errorf("规则或入站不对：%s", out)
+	}
+}
+
+// 测速通道：不依赖任何实例；带 ECH 的出站要配上能查到 ECH 配置的 DNS。
+func TestScanChannelsAndECH(t *testing.T) {
+	out := Generate(Input{ControlPort: 1, Secret: "s", ScanPorts: []int{5001, 5002}, ScanMembers: []string{"a-1"},
+		Proxies: []map[string]any{{"name": "a-1", "type": "vless", "server": "1.1.1.1", "port": 443,
+			"ech-opts": map[string]any{"enable": true, "query-server-name": "cloudflare-ech.com"}}}})
+	s := string(out)
+	for _, want := range []string{"in-scan0", "in-scan1", "g-scan0", "g-scan1", "5001", "5002", "nameserver-policy", "cloudflare-ech.com", "dns.alidns.com"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("配置里缺少 %s", want)
+		}
+	}
+	plain := string(Generate(Input{ControlPort: 1, Secret: "s"}))
+	if strings.Contains(plain, "nameserver-policy") {
+		t.Error("没有 ECH 时不应写 dns 段")
 	}
 }

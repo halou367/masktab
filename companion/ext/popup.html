@@ -1,4 +1,23 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="ui.css">
-<style>body{width:460px;max-height:590px;overflow-y:auto} header{padding:10px 12px;display:flex;align-items:center;gap:8px} header .no{font-weight:600;font-size:15px} .foot{border-top:1px solid var(--line);padding:6px 8px;display:flex;justify-content:space-around} .lat{font-variant-numeric:tabular-nums} form.add{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap} form.add input{flex:1;min-width:120px} .info{padding:0 12px 8px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px;font-size:12px} .info b{font-weight:400;color:var(--sub)}</style>
+<style>
+html{width:440px} body{max-height:590px;overflow-y:auto;overflow-x:hidden} ::-webkit-scrollbar{width:8px;height:8px} ::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px} ::-webkit-scrollbar-thumb:hover{background:var(--sub)}
+header{padding:10px 12px 8px;display:flex;align-items:center;gap:8px} header .no{font-weight:600;font-size:15px}
+.lat{font-variant-numeric:tabular-nums}
+.exit{padding:0 12px 8px;font-size:12px;display:grid;gap:2px} .exit div{display:flex;align-items:center;gap:6px;min-width:0} .exit .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sec>.hd select{max-width:170px;padding:3px 6px;font-size:12px}
+.nodes{display:grid;gap:2px;max-height:292px;overflow-y:auto;margin:0 -6px}
+.node{display:grid;grid-template-columns:1fr auto 54px;gap:0 10px;align-items:center;padding:5px 8px;border-radius:8px;text-align:left;border-left:3px solid transparent;width:100%}
+.node:hover{background:var(--hover)} .node.on{background:var(--card);border-left-color:var(--inst,var(--accent))}
+.node .a{font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .node .b{font-size:11.5px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .x{display:flex;align-items:center;gap:5px;justify-content:flex-end;font-variant-numeric:tabular-nums} .node .d{text-align:right;font-variant-numeric:tabular-nums}
+.node.dead .a,.node.dead .x{color:var(--sub)} .node .tag{font-size:10.5px;border:1px solid var(--line);border-radius:5px;padding:0 4px;margin-left:5px;color:var(--sub)}
+.empty{padding:14px 6px;color:var(--sub);text-align:center}
+form.add{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap} form.add input{flex:1;min-width:120px}
+.fold{border-top:1px solid var(--line)} .fold>button{width:100%;display:flex;align-items:center;gap:6px;padding:8px 12px;color:var(--sub);font-size:12px;text-align:left} .fold>button:hover{color:var(--fg)}
+.fold>button .ic:last-child{transition:transform .15s} .fold.open>button .ic:last-child{transform:rotate(180deg)} .fold>div{padding:0 12px 10px;display:grid;gap:8px}
+.kv{display:grid;grid-template-columns:76px minmax(0,1fr);gap:7px 8px;align-items:center;font-size:12px} .kv>b{font-weight:400;color:var(--sub)} .kv select,.kv input{padding:4px 6px;font-size:12px;min-width:0;max-width:100%} .kv>select{width:100%}
+.foot{border-top:1px solid var(--line);padding:6px 8px;display:flex;justify-content:space-around}
+.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+</style>
 </head><body><div id="root"></div><script type="module" src="popup.js"></script></body></html>

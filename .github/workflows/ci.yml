@@ -1,18 +1,22 @@
-# 每次推送：单元测试、交叉编译 Windows 可执行文件、在真实的 Windows 与 Linux 机器上跑冒烟测试。
-# 产物（Actions 页面 → 本次运行 → Artifacts）：
-#   masktab-windows-amd64   可直接双击运行的 masktab.exe
-#   smoke-windows / smoke-linux   冒烟测试结果、日志、界面截图
+# 每次推送：
+#   1. 单元测试（Linux）。
+#   2. 在真实的 Windows 机器上构建两个安装程序，把完整包静默安装后对"装好的那一份"跑冒烟测试，
+#      再验证覆盖升级（数据与内核不动）与卸载（数据保留）。
+#   3. Linux 无头冒烟测试。
+# 产物：
+#   Releases 页面：MaskTab-Setup-Full.exe（首次安装用，自带浏览器内核与代理内核）、MaskTab-Setup.exe（升级用，几 MB）。
+#   Actions → 本次运行 → Artifacts：同样的两个安装程序，以及 smoke-windows / smoke-linux（测试结果、日志、截图）。
 name: CI
 on:
   push:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # 发布安装程序到 Releases
 
 jobs:
-  build:
-    name: 测试与构建
+  test:
+    name: 单元测试
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,22 +24,15 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+      - run: GOOS=windows go vet ./...
       - run: go test ./...
-      - name: 构建 Windows 可执行文件
-        run: |
-          VER="0.1.${{ github.run_number }}-${GITHUB_SHA::7}"
-          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$VER" -o dist/masktab.exe ./cmd/masktab
-          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$VER" -o dist/masktab-console.exe ./cmd/masktab
-          ls -la dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: masktab-windows-amd64
-          path: dist/
 
-  smoke-windows:
-    name: 冒烟测试（Windows，有界面）
+  windows:
+    name: 安装程序与冒烟测试（Windows，有界面）
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      VER: 0.1.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -44,25 +41,106 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: go build -o masktab.exe ./cmd/masktab
-      - name: 缓存内核与 mihomo
+      - name: 构建 masktab.exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist, out | Out-Null
+          go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$env:VER" -o dist/masktab.exe ./cmd/masktab
+          Get-Item dist/masktab.exe | Format-List Name, Length
+      - name: 缓存浏览器内核与代理内核
         uses: actions/cache@v4
         with:
-          path: |
-            smoke-data/kernel
-            smoke-data/core/mihomo.exe
-          key: tools-windows-${{ hashFiles('internal/kernel/fetch.go') }}
-      - name: 冒烟测试
-        run: node scripts/smoke.mjs --bin masktab.exe --data smoke-data --shots shots --visible
+          path: pack
+          key: pack-windows-${{ hashFiles('internal/kernel/fetch.go') }}
+      - name: 准备浏览器内核与代理内核（下载、校验、解压）
+        shell: pwsh
+        run: |
+          go run ./cmd/pack -dir pack | Tee-Object pack-info.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Content pack-info.txt | Where-Object { $_ -match '^(KVER|MVER)=' } | Add-Content $env:GITHUB_ENV
+      - name: 构建安装程序
+        shell: pwsh
+        run: |
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress | Out-Null }
+          if (-not (Test-Path $nsis)) { throw "找不到 makensis" }
+          $root = (Get-Location).Path
+          $kernel = Join-Path $root "pack\kernel\fingerprint-chromium\$env:KVER"
+          if (-not (Test-Path $kernel)) { throw "内核目录不存在：$kernel" }
+          $common = @('/V2', '/INPUTCHARSET', 'UTF8', "/DVERSION=$env:VER", "/DVERSION4=$env:VER.0", "/DSRC=$root\dist")
+          & $nsis @common "/DOUT=$root\out\MaskTab-Setup.exe" installer\masktab.nsi
+          if ($LASTEXITCODE -ne 0) { throw "普通安装包构建失败" }
+          & $nsis @common "/DOUT=$root\out\MaskTab-Setup-Full.exe" /DFULL "/DKVER=$env:KVER" "/DMVER=$env:MVER" "/DKERNEL=$kernel" "/DMIHOMO=$root\pack\mihomo.exe" installer\masktab.nsi
+          if ($LASTEXITCODE -ne 0) { throw "完整安装包构建失败" }
+          Get-ChildItem out | Format-Table Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
+      - name: 静默安装完整包
+        shell: pwsh
+        run: |
+          $t = Measure-Command { Start-Process -Wait -FilePath out\MaskTab-Setup-Full.exe -ArgumentList '/S', '/D=C:\mt' }
+          "完整包安装用时 {0:n0} 秒" -f $t.TotalSeconds
+          foreach ($f in 'masktab.exe', 'mihomo.exe', 'uninstall.exe', "kernel\fingerprint-chromium\$env:KVER\installed.ok") { if (-not (Test-Path "C:\mt\$f")) { throw "安装后缺少 $f" } }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\MaskTab.lnk")) { throw "没有创建开始菜单快捷方式" }
+      - name: 冒烟测试（对装好的那一份；内核与代理内核都来自安装包，不应再下载）
+        run: node scripts/smoke.mjs --bin C:\mt\masktab.exe --data C:\mt\data --shots shots --visible
+      - name: 覆盖升级与卸载
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Need($cond, $msg) { if ($cond) { "通过：$msg" } else { throw "失败：$msg" } }
+          Need (Test-Path C:\mt\data\config\instances.json) '冒烟测试留下了数据'
+          Need (-not (Test-Path C:\mt\data\kernel\fingerprint-chromium)) '没有重新下载内核（用的是安装包里的）'
+          Need (-not (Test-Path C:\mt\data\core\mihomo.exe)) '没有重新下载代理内核'
+          $mark = (Get-Item "C:\mt\kernel\fingerprint-chromium\$env:KVER\installed.ok").LastWriteTimeUtc
+          $data = (Get-FileHash C:\mt\data\config\instances.json).Hash
+
+          # 1) MaskTab 正在运行时用普通包升级：安装程序应当先让它退出，再替换 masktab.exe
+          Start-Process -FilePath C:\mt\masktab.exe -ArgumentList '-no-open', '-keep'
+          Start-Sleep 6
+          Need ((Get-Process masktab -ErrorAction SilentlyContinue) -ne $null) '升级前 MaskTab 在运行'
+          Start-Process -Wait -FilePath out\MaskTab-Setup.exe -ArgumentList '/S', '/D=C:\mt'
+          Need ((Get-Process masktab -ErrorAction SilentlyContinue) -eq $null) '升级时已让运行中的 MaskTab 退出'
+          Need ((Get-FileHash C:\mt\masktab.exe).Hash -eq (Get-FileHash dist\masktab.exe).Hash) 'masktab.exe 已替换为新版本'
+          Need ((Get-FileHash C:\mt\data\config\instances.json).Hash -eq $data) '升级没有动数据'
+          Need ((Get-Item "C:\mt\kernel\fingerprint-chromium\$env:KVER\installed.ok").LastWriteTimeUtc -eq $mark) '升级没有动浏览器内核'
+
+          # 2) 再装一次完整包：内核与代理内核版本没变，应当跳过（很快）
+          $t = Measure-Command { Start-Process -Wait -FilePath out\MaskTab-Setup-Full.exe -ArgumentList '/S', '/D=C:\mt' }
+          "完整包覆盖安装用时 {0:n0} 秒" -f $t.TotalSeconds
+          Need ((Get-Item "C:\mt\kernel\fingerprint-chromium\$env:KVER\installed.ok").LastWriteTimeUtc -eq $mark) '完整包覆盖安装时跳过了已有的内核'
+          Need ((Get-FileHash C:\mt\data\config\instances.json).Hash -eq $data) '完整包覆盖安装没有动数据'
+
+          # 3) 卸载：程序与内核删除，数据保留
+          Start-Process -Wait -FilePath C:\mt\uninstall.exe -ArgumentList '/S', '_?=C:\mt'
+          Need (-not (Test-Path C:\mt\masktab.exe)) '卸载删除了程序'
+          Need (-not (Test-Path C:\mt\kernel)) '卸载删除了内核'
+          Need ((Get-FileHash C:\mt\data\config\instances.json).Hash -eq $data) '卸载保留了数据'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: smoke-windows
           path: |
             shots/
-            smoke-data/smoke-result.md
-            smoke-data/smoke-core.log
-            smoke-data/state/masktab.log
+            C:\mt\data\smoke-result.md
+            C:\mt\data\smoke-core.log
+            C:\mt\data\state\masktab.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaskTab-Setup
+          path: out/MaskTab-Setup.exe
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaskTab-Setup-Full
+          path: out/MaskTab-Setup-Full.exe
+          compression-level: 0
+      - name: 发布到 Releases
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "首次安装：下载 MaskTab-Setup-Full.exe（自带浏览器内核 $env:KVER 与代理内核 $env:MVER，装完不需要再下载）。`n升级：下载 MaskTab-Setup.exe 直接覆盖安装；数据、内核都不会动。"
+          gh release create "v$env:VER" out/MaskTab-Setup-Full.exe out/MaskTab-Setup.exe --target $env:GITHUB_SHA --title "MaskTab $env:VER" --notes $notes
 
   smoke-linux:
     name: 冒烟测试（Linux，无头）

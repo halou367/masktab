@@ -18,7 +18,7 @@
 - 外来字符串（订阅里的节点名等）只能用 `textContent` 写进页面，见 `companion/ext/ui.js` 的 `h()`。
 - **改了伴随扩展的文件不需要手动改版本号**：`companion.Version()` 会按内容哈希生成（原因见 decisions K-4）。
 - **不要用画布读回**（`getImageData` / `toDataURL`）处理图标，原因见 decisions K-3。
-- 升级内核版本或 mihomo 版本只改 `internal/kernel/fetch.go` 的常量，改完必须跑冒烟测试（原因见 decisions K-1）。
+- 升级内核版本或 mihomo 版本只改 `internal/kernel/fetch.go`：版本常量，以及 `KernelAsset` / `MihomoAsset` 里各平台的大小与 SHA-256（取自上游发布页的 digest）。改完必须跑冒烟测试（原因见 decisions K-1、D-1）。
 - 没在 Windows 上实际看到的东西，不要在文档里写成“已验证”。CI 的 Windows 冒烟测试和截图算证据，其余都要标注。
 
 ## 每次推送都要做
@@ -27,7 +27,7 @@
 2. 更新 `docs/PROGRESS.md`（完成了什么、发现了什么问题、下一步）。
 3. 有新决定或新坑，写进 `docs/decisions.md`。
 4. 提交信息用中文，一句话说清改了什么。
-5. 推送后看 Actions：三个任务（测试与构建、Windows 冒烟、Linux 冒烟）。失败就先修。
+5. 推送后看 Actions：三个任务（单元测试、Windows 安装程序与冒烟、Linux 冒烟）。失败就先修。`main` 上成功后安装程序会发布到 Releases。
 
 ## 密钥
 

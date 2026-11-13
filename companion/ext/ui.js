@@ -39,6 +39,7 @@ const P = {
   finger: '<path d="M8 11a4 4 0 0 1 8 0v3M12 11v9M5 14v-3a7 7 0 0 1 14 0v5M8 15v3M16 17v2"/>',
   undo: '<path d="M4 9h10a5 5 0 0 1 0 10H8"/><path d="m8 5-4 4 4 4"/>',
   mask: '<path d="M3 8c3-2 6-2 9 0 3-2 6-2 9 0 0 5-3 9-6 9-1.5 0-2-1.5-3-1.5S10.500 17 9 17c-3 0-6-4-6-9z"/><circle cx="8.500" cy="11" r="1.200"/><circle cx="15.500" cy="11" r="1.200"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-3 3-3 15 0 18M12 3c3 3 3 15 0 18"/>',
 };
 export function icon(name, size = 18) {
@@ -70,5 +71,9 @@ export function toast(msg, bad) {
 export async function run(fn, okMsg) {
   try { await fn(); if (okMsg) toast(okMsg); } catch (e) { toast(e.message || String(e), true); }
 }
-export const delayText = (d) => (d > 0 ? d + ' ms' : d < 0 ? '超时' : '—');
+export const delayText = (d) => (d > 0 ? d + ' ms' : d < 0 ? '不通' : '—');
+// 开关（带文字的小拨动开关）。
+export function toggle(label, on, title, onchange, disabled) {
+  return h('button', { class: 'tg' + (on ? ' on' : ''), title, disabled, role: 'switch', 'aria-checked': on ? 'true' : 'false', onclick: () => onchange(!on) }, h('i'), label);
+}
 export const delayCls = (d) => (d > 0 ? (d < 200 ? 'good' : d < 500 ? 'mid' : 'bad') : d < 0 ? 'bad' : 'na');

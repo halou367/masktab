@@ -18,10 +18,18 @@ type Input struct {
 	Secret      string
 	Proxies     []map[string]any // 全部出站，按 name 去重
 	Instances   []InstCfg
+	ScanPorts   []int    // 测速 / 出口探测用的入站端口（每个端口一条独立通道，可并行）
+	ScanMembers []string // 这些通道可以切到的出站（全部订阅的全部节点）
 }
 
 func Group(id string) string    { return "g-" + id }
 func Listener(id string) string { return "in-" + id }
+
+// ScanID 是第 i 条测速通道的 id（入站 in-scan<i>，策略组 g-scan<i>）。
+func ScanID(i int) string { return "scan" + itoa(i) }
+
+// echDoH 用来查询 ECH 配置（HTTPS 记录）的 DoH 服务。系统 DNS 在部分网络下查不到这类记录。
+var echDoH = []string{"https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"}
 
 // Generate 由状态整体生成配置。输出是 JSON（JSON 是 YAML 的子集，mihomo 可直接读取），
 // 这样核心服务不需要 YAML 序列化依赖，且输出稳定可比较。
@@ -53,6 +61,32 @@ func Generate(in Input) []byte {
 		groups = append(groups, map[string]any{"name": Group(it.ID), "type": "select", "proxies": members})
 		listeners = append(listeners, map[string]any{"name": Listener(it.ID), "type": "socks", "listen": "127.0.0.1", "port": it.Port, "udp": false, "proxy": Group(it.ID)})
 	}
+	if len(in.ScanPorts) > 0 {
+		members := []string{"REJECT"}
+		for _, m := range in.ScanMembers {
+			if seen[m] {
+				members = append(members, m)
+			}
+		}
+		sort.Strings(members[1:])
+		for i, port := range in.ScanPorts {
+			groups = append(groups, map[string]any{"name": Group(ScanID(i)), "type": "select", "proxies": members})
+			listeners = append(listeners, map[string]any{"name": Listener(ScanID(i)), "type": "socks", "listen": "127.0.0.1", "port": port, "udp": false, "proxy": Group(ScanID(i))})
+		}
+	}
+	// 有出站启用了 ECH 时才打开 DNS 模块：普通域名仍走系统 DNS（行为与不开时一致），只有 ECH 的查询名走 DoH。
+	echNames := map[string]bool{}
+	for _, p := range proxies {
+		if e, ok := p["ech-opts"].(map[string]any); ok && e["enable"] == true {
+			if q, _ := e["query-server-name"].(string); q != "" {
+				echNames[q] = true
+			} else if sn, _ := p["servername"].(string); sn != "" {
+				echNames[sn] = true
+			} else if sn, _ := p["sni"].(string); sn != "" {
+				echNames[sn] = true
+			}
+		}
+	}
 	cfg := map[string]any{
 		"allow-lan": false, "bind-address": "127.0.0.1", "mode": "rule", "log-level": "warning", "ipv6": false,
 		"external-controller": "127.0.0.1:" + itoa(in.ControlPort), "secret": in.Secret,
@@ -61,6 +95,17 @@ func Generate(in Input) []byte {
 		"proxy-groups": groups,
 		"listeners":    listeners,
 		"rules":        []string{"MATCH,REJECT"},
+	}
+	if len(echNames) > 0 {
+		policy := map[string]any{}
+		for n := range echNames {
+			policy[n] = echDoH
+		}
+		cfg["dns"] = map[string]any{
+			"enable": true, "ipv6": false, "enhanced-mode": "redir-host",
+			"nameserver": []string{"system"}, "default-nameserver": []string{"system", "223.5.5.5", "119.29.29.29"},
+			"nameserver-policy": policy,
+		}
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	return b

@@ -222,12 +222,8 @@ func parseVT(line string) (map[string]any, error) {
 		if sec == "reality" {
 			m["reality-opts"] = map[string]any{"public-key": q.Get("pbk"), "short-id": q.Get("sid")}
 		}
-		if ech := q.Get("ech"); ech != "" { // 【需验证 V5】ECH 字段映射
-			if _, err := base64.StdEncoding.DecodeString(ech); err == nil && len(ech) > 40 {
-				m["ech-opts"] = map[string]any{"enable": true, "config": ech}
-			} else {
-				m["ech-opts"] = map[string]any{"enable": true}
-			}
+		if ech := q.Get("ech"); ech != "" {
+			m["ech-opts"] = echOpts(ech)
 		}
 	}
 	switch t := q.Get("type"); t {
@@ -255,6 +251,28 @@ func parseVT(line string) (map[string]any, error) {
 	return m, nil
 }
 
+// echOpts 把分享链接里的 ech 参数转成 mihomo 的 ech-opts。
+// edgetunnel 的写法是 "查询名+DoH 地址"（如 cloudflare-ech.com+https://dns.alidns.com/dns-query）；
+// 也可能直接是 Base64 的 ECHConfigList，或只有一个查询名。DoH 地址不照搬：生成配置时统一指定（见 proxy.Generate）。
+func echOpts(ech string) map[string]any {
+	ech = strings.ReplaceAll(strings.TrimSpace(ech), " ", "+") // 没有转义的 + 会被查询串解析成空格
+	if name, doh, ok := strings.Cut(ech, "+"); ok && strings.Contains(doh, "://") && strings.Contains(name, ".") && !strings.Contains(name, "/") {
+		return map[string]any{"enable": true, "query-server-name": name}
+	}
+	if len(ech) > 40 {
+		if _, err := base64.StdEncoding.DecodeString(ech); err == nil {
+			return map[string]any{"enable": true, "config": ech}
+		}
+		if _, err := base64.RawStdEncoding.DecodeString(ech); err == nil {
+			return map[string]any{"enable": true, "config": ech}
+		}
+	}
+	if strings.Contains(ech, ".") && !strings.ContainsAny(ech, "/:+") {
+		return map[string]any{"enable": true, "query-server-name": ech}
+	}
+	return map[string]any{"enable": true}
+}
+
 func parseSS(line string) (map[string]any, error) {
 	rest := strings.TrimPrefix(line, "ss://")
 	name := ""
@@ -262,7 +280,12 @@ func parseSS(line string) (map[string]any, error) {
 		name, _ = url.PathUnescape(rest[i+1:])
 		rest = rest[:i]
 	}
-	if i := strings.Index(rest, "?"); i >= 0 { // 插件参数暂不支持，忽略
+	var plugin map[string]any
+	pluginName := ""
+	if i := strings.Index(rest, "?"); i >= 0 {
+		if q, err := url.ParseQuery(rest[i+1:]); err == nil {
+			pluginName, plugin = ssPlugin(q.Get("plugin"))
+		}
 		rest = rest[:i]
 	}
 	rest = strings.TrimSuffix(rest, "/")
@@ -293,7 +316,69 @@ func parseSS(line string) (map[string]any, error) {
 	if name == "" {
 		name = hp
 	}
-	return map[string]any{"name": name, "type": "ss", "server": server, "port": port, "cipher": mp[0], "password": mp[1], "udp": false}, nil
+	m := map[string]any{"name": name, "type": "ss", "server": server, "port": port, "cipher": mp[0], "password": mp[1], "udp": false}
+	if pluginName != "" {
+		m["plugin"], m["plugin-opts"] = pluginName, plugin
+	}
+	return m, nil
+}
+
+// ssPlugin 解析 SIP002 的 plugin 参数（"名字;键=值;开关"，值里的 = 和 , 用反斜杠转义）。只支持 v2ray-plugin 与 obfs。
+func ssPlugin(v string) (string, map[string]any) {
+	if v == "" {
+		return "", nil
+	}
+	var parts []string
+	cur := strings.Builder{}
+	for i := 0; i < len(v); i++ {
+		switch {
+		case v[i] == '\\' && i+1 < len(v):
+			cur.WriteByte(v[i])
+			cur.WriteByte(v[i+1])
+			i++
+		case v[i] == ';':
+			parts = append(parts, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteByte(v[i])
+		}
+	}
+	parts = append(parts, cur.String())
+	unesc := strings.NewReplacer(`\=`, "=", `\,`, ",", `\;`, ";", `\\`, `\`)
+	kv := map[string]string{}
+	for _, p := range parts[1:] {
+		k, val := p, ""
+		for i := 0; i < len(p); i++ {
+			if p[i] == '\\' {
+				i++
+				continue
+			}
+			if p[i] == '=' {
+				k, val = p[:i], p[i+1:]
+				break
+			}
+		}
+		kv[unesc.Replace(k)] = unesc.Replace(val)
+	}
+	_, tls := kv["tls"]
+	switch parts[0] {
+	case "v2ray-plugin":
+		o := map[string]any{"mode": "websocket", "tls": tls, "mux": kv["mux"] != "" && kv["mux"] != "0"}
+		if kv["host"] != "" {
+			o["host"] = kv["host"]
+		}
+		if kv["path"] != "" {
+			o["path"] = kv["path"]
+		}
+		return "v2ray-plugin", o
+	case "obfs-local", "simple-obfs", "obfs":
+		o := map[string]any{"mode": kv["obfs"]}
+		if kv["obfs-host"] != "" {
+			o["host"] = kv["obfs-host"]
+		}
+		return "obfs", o
+	}
+	return "", nil
 }
 
 func parseVmess(line string) (map[string]any, error) {

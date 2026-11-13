@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -12,28 +11,24 @@ import (
 
 	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/model"
+	"github.com/halou367/masktab/internal/netx"
 	"github.com/halou367/masktab/internal/subscription"
 )
 
 // fetchSub 拉取订阅：先用 clash.meta 的 UA（能拿到 YAML 就支持全部协议），失败或无节点再用 v2rayN 的 UA（Base64 链接列表）。
+// 直连拉不到时自动改走本机已有的代理（见 netx）。
 func fetchSub(url string) ([]model.ProxyNode, error) {
-	hc := &http.Client{Timeout: 25 * time.Second}
 	var last error
 	for _, ua := range []string{"clash.meta", "v2rayN/7.0"} {
-		req, err := http.NewRequest("GET", url, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		body, status, _, err := netx.Get(ctx, url, http.Header{"User-Agent": {ua}}, 20<<20)
+		cancel()
 		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("User-Agent", ua)
-		resp, err := hc.Do(req)
-		if err != nil {
-			last = err
+			last = fmt.Errorf("订阅地址访问失败：%w", err)
 			continue
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			last = fmt.Errorf("订阅地址返回 HTTP %d", resp.StatusCode)
+		if status != 200 {
+			last = fmt.Errorf("订阅地址返回 HTTP %d", status)
 			continue
 		}
 		nodes, err := subscription.Parse(body)
@@ -109,6 +104,7 @@ func (a *App) RefreshSubscription(id string, force bool) error {
 	if err := a.applyConfig(); err != nil {
 		return err
 	}
+	go a.Scan(id)
 	for _, iid := range a.activeIDs() {
 		a.mu.Lock()
 		in := a.instLocked(iid)
@@ -125,6 +121,16 @@ func (a *App) RefreshSubscription(id string, force bool) error {
 func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, hash string) {
 	s.Nodes, s.ContentHash, s.UpdatedAt = nodes, hash, now()
 	info, isET := subscription.DetectEdgetunnel(nodes, s.KindLocked && s.Kind == "edgetunnel")
+	s.HasECH = false
+	for _, n := range nodes {
+		if _, ok := n.Raw["ech-opts"]; ok {
+			s.HasECH = true
+			break
+		}
+	}
+	if !s.HasECH {
+		s.ECHOff = false
+	}
 	if s.KindLocked {
 		isET = isET && s.Kind == "edgetunnel"
 	}

@@ -3,8 +3,8 @@ package subscription
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 
-	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/model"
 )
 
@@ -22,16 +22,18 @@ type ETInfo struct {
 	Addresses []Addr
 }
 
-// DetectEdgetunnel 判断一组节点是否为"同一凭据、同一 path、只有 address/Host 不同"的 edgetunnel 形态。
+// DetectEdgetunnel 判断一组节点是否为"同一凭据、只有 address / Host / path 前缀不同"的 edgetunnel 形态。
+// edgetunnel 可以开"随机路径"（每个节点的 path 前面加随机目录，每次拉取都变），所以 path 不要求相同；
+// 用"Host 的种类远少于节点数"来和普通机场区分（机场通常一个节点一个域名）。
 // force = true 时只要求全部是 vless/trojan + ws（用户手动锁定类型时使用，单节点也可）。
 func DetectEdgetunnel(nodes []model.ProxyNode, force bool) (*ETInfo, bool) {
 	if len(nodes) == 0 || (!force && len(nodes) < 2) {
 		return nil, false
 	}
 	var first map[string]any
-	cred, path := "", ""
+	cred, typ := "", ""
 	info := &ETInfo{}
-	seenH, seenA := map[string]bool{}, map[string]bool{}
+	seenH, seenA, seenSuffix := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, n := range nodes {
 		p := n.Raw
 		t := str(p, "type")
@@ -39,10 +41,9 @@ func DetectEdgetunnel(nodes []model.ProxyNode, force bool) (*ETInfo, bool) {
 			return nil, false
 		}
 		c := str(p, "uuid") + str(p, "password")
-		bp := exits.Clean(str(p, "ws-opts", "path"))
 		if first == nil {
-			first, cred, path = p, c, bp
-		} else if c != cred || (!force && bp != path) {
+			first, cred, typ = p, c, t
+		} else if c != cred || t != typ {
 			return nil, false
 		}
 		if tls, _ := p["tls"].(bool); tls || t == "trojan" { // 模板优先取带 TLS 的节点
@@ -50,9 +51,18 @@ func DetectEdgetunnel(nodes []model.ProxyNode, force bool) (*ETInfo, bool) {
 				first = p
 			}
 		}
-		if h := HostOf(p); h != "" && !seenH[h] {
+		h := HostOf(p)
+		if h == "" && !force {
+			return nil, false // 没有 Host 的 ws 节点不是经 CDN 的形态
+		}
+		if h != "" && !seenH[h] {
 			seenH[h] = true
 			info.Hosts = append(info.Hosts, h)
+			if _, rest, ok := strings.Cut(h, "."); ok {
+				seenSuffix[rest] = true
+			} else {
+				seenSuffix[h] = true
+			}
 		}
 		port, _ := strconv.Atoi(str(p, "port"))
 		k := str(p, "server") + ":" + str(p, "port")
@@ -60,6 +70,14 @@ func DetectEdgetunnel(nodes []model.ProxyNode, force bool) (*ETInfo, bool) {
 			seenA[k] = true
 			info.Addresses = append(info.Addresses, Addr{Server: str(p, "server"), Port: port, Label: n.Name})
 		}
+	}
+	// Host 带通配（*.example.com 每个节点随机一个子域）时按去掉第一段后的后缀计数。
+	kinds := len(seenH)
+	if len(seenSuffix) < kinds {
+		kinds = len(seenSuffix)
+	}
+	if !force && kinds*2 > len(nodes) {
+		return nil, false
 	}
 	base := deepCopy(first)
 	delete(base, "name")

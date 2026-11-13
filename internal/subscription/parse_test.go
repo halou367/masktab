@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +71,58 @@ func TestEdgetunnel(t *testing.T) {
 	}
 	if h := PickHost([]string{"a", "b", "c"}, map[string]int{"a": 2, "b": 1, "c": 1}, 1); h != "c" {
 		t.Errorf("PickHost = %s，期望 c", h)
+	}
+}
+
+// edgetunnel 开了 ECH、随机路径、0-RTT 时的真实链接形态（本地搭的 edgetunnel 实测输出）。
+func TestEdgetunnelVariants(t *testing.T) {
+	mk := func(addr, path, extra string) string {
+		return "vless://a715370f-ae91-4ae6-8bbc-748d1cd9038c@" + addr + "?security=tls&type=ws" + extra + "&host=et.example.com&fp=chrome&sni=et.example.com&path=" + path + "&encryption=none&alpn=#n-" + addr
+	}
+	ech := "&ech=cloudflare-ech.com%2Bhttps%3A%2F%2Fdns.alidns.com%2Fdns-query"
+	text := strings.Join([]string{
+		mk("104.16.1.1:443", "%2Fmovie%2Fdata%2Fapp%3Fed%3D2560", ech),
+		mk("104.16.1.2:2053", "%2Falbums%3Fed%3D2560", ech),
+		mk("104.16.1.3:8443", "%2Fmy%2Furl%3Fed%3D2560", ech),
+		mk("cf.example.org:443", "%2Fthread%3Fed%3D2560", ech),
+	}, "\n")
+	nodes, err := Parse([]byte(text))
+	if err != nil || len(nodes) != 4 {
+		t.Fatalf("解析：%v，%d 个节点", err, len(nodes))
+	}
+	eo, _ := nodes[0].Raw["ech-opts"].(map[string]any)
+	if eo["enable"] != true || eo["query-server-name"] != "cloudflare-ech.com" {
+		t.Errorf("ech-opts = %v", eo)
+	}
+	info, ok := DetectEdgetunnel(nodes, false)
+	if !ok {
+		t.Fatal("每个节点路径不同（随机路径）时也应识别为 edgetunnel")
+	}
+	if len(info.Hosts) != 1 || info.Hosts[0] != "et.example.com" || len(info.Addresses) != 4 {
+		t.Errorf("hosts = %v，地址 %d 个", info.Hosts, len(info.Addresses))
+	}
+	// 凭据不同的一组节点（机场订阅）不能被当成 edgetunnel
+	other := strings.Replace(mk("1.1.1.1:443", "%2F", ""), "a715370f", "b715370f", 1) + "\n" + mk("1.1.1.2:443", "%2F", "") + "\n" + strings.Replace(mk("1.1.1.3:443", "%2F", ""), "a715370f", "c715370f", 1)
+	n2, _ := Parse([]byte(other))
+	if _, ok := DetectEdgetunnel(n2, false); ok {
+		t.Error("凭据各不相同的订阅不应识别为 edgetunnel")
+	}
+}
+
+func TestECHAndSSPlugin(t *testing.T) {
+	if o := echOpts("cloudflare-ech.com"); o["query-server-name"] != "cloudflare-ech.com" {
+		t.Errorf("裸域名：%v", o)
+	}
+	long := strings.Repeat("AEX+DQBB", 12)
+	if o := echOpts(long); o["config"] != long {
+		t.Errorf("Base64 配置：%v", o)
+	}
+	n, err := ParseLink("ss://YWVzLTI1Ni1nY206cGFzcw@1.2.3.4:443?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Bhost%3Da.example.com%3Bpath%3D%2Fws%3Btls#x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	po, _ := n["plugin-opts"].(map[string]any)
+	if n["plugin"] != "v2ray-plugin" || po["host"] != "a.example.com" || po["tls"] != true || po["path"] != "/ws" {
+		t.Errorf("ss 插件：%v %v", n["plugin"], po)
 	}
 }
