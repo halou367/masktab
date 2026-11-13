@@ -88,6 +88,11 @@ func commonArgs(l Launch) []string {
 		a = append(a,
 			fmt.Sprintf("--proxy-server=socks5://127.0.0.1:%d", l.ProxyPort),
 			"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+			// 上面这个参数在内核的"危险参数"名单里，每次启动都会在第一个标签页顶上出一条
+			// "您使用的是不受支持的命令行标记…稳定性和安全性会有所下降"。它是我们故意加的（防 DNS 泄漏，R-1），
+			// 这条提示没有意义。内核里只有两个办法不出这条提示：企业策略（要写注册表，还会显示"由贵单位管理"），
+			// 或者 --test-type。后者的其他影响见 docs/decisions.md U-3，网页侧看不出区别。
+			"--test-type",
 		)
 	}
 	if len(l.Extensions) > 0 {

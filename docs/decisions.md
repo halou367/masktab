@@ -83,13 +83,22 @@
 - 想知道内核把某个设置存在哪：冒烟测试的 `dumpPrefs()` 会把实例的 `Preferences` 和 `Secure Preferences` 拷进截图目录；
   `--click x,y` 可以在截图后点一下屏幕上的按钮，再对比前后两份文件。`ack_ntp_bubble` 这个键名就是这样确认的。
 
-### U-3 还没解决的界面问题
+### U-3 启动提示条与新标签页署名栏
 
-- **提示条**：每次启动，第一个标签页上有一条
-  “You are using an unsupported command-line flag: --host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1. Stability and security will suffer.”
-  （Windows CI 截图 `0-first-window.png` 确认就是这个参数。）它可以点叉关掉，只是难看。
-  这个参数的作用是让内核自己一条 DNS 都不发，防 DNS 泄漏。**没做 V4 泄漏测试之前不要去掉。**
-  做了 V4 之后的备选：去掉它，改为确认“走 SOCKS5 代理时内核本来就不做本地解析”，并在偏好里关掉 DNS 预取。
+- **提示条**（已解决，2026-11-13）：每次启动，第一个标签页上有一条
+  “您使用的是不受支持的命令行标记：--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1。稳定性和安全性会有所下降。”
+  - 这个参数让内核自己一条 DNS 都不发，是防 DNS 泄漏的兜底，**不能去掉**：走 SOCKS5 时网页请求的域名由代理解析，
+    但 WebRTC 解析 STUN / TURN 服务器的域名、DNS 预取这些旁路仍会在本机解析，泄漏检测站正是靠这类旁路看到真实的 DNS 出口。
+  - 内核源码（`chrome/browser/ui/startup/infobar_utils.cc`、`bad_flags_prompt.cc`，148.0.7778.215）里，
+    `--host-resolver-rules` 在“危险参数”名单的第一条；不出提示只有两条路：
+    企业策略 `CommandLineFlagSecurityWarningsEnabled`（要写注册表，会影响本机其他 Chromium，并且菜单里多一句“由贵单位管理”），
+    或者启动参数带 `--test-type`。选了后者，只在带 `--host-resolver-rules` 时一起加。
+  - `--test-type` 的其他影响（逐个查过同一版源码里用到它的地方）：
+    不建任务栏跳转列表；已安装的网页应用不自动更新快捷方式；扩展自己的上下文里多一个 `chrome.test`；
+    内核升级后不给扩展补发 `onInstalled(chrome_update)`；带后台页的内置组件扩展不加载
+    （这一版非 Google 品牌的构建里本来就没有：Hangouts 组件在 ungoogled 里关了，联网语音合成只有 Google 品牌才有）。
+    没有发现网页能观察到的差别；冒烟测试里两个实例的指纹、扩展后台、重启恢复都照常。
+  - 同时不再出现的还有：缺少 Google API 密钥、系统过旧、默认浏览器这几种启动提示条（原本也用不上）。
 - **新标签页底部的署名栏**（“MaskTab”链接和“Customize Chromium”按钮）：改用 `--custom-ntp` 后仍然在。
   试过在偏好里写 `ntp.footer_visible=false` 和 `ntp.footer.extension_attribution_enabled=false`，没有效果，已经删掉。用户可以在“Customize Chromium”里手动关。
 
