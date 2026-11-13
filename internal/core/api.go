@@ -55,7 +55,7 @@ func (a *App) Serve() error {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			if r.Method == http.MethodOptions { // 预检请求不带令牌；只对伴随扩展的来源放行
 				w.Header().Set("Access-Control-Allow-Headers", "X-MaskTab-Token, X-MaskTab-Inst, Content-Type")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE")
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -93,8 +93,9 @@ func body(r *http.Request, v any) error {
 
 type instView struct {
 	*model.Instance
-	RT   *Runtime `json:"rt"`
-	Info *fpInfo  `json:"fpInfo,omitempty"`
+	RT   *Runtime  `json:"rt"`
+	Info *fpInfo   `json:"fpInfo,omitempty"`
+	Acct *acctView `json:"acct"`
 }
 
 // fpInfo 是界面上"指纹信息"展示的内容：按当前设置，下次启动时这个实例会呈现的样子。
@@ -195,9 +196,13 @@ func (a *App) State(me string) map[string]any {
 	defer a.mu.Unlock()
 	insts := []instView{}
 	var mine *instView
+	accts := a.acctViewsLocked()
 	for _, in := range a.Instances {
 		r := *a.rtLocked(in.ID)
-		v := instView{Instance: in, RT: &r}
+		v := instView{Instance: in, RT: &r, Acct: accts[in.ID]}
+		if v.Acct == nil {
+			v.Acct = &acctView{Sites: []string{}}
+		}
 		if in.Kind != "normal" {
 			tz, lang, _ := expectTZ(in, r.Probe)
 			v.Info = &fpInfo{Seed: seed32(in.FP.Seed), Platform: in.FP.Platform, Brand: in.FP.Brand, Cores: cores(in), TZ: tz, Lang: lang}
@@ -260,9 +265,11 @@ func (a *App) State(me string) map[string]any {
 	return map[string]any{
 		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts, "ipq": a.ipqViewLocked(),
 		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version,
-		"kernel": map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": kernel.KernelVersion, "path": a.kernelExe},
-		"core":   map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
-		"net":    a.netInfoLocked(),
+		"kernel":      map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": kernel.KernelVersion, "path": a.kernelExe},
+		"core":        map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
+		"net":         a.netInfoLocked(),
+		"launchSteps": LaunchSteps,
+		"vault":       map[string]any{"hasDefault": a.vault != nil && a.vault.Default() != "", "error": a.vaultErr},
 	}
 }
 
@@ -461,6 +468,7 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 
 func (a *App) routes(mux *http.ServeMux) {
 	me := func(r *http.Request) string { return r.Header.Get("X-MaskTab-Inst") }
+	a.accountRoutes(mux)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { reply(w, a.State(me(r)), nil) })
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
 		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)

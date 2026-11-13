@@ -2,16 +2,18 @@
   "manifest_version": 3,
   "name": "MaskTab",
   "version": "0.1.0",
-  "description": "MaskTab 伴随扩展：节点面板、实例管理、新标签页。",
+  "description": "MaskTab 伴随扩展：实例菜单（工具栏头像）、节点面板、实例管理、密码库、新标签页。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwu/1uFYwxfBqBnLDCkJRa7bUBYZqNQg2Rf+5cBl/IrlpjtZXaqMPq7fdXlM9fN1jKEFDp1SPdUi4PTRwjPVbWDoXkrS7mx1yNUW+QOfY0cPHjDb+1IghT/u/YoaGeJLHq+1STxzL1uKuTKVPjYXxW+PQLuFnk85uAw2JaWGtLhB/qhRdBIbU0n87RzMnTHVswl3d2lKv+nnc2hLGliNi2HMTSiTTUUOLysjQKKQrWfm14OT2M2UDBoBvW8losFSYJNPxMAnh5tJ9ZNpgK0oREFYyNcS1D3bpCCcbkbXknQJSeiu9JAPnHurYHbSBlyhb4bGdNsjZIElfKr4RIUAJ9wIDAQAB",
   "minimum_chrome_version": "120",
   "permissions": [
     "storage",
     "alarms",
-    "tabs"
+    "tabs",
+    "cookies"
   ],
   "host_permissions": [
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js",
@@ -44,7 +46,20 @@
       "suggested_key": {
         "default": "Alt+P"
       },
-      "description": "打开节点面板"
+      "description": "打开实例菜单"
     }
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "autofill.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
 }

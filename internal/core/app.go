@@ -21,6 +21,7 @@ import (
 	"github.com/halou367/masktab/internal/kernel"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/proxy"
+	"github.com/halou367/masktab/internal/vault"
 )
 
 // Runtime 是实例的运行期状态（不落盘，随接口下发给伴随扩展）。
@@ -41,6 +42,7 @@ type Runtime struct {
 	UpRate      int64            `json:"upRate"`
 	DownRate    int64            `json:"downRate"`
 	Seen        int64            `json:"companionSeen,omitempty"`
+	Step        int              `json:"step,omitempty"` // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
 
 	active     bool // 是否已写入 mihomo 配置
 	probePort  int
@@ -97,6 +99,9 @@ type App struct {
 	waiters   map[chan struct{}]bool
 	connSeen  map[string][2]int64
 	quitting  bool
+	vault     *vault.Vault           // 密码库（accounts.go）
+	vaultErr  string                 // 密码库打不开的原因
+	cookies   map[string][]CookieSum // 实例 id → Cookie 汇总（伴随扩展上报，落盘在 state/cookies.json）
 
 	cfgMu     sync.Mutex
 	cfgGen    atomic.Int64 // 每次 mihomo 重载配置加一（重载会重置全部策略组，进行中的测速据此重试）
@@ -244,6 +249,7 @@ func Open(dir, exeDir, version string) (*App, error) {
 		}
 	}
 	a.loadIPQ()
+	a.openVault()
 	if a.inst0() == nil {
 		a.mu.Lock()
 		a.newInstanceLocked("normal")

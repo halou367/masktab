@@ -211,9 +211,33 @@ try {
   check(!!(await inst(a.id))?.rt?.companionSeen, '核心服务收到了该实例伴随扩展的请求');
   const nt = await evalPage(prof(a.id), 'chrome://newtab/', `document.title+'|'+location.href`, 8000, 2000);
   check(!!nt.value && nt.value.includes('新标签页') && nt.value.includes(COMPANION), '新标签页是 MaskTab 自己的页面', JSON.stringify(nt).slice(0, 160));
+
+  // 5b. 实例管理改版：密码库、Cookie 汇总、导入邮箱、排序、工具栏头像（docs/manager-demo.md）
+  try {
+    await api('PUT', '/api/vault/default', { password: 'Smoke@123' });
+    await api('POST', '/api/vault', { inst: a.id, site: 'https://github.com/login', user: 'smoke', pass: 'p1' });
+    const m = await fetch(`http://127.0.0.1:${PORT}/api/vault/match?site=${encodeURIComponent('https://github.com')}`, { headers: { 'X-MaskTab-Token': TOKEN, 'X-MaskTab-Inst': a.id } }).then((r) => r.json());
+    check(m.items?.[0]?.user === 'smoke' && m.items[0].pass === 'p1' && m.default === 'Smoke@123', '密码库：保存、按站点匹配、默认密码', JSON.stringify(m).slice(0, 160));
+    const vb = fs.readFileSync(path.join(DATA, 'config', 'vault.bin'));
+    check(!vb.includes('Smoke@123') && !vb.includes('smoke'), '密码库落盘是加密的（Windows：DPAPI）');
+    const imp = await api('POST', '/api/import/emails', { text: 'smoke1@example.com\nsmoke2@example.com----own' });
+    check(imp.created === 2, '导入邮箱：两个邮箱建两个实例', JSON.stringify(imp));
+    const st2 = await api('GET', '/api/state');
+    const ids = st2.instances.map((x) => x.id).reverse();
+    await api('POST', '/api/instances/order', { ids });
+    const st3 = await api('GET', '/api/state');
+    check(st3.instances.map((x) => x.id).join() === ids.join(), '实例排序：按给定顺序保存');
+    check((st3.instances.find((x) => x.id === a.id)?.acct?.sites || []).includes('github.com'), '实例卡片拿到记住账号的站点');
+    for (const x of st3.instances.filter((x) => /^smoke\d@/.test(x.name))) await api('DELETE', `/api/instances/${x.id}`);
+    await evalPage(prof(a.id), PAGE, `(()=>{document.cookie='smk=1; max-age=3600';return 1})()`);
+    const ck = await evalTarget(prof(a.id), `${COMPANION}/background.js`, `(async()=>{await reportCookies(true);return 1})()`);
+    const ckA = (await inst(a.id))?.acct;
+    rec(ckA?.cookieN > 0 ? 'ok' : 'warn', '伴随扩展上报 Cookie 汇总', ckA ? `${ckA.cookieN} 条 / ${ckA.cookies?.length || 0} 个站点` : JSON.stringify(ck).slice(0, 120));
+  } catch (e) { rec('fail', '实例管理改版接口', e.message); }
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/newtab.html`, '1-newtab.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/popup.html`, '2-popup.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#instances`, '3-instances.png');
+  await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#instances/${a.id}`, '3b-instance-drawer.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#subscriptions`, '4-subscriptions.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#settings`, '5-settings.png');
 

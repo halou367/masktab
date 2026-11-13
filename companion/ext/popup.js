@@ -1,5 +1,6 @@
 import { api, fmtBytes, RESTART_WHY, noticeText } from './api.js';
 import { h, icon, ibtn, flag, pill, toast, toggle, run, delayText, delayCls, cname, ring } from './ui.js';
+import { menuView } from './menu.js';
 
 // 面板。竖着排，宽 320；面板上只放名称、数值和按钮，解释都在悬停提示里。
 //   出口 = 反代（ProxyIP）：自动 = 只定国家，程序在这个国家里挑、不通自动换；手动 = 钉死一个 IP。
@@ -7,7 +8,7 @@ import { h, icon, ibtn, flag, pill, toast, toggle, run, delayText, delayCls, cna
 // 模式只由开关改。在列表里选东西时把模式一起明说给核心服务，不靠它猜。
 const root = document.getElementById('root');
 let st = null, addSub = false, subOpen = false, busy = false;
-let view = '';          // '' = 主界面；region | exit | entry = 占满面板的列表
+let view = 'menu';      // menu = 实例菜单（点头像打开时的首页）；'' = 节点面板；region | exit | entry = 占满面板的列表
 let flt = '';           // 列表里按国家筛选：'' 全部 | 国家代码 | '~dead' 不通
 let kindFlt = '';       // 入口列表按类型筛选：'' | cf（优选）| proxy（反代）
 let resOnly = false;    // 出口列表只看住宅
@@ -340,6 +341,7 @@ function mainView(me, sub) {
   const rt = me.rt, px = me.proxy, on = px.state === 'on', p = rt.probe, kids = [], et = isET(sub);
   const exitAuto = px.exitMode !== 'manual', entryAuto = px.entryMode !== 'manual';
   kids.push(h('header', {},
+    ibtn('chevL', '返回实例菜单', go('menu')),
     h('span', { class: 'dot', style: { background: me.color } }),
     h('span', { class: 'no' }, `#${me.no}`), h('span', { class: 'sub grow' }, me.name || (me.kind === 'normal' ? '普通窗口' : '伪装实例')),
     on ? h('button', { class: 'lat ' + delayCls(rt.latency), title: '重新探测', 'aria-label': '重新探测', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); }) }, delayText(rt.latency), icon('refresh', 12)) : h('span', { class: 'sub', style: { flex: 'none' } }, '直连'),
@@ -376,10 +378,12 @@ function render() {
   const keep = root.querySelector('.ls')?.scrollTop || 0, keepX = root.querySelector('.fls')?.scrollLeft || 0;
   document.body.style.setProperty('--inst', me.color);
   const sub = st.subscriptions.find((s) => s.id === me.proxy.subscriptionId) || null;
-  if (view && (!sub || (view === 'exit' && !isET(sub)))) view = '';
-  document.body.classList.toggle('pk', !!view);
+  if (view && view !== 'menu' && (!sub || (view === 'exit' && !isET(sub)))) view = '';
+  document.body.classList.toggle('pk', !!view && view !== 'menu');
+  document.body.classList.toggle('menu', view === 'menu');
   document.body.classList.toggle('tall', view === 'entry' || view === 'exit'); // 地址列表占满面板；国家列表有几行占几行
-  const kids = view === 'region' ? regionView(me, sub) : view === 'entry' ? entryView(me, sub) : view === 'exit' ? exitView(me, sub) : mainView(me, sub);
+  const nav = { node: go(''), fp: () => { fpOpen = true; go('')(); }, open, render };
+  const kids = view === 'menu' ? menuView(st, nav) : view === 'region' ? regionView(me, sub) : view === 'entry' ? entryView(me, sub) : view === 'exit' ? exitView(me, sub) : mainView(me, sub);
   root.replaceChildren(...kids.flat(Infinity).filter(Boolean));
   const list = root.querySelector('.ls');
   if (list) {

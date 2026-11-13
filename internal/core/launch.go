@@ -91,7 +91,7 @@ func (a *App) Launch(id string) error {
 		a.mu.Unlock()
 		return errors.New("代理内核未就绪，伪装实例不能启动（硬规则 R-1）")
 	}
-	r.Starting, r.Error, r.NeedRestart, r.Notice = true, "", nil, ""
+	r.Starting, r.Error, r.NeedRestart, r.Notice, r.Step = true, "", nil, "", 1
 	r.Cut = "启动中" // 浏览器起来之前主通道一律 REJECT
 	if !portFree(in.Port) {
 		in.Port = freePort()
@@ -107,7 +107,7 @@ func (a *App) Launch(id string) error {
 
 	fail := func(msg string) error {
 		a.mu.Lock()
-		r.Starting, r.active, r.Error, r.Cut = false, false, msg, ""
+		r.Starting, r.active, r.Error, r.Cut, r.Step = false, false, msg, "", 0
 		a.saveLocked("runtime")
 		a.bumpLocked("state", id)
 		a.mu.Unlock()
@@ -115,13 +115,18 @@ func (a *App) Launch(id string) error {
 		return errors.New(msg)
 	}
 	var pr *model.ExitProbe
+	a.step(id, 2)
 	if a.coreOK {
+		a.refreshBind() // 本机网络可能变过（换了 Wi-Fi、开关了 TUN）：重新识别物理网卡，下一步写配置时生效
+		a.step(id, 3)
 		if masked && state == "on" {
 			a.autoPick(id, nil) // "自动"：还没选节点或当前节点不通时，换成最快的可用节点
 		}
+		a.step(id, 4)
 		if err := a.applyConfig(); err != nil {
 			return fail(err.Error())
 		}
+		a.step(id, 5)
 		a.mu.Lock()
 		res := a.resolveLocked(in)
 		a.mu.Unlock()
@@ -132,6 +137,7 @@ func (a *App) Launch(id string) error {
 			tried := map[string]bool{}
 			var p model.ExitProbe
 			why := ""
+			a.step(id, 6)
 			for try := 0; try < 3; try++ {
 				start := time.Now()
 				p = probe.Run(pport, eps)
@@ -161,6 +167,7 @@ func (a *App) Launch(id string) error {
 			}
 		}
 	}
+	a.step(id, 7)
 	a.mu.Lock()
 	tz, lang, _ := expectTZ(in, pr)
 	r.Probe = pr
@@ -219,12 +226,13 @@ func (a *App) Launch(id string) error {
 		_ = os.Remove(a.p("profiles", id, repairMark))
 		log.Printf("实例 #%d 上次运行时伴随扩展后台没有启动，已重置它的 Service Worker 注册", in.No)
 	}
+	a.step(id, 8)
 	if err := cmd.Start(); err != nil {
 		return fail("启动内核失败：" + err.Error())
 	}
 	a.mu.Lock()
 	r.Seen, r.startedAt = 0, now()
-	r.cmd, r.Running, r.Starting, r.Pid, r.LaunchedTZ, r.Cut = cmd, true, false, cmd.Process.Pid, tz, ""
+	r.cmd, r.Running, r.Starting, r.Pid, r.LaunchedTZ, r.Cut, r.Step = cmd, true, false, cmd.Process.Pid, tz, "", 0
 	r.extSetHash, r.pulled, r.done = extHash, pulled, make(chan struct{})
 	a.saveLocked("runtime")
 	a.bumpLocked("state", id)
@@ -384,6 +392,13 @@ func (a *App) Delete(id string) error {
 		}
 	}
 	_ = os.RemoveAll(a.p("runtime", id))
+	if a.vault != nil {
+		a.vault.DeleteInst(id) // 实例的账号随实例一起删
+	}
+	a.mu.Lock()
+	delete(a.cookies, id)
+	_ = writeJSON(a.p("state", "cookies.json"), a.cookies)
+	a.mu.Unlock()
 	return err
 }
 

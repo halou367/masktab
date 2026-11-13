@@ -1,9 +1,10 @@
 import { api, shownExit, RESTART_WHY } from './api.js';
 import { h, icon, ibtn, flag, pill, toast, run } from './ui.js';
+import { instancesView } from './instances.js';
 
 const TABS = [['instances', 'layers', '实例'], ['exits', 'list', '订阅与出口'], ['extensions', 'puzzle', '全局扩展'], ['settings', 'gear', '设置']];
 let st = null;
-const tab = () => (TABS.find((t) => t[0] === location.hash.slice(1)) || TABS[0])[0];
+const tab = () => (TABS.find((t) => t[0] === location.hash.slice(1).split('/')[0]) || TABS[0])[0];
 const editing = () => document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
 const act = (fn, ok) => run(async () => { await fn(); await load(true); }, ok);
 
@@ -12,20 +13,7 @@ async function load(force) {
   if (force || !editing()) render();
 }
 
-function instances() {
-  const stateText = (i) => (i.rt.starting ? '启动中…' : i.rt.running ? '运行中' : '休眠');
-  return [h('h2', {}, icon('layers'), '实例', h('span', { class: 'grow' }), ibtn('mask', '新建伪装实例（Ctrl+M）', () => act(() => api('POST', '/api/instances', {}), '正在创建…'), 'on')),
-    st.instances.map((i) => { const ex = shownExit(i); return h('div', { class: 'item' },
-      h('span', { class: 'dot', style: { background: i.color } }), h('span', { class: 'no' }, '#' + i.no),
-      h('input', { class: 'name', value: i.name || '', placeholder: i.kind === 'normal' ? '普通窗口' : '未命名', title: '名称（回车保存）', onchange: (ev) => act(() => api('PATCH', `/api/instances/${i.id}`, { name: ev.target.value })) }),
-      h('span', { class: 'sw', title: '实例颜色' }, st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, 'aria-label': c, onclick: () => act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
-      h('span', { class: 'grow sub' }, i.proxy.state === 'on' ? (ex ? [flag(ex.country), ` ${ex.ip}`] : '代理') : '直连', i.rt.launchedTz ? ` · ${i.rt.launchedTz}` : '',
-        i.rt.error ? h('span', { class: 'bad' }, ' · ' + i.rt.error) : null, i.rt.needRestart?.length ? h('span', { class: 'mid' }, ' · 需重启：' + i.rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、')) : null),
-      h('span', { class: 'sub' }, stateText(i)),
-      i.rt.running ? [ibtn('refresh', '重启', () => act(() => api('POST', `/api/instances/${i.id}/restart`))), ibtn('stop', '关闭', () => act(() => api('POST', `/api/instances/${i.id}/stop`)))]
-        : ibtn('play', '打开', () => act(() => api('POST', `/api/instances/${i.id}/launch`)), 'on'),
-      i.no !== 0 && ibtn('trash', '删除实例及其全部数据', () => confirm(`删除 #${i.no} 及其全部数据（登录状态、缓存）？此操作不可撤销。`) && act(() => api('DELETE', `/api/instances/${i.id}`)), 'danger')); })];
-}
+function instances() { return instancesView({ st, act, load, render }); }
 
 function exits() {
   return [h('h2', {}, icon('link'), '订阅'),
@@ -83,6 +71,9 @@ function settings() {
     rowEl('home', '查出口 IP 的类型和纯净度', pill([[true, '开', '把出口 IP 发给 ip.net.coffee 查询住宅 / 机房和纯净度；结果存 7 天'], [false, '关', '不向第三方查询，面板里不显示类型和纯净度']], !s.ipqOff, (v) => set('ipqOff', !v))),
     rowEl('shield', '不受本机 TUN / 系统代理影响', h('span', {}, pill([['', '自动绑定物理网卡', '出站和 DNS 绑定到识别出的物理网卡，本机开着的 TUN、系统代理都接管不到'], ['off', '关', '按系统路由走（本机 TUN 会接管 MaskTab 的流量）']], s.bindIface === 'off' ? 'off' : '', (v) => set('bindIface', v)),
       h('span', { class: 'sub' }, '  ', st.net?.iface ? `当前：${st.net.iface}${st.net.ipv4 ? ' · ' + st.net.ipv4 : ''}` : '未绑定', st.net?.tun?.length ? ` · 发现 TUN：${st.net.tun.join('、')}` : ''))),
+    rowEl('key', '默认密码', h('span', { class: 'row' }, h('span', { class: 'sub' }, st.vault?.hasDefault ? '已设置' : '未设置'),
+      ibtn('edit', st.vault?.hasDefault ? '修改默认密码' : '设置默认密码', () => { const v = prompt('默认密码（批量导入邮箱、注册新站时用；留空 = 清除）：'); if (v != null) act(() => api('PUT', '/api/vault/default', { password: v }), v ? '已保存' : '已清除'); }),
+      h('span', { class: 'sub' }, '加密保存在本机（Windows 用系统凭据保护）'))),
     rowEl('refresh', '订阅过期时间（小时）', h('input', { type: 'number', min: 1, value: s.subRefreshHours, style: { width: '90px' }, onchange: (ev) => set('subRefreshHours', +ev.target.value || 6) })),
     rowEl('bolt', '测速地址', h('input', { value: s.delayUrl, style: { width: '100%' }, onchange: (ev) => set('delayUrl', ev.target.value) })),
     rowEl('link', '搜索地址（%s 为关键词）', h('input', { value: s.searchUrl, style: { width: '100%' }, onchange: (ev) => set('searchUrl', ev.target.value) })),
