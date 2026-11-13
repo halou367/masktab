@@ -81,13 +81,29 @@ async function screenshot(dir, url, file, wait = 2500) {
   } catch (e) { console.log('截图失败 ' + file + '：' + e.message); } finally { c.close(); }
 }
 
-// 整个桌面的截图（仅 Windows 有界面模式），用来人工确认窗口颜色、工具栏图标这些无头模式看不到的东西
+// 下面三个只在 Windows 有界面模式下起作用，用来人工确认无头模式看不到的东西（窗口颜色、工具栏、内核弹出的提示）。
+function powershell(script) {
+  if (process.platform !== 'win32') return Promise.resolve();
+  const enc = Buffer.from(script, 'utf16le').toString('base64'); // 用 -EncodedCommand 避开引号转义问题
+  return new Promise((r) => { const p = spawn('powershell', ['-NoProfile', '-EncodedCommand', enc], { stdio: 'ignore' }); p.on('exit', r); p.on('error', r); setTimeout(r, 20000); });
+}
+// 整个桌面的截图
 async function desktopShot(file) {
   if (!SHOTS || !VISIBLE || process.platform !== 'win32') return;
   fs.mkdirSync(SHOTS, { recursive: true });
   const out = path.join(SHOTS, file).replace(/'/g, "''");
-  const ps = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left,$b.Top,0,0,$bmp.Size); $bmp.Save('${out}')`;
-  await new Promise((r) => { const p = spawn('powershell', ['-NoProfile', '-Command', ps], { stdio: 'ignore' }); p.on('exit', r); p.on('error', r); setTimeout(r, 20000); });
+  await powershell(`Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left,$b.Top,0,0,$bmp.Size); $bmp.Save('${out}')`);
+}
+// 在屏幕坐标 (x, y) 点一下鼠标左键。调查内核弹窗时用：--click x,y 会在第一张桌面截图之后点击，再截一张。
+async function clickAt(x, y) {
+  if (!VISIBLE || process.platform !== 'win32') return;
+  await powershell(`Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y); [DllImport("user32.dll")] public static extern void mouse_event(uint f,uint dx,uint dy,uint d,UIntPtr e);' -Name U -Namespace W; [W.U]::SetCursorPos(${x},${y}); Start-Sleep -Milliseconds 300; [W.U]::mouse_event(2,0,0,0,[UIntPtr]::Zero); [W.U]::mouse_event(4,0,0,0,[UIntPtr]::Zero)`);
+}
+// 把实例的偏好文件拷到截图目录，方便查内核把某个设置存在了哪里
+function dumpPrefs(dir, tag) {
+  if (!SHOTS) return;
+  fs.mkdirSync(SHOTS, { recursive: true });
+  for (const f of ['Preferences', 'Secure Preferences']) { try { fs.copyFileSync(path.join(dir, 'Default', f), path.join(SHOTS, `prefs-${tag}-${f.replace(' ', '-')}.json`)); } catch {} }
 }
 
 const RED = `(()=>{const c=document.createElement('canvas');c.width=c.height=32;const g=c.getContext('2d');g.fillStyle='#f00';g.fillRect(0,0,32,32);return g.getImageData(0,0,32,32).data.length})()`;
@@ -202,6 +218,7 @@ try {
 
   { const c0 = await cdp(prof(a.id)); await c0.send('Target.createTarget', { url: 'chrome://newtab/' }); c0.close(); await sleep(3000); }
   await desktopShot('6-desktop.png');
+  if (typeof arg('click', '') === 'string' && arg('click', '')) { const [cx, cy] = arg('click').split(',').map(Number); await clickAt(cx, cy); await sleep(2000); await desktopShot('6b-after-click.png'); }
 
   // 6. 重启后恢复标签页与登录态
   await evalPage(prof(a.id), 'about:blank', '1');
@@ -212,6 +229,7 @@ try {
   if (ia2) {
     await sleep(2000);
     const c2 = await cdp(prof(a.id)); const ts = (await c2.send('Target.getTargets')).targetInfos.map((x) => x.url); c2.close();
+    dumpPrefs(prof(a.id), 'after-restart');
     await desktopShot('7-desktop-after-restart.png');
     check(ts.some((u) => u.includes('restore-me')), '重启后恢复了上次的标签页', ts.filter((u) => u.startsWith('http')).join(' , ').slice(0, 160));
     const again = (await evalPage(prof(a.id), PAGE, `document.cookie+'|'+localStorage.getItem('who')`)).value;

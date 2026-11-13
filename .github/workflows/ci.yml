@@ -53,7 +53,7 @@ jobs:
             smoke-data/core/mihomo.exe
           key: tools-windows-${{ hashFiles('internal/kernel/fetch.go') }}
       - name: 冒烟测试
-        run: node scripts/smoke.mjs --bin masktab.exe --data smoke-data --shots shots --visible
+        run: node scripts/smoke.mjs --bin masktab.exe --data smoke-data --shots shots --visible --click 678,200
       - uses: actions/upload-artifact@v4
         if: always()
         with:
