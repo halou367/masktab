@@ -34,7 +34,9 @@ function applyState(s) {
   for (const x of s.insts) m[x.id] = x;
   insts = m;
   if (s.searchUrl) searchUrl = s.searchUrl;
-  for (const [cs, id] of csInst) registerFp(cs, id);
+  // 每个实例的容器都先注册好指纹脚本：实例的第一个网页也能在页面脚本之前装上
+  for (const id of Object.keys(m)) { csInst.set(csOf(id), id); registerFp(csOf(id), id); }
+  for (const [cs, id] of csInst) if (!m[id]) { csInst.delete(cs); regs.get(cs)?.reg?.unregister(); regs.delete(cs); }
 }
 function connect() {
   try {
@@ -48,6 +50,11 @@ ready = native('GET', '/ext/state').then((s) => { applyState(s); console.info('M
 
 // ---------- 标签页属于哪个实例 ----------
 const isContainer = (cs) => typeof cs === 'string' && cs.startsWith('firefox-container-');
+// GeckoView 的容器 cookieStoreId 就是 "firefox-container-" + contextId（CI 模拟器里看到的），app 给每个实例的 contextId 是 "mt-<id>"，
+// 所以不用登记也能从 cookieStoreId 直接认出实例；登记表是兜底。
+const CS_PREFIX = 'firefox-container-mt-';
+const csOf = (id) => CS_PREFIX + id;
+const idOfCs = (cs) => (typeof cs === 'string' && cs.startsWith(CS_PREFIX) && insts[cs.slice(CS_PREFIX.length)] ? cs.slice(CS_PREFIX.length) : null);
 async function csOfTab(tabId) {
   if (tabCs.has(tabId)) return tabCs.get(tabId);
   try { const t = await browser.tabs.get(tabId); tabCs.set(tabId, t.cookieStoreId); return t.cookieStoreId; } catch { return null; }
@@ -56,7 +63,8 @@ async function instOfTab(tabId) {
   if (tabId == null || tabId < 0) return null;
   if (tabInst.has(tabId)) return tabInst.get(tabId);
   const cs = await csOfTab(tabId);
-  if (cs && csInst.has(cs)) { const id = csInst.get(cs); tabInst.set(tabId, id); return id; }
+  const id = idOfCs(cs) || (cs && csInst.get(cs));
+  if (id) { tabInst.set(tabId, id); return id; }
   return null;
 }
 function bind(tab, id) {
@@ -84,7 +92,7 @@ function routeFor(id) {
 browser.proxy.onRequest.addListener(async (d) => {
   await ready;
   let id = await instOfTab(d.tabId);
-  if (!id && isContainer(d.cookieStoreId) && csInst.has(d.cookieStoreId)) id = csInst.get(d.cookieStoreId);
+  if (!id) id = idOfCs(d.cookieStoreId) || (isContainer(d.cookieStoreId) && csInst.get(d.cookieStoreId)) || null;
   if (id) return routeFor(id);
   // 不属于任何网页标签：扩展自己、app 内部的请求（来源是 moz-extension 或没有来源）直连；其余认不出实例的一律拒绝
   const from = d.documentUrl || d.originUrl || '';

@@ -368,9 +368,12 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 
 ### A-4 标签页 → 实例的识别
 
-- app 开的每个标签先进扩展自己的引导页 `newtab.html#inst=<id>&go=<网址>` 登记，再跳网址（扩展页不走代理，第一跳不漏）。
-- 网页内容脚本的原生消息由会话自己的 MessageDelegate 接收（app 按会话知道实例），再告诉后台；网页伪造不了。
-- 指纹脚本按容器 `contentScripts.register({cookieStoreId})` 同步注入；GeckoView 容器是私有身份，这个调用是否被接受没验证，失败时自动改异步注入（`fp-boot.js`）。
+- CI 模拟器里看到：GeckoView 容器标签页的 cookieStoreId 就是 `firefox-container-` + contextId，例如 `firefox-container-mt-a14fd374`。
+  所以后台直接从 cookieStoreId 认实例（`tabs.get(tabId).cookieStoreId`，不用 `details.cookieStoreId`，见 bug 1948114）。
+- 兜底：app 开的每个标签先进扩展自己的引导页 `newtab.html#inst=<id>&go=<网址>` 登记，再跳网址（扩展页不走代理，第一跳不漏）；
+  网页内容脚本的原生消息由会话自己的 MessageDelegate 接收（app 按会话知道实例），再告诉后台。网页伪造不了这两条。
+- 指纹脚本按容器 `contentScripts.register({cookieStoreId})` 同步注入。CI 里实测这个调用被接受（日志“指纹脚本已按容器注册 firefox-container-mt-…”）；失败时自动改异步注入（`fp-boot.js`）。
+- GeckoView 的坑：会话里打开的扩展页面（以及内容脚本）发的原生消息只交给**这个会话**的 MessageDelegate，没设就一直挂着不回；回复不能是 JSONObject（报 “Invalid event data for callback”），一律回 JSON 字符串。
 
 ### A-5 安卓版的构建方式
 
