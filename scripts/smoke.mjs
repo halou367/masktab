@@ -166,7 +166,7 @@ try {
   const badOrigin = await fetch(`http://127.0.0.1:${PORT}/api/state`, { headers: { 'X-MaskTab-Token': TOKEN, Origin: 'https://evil.example' } }); check(badOrigin.status === 403, '本地接口拒绝外部来源', 'HTTP ' + badOrigin.status);
 
   // 2. 内核原生检查（不经过 MaskTab）：开启指纹后大量画布读回，渲染进程不能崩（150.0.7871.186 会崩，见 docs/decisions.md K-1）
-  const kexe = findKernel(path.join(DATA, 'kernel'));
+  const kexe = findKernel(path.join(DATA, 'kernel')) || findKernel(path.join(path.dirname(path.resolve(BIN)), 'kernel')); // 安装版的内核在程序目录下
   if (kexe) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mt-raw-'));
     const k = spawn(kexe, [`--user-data-dir=${tmp}`, '--headless=new', ...linuxOnly, '--remote-debugging-port=0', '--remote-allow-origins=*', '--no-first-run', '--fingerprint=1000', 'about:blank'], { stdio: 'ignore' });
@@ -176,7 +176,7 @@ try {
       check(!!r.value, '内核原生：开启指纹后 300 次画布读回不崩溃（K-1）', r.hang ? '渲染进程崩溃或卡死' : JSON.stringify(r).slice(0, 160));
     } catch (e) { rec('warn', '内核原生：开启指纹后画布读回（K-1）', '检查没跑起来：' + e.message); }
     k.kill(); await sleep(1500); try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
-  } else rec('warn', '内核原生检查', '在数据目录里没找到内核可执行文件');
+  } else rec('warn', '内核原生检查', '在数据目录和程序目录里都没找到内核可执行文件');
 
   // 3. 两个伪装实例
   const a = await api('POST', '/api/instances', {}); const ia = await waitRunning(a.id);

@@ -114,15 +114,19 @@ jobs:
           Need (-not (Test-Path C:\mt\masktab.exe)) '卸载删除了程序'
           Need (-not (Test-Path C:\mt\kernel)) '卸载删除了内核'
           Need ((Get-FileHash C:\mt\data\config\instances.json).Hash -eq $data) '卸载保留了数据'
+      - name: 收集测试结果
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force smoke-out | Out-Null
+          foreach ($f in 'smoke-result.md', 'smoke-core.log', 'state\masktab.log', 'core\mihomo.log') { if (Test-Path "C:\mt\data\$f") { Copy-Item "C:\mt\data\$f" smoke-out\ } }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: smoke-windows
           path: |
             shots/
-            C:\mt\data\smoke-result.md
-            C:\mt\data\smoke-core.log
-            C:\mt\data\state\masktab.log
+            smoke-out/
       - uses: actions/upload-artifact@v4
         with:
           name: MaskTab-Setup
