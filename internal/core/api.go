@@ -121,6 +121,30 @@ type nodeView struct {
 	Exit   *model.IPInfo `json:"exit,omitempty"` // 普通网站看到的出口
 	CF     *model.IPInfo `json:"cf,omitempty"`   // 不指定反代时 Cloudflare 站点看到的出口
 	Err    string        `json:"err,omitempty"`
+	lineView
+}
+
+// lineView 是入口和反代两种行共有的、来自直接探测和下载测速的信息。
+type lineView struct {
+	Kind       string  `json:"kind,omitempty"` // cf = Cloudflare 官方 IP（优选）| proxy = 反代
+	Colo       string  `json:"colo,omitempty"`
+	TCP        int     `json:"tcp,omitempty"`
+	At         int64   `json:"at,omitempty"`
+	Speed      float64 `json:"speed,omitempty"`      // 下载峰值 Mbps；正在测时是目前的峰值
+	SpeedAvg   float64 `json:"speedAvg,omitempty"`   // 下载平均 Mbps
+	SpeedState string  `json:"speedState,omitempty"` // run | wait
+	SpeedErr   string  `json:"speedErr,omitempty"`
+}
+
+func (a *App) lineViewLocked(subID, key string, sc model.NodeScan) lineView {
+	v := lineView{Kind: sc.Kind, Colo: sc.Colo, TCP: sc.TCP, At: sc.At, Speed: sc.Speed, SpeedAvg: sc.SpeedAvg, SpeedErr: sc.SpeedErr}
+	if st, now := a.speedOfLocked(subID, key); st != "" {
+		v.SpeedState, v.SpeedErr = st, ""
+		if st == "run" {
+			v.Speed, v.SpeedAvg = now, 0
+		}
+	}
+	return v
 }
 
 // pipView 是反代列表里的一行。
@@ -135,6 +159,7 @@ type pipView struct {
 	CF      *model.IPInfo `json:"cf,omitempty"`   // 用它时 Cloudflare 站点看到的出口
 	Exit    *model.IPInfo `json:"exit,omitempty"` // 全局出口（socks5 / http）时普通网站看到的出口
 	Err     string        `json:"err,omitempty"`
+	lineView
 }
 
 type subView struct {
@@ -143,6 +168,9 @@ type subView struct {
 	Pips      []pipView  `json:"pips"`
 	NodeCount int        `json:"nodeCount"`
 	Scanning  bool       `json:"scanning"`
+	Progress  *scanProg  `json:"progress,omitempty"` // 本轮测速进度
+	ScannedAt int64      `json:"scannedAt"`          // 上一轮测速结束的时刻；0 = 核心服务启动后还没测过
+	Speeding  bool       `json:"speeding"`           // 有下载测速在进行或排队
 	Template  any        `json:"template,omitempty"`
 }
 
@@ -177,14 +205,28 @@ func (a *App) State(me string) map[string]any {
 	}
 	subs := []subView{}
 	for _, s := range a.Subs {
-		v := subView{Subscription: s, Nodes: []nodeView{}, Pips: []pipView{}, Scanning: a.scanning[s.ID]}
+		v := subView{Subscription: s, Nodes: []nodeView{}, Pips: []pipView{}, Scanning: a.scanning[s.ID], ScannedAt: a.scannedAt[s.ID], Speeding: a.speed[s.ID] != nil}
+		if pr := a.scanProg[s.ID]; pr != nil {
+			cp := *pr
+			v.Progress = &cp
+		}
+		isET := s.Kind == "edgetunnel" && s.Template != nil
 		for _, n := range a.nodesLocked(s) {
 			sc := a.scanLocked(n.Name)
-			v.Nodes = append(v.Nodes, nodeView{ID: n.ID, Server: n.Server, Port: n.Port, Label: n.Label, Host: n.Host, Type: n.Type, From: n.From, Gone: n.Gone, Delay: sc.Delay, Exit: sc.Exit, CF: sc.CF, Err: sc.Err})
+			nv := nodeView{ID: n.ID, Server: n.Server, Port: n.Port, Label: n.Label, Host: n.Host, Type: n.Type, From: n.From, Gone: n.Gone, Delay: sc.Delay, Exit: sc.Exit, CF: sc.CF, Err: sc.Err}
+			if isET {
+				nv.lineView = a.lineViewLocked(s.ID, n.key(), sc)
+				if nv.Kind == "" && inCF(n.Server) {
+					nv.Kind = "cf"
+				}
+			}
+			v.Nodes = append(v.Nodes, nv)
 		}
 		for _, p := range a.pipsLocked(s) {
 			sc := a.scanLocked(p.Name)
-			v.Pips = append(v.Pips, pipView{ID: p.ID, Type: p.Type, Value: p.Value, Label: p.Label, Key: p.key(), Derived: p.Derived, Delay: sc.Delay, CF: sc.CF, Exit: sc.Exit, Err: sc.Err})
+			pv := pipView{ID: p.ID, Type: p.Type, Value: p.Value, Label: p.Label, Key: p.key(), Derived: p.Derived, Delay: sc.Delay, CF: sc.CF, Exit: sc.Exit, Err: sc.Err}
+			pv.lineView = a.lineViewLocked(s.ID, p.key(), sc)
+			v.Pips = append(v.Pips, pv)
 		}
 		v.NodeCount = len(v.Nodes)
 		subs = append(subs, v)
@@ -480,11 +522,20 @@ func (a *App) routes(mux *http.ServeMux) {
 		case "refresh":
 			reply(w, nil, a.RefreshSubscription(id, r.URL.Query().Get("force") == "1"))
 		case "test":
-			if !a.coreOK {
-				reply(w, nil, errors.New("代理内核没有运行，无法测速"))
+			go a.Scan(id)
+			reply(w, nil, nil)
+		case "speed": // 测下载峰值：{keys: ["地址:端口", …]}；?stop=1 停止
+			if r.URL.Query().Get("stop") == "1" {
+				a.SpeedStop(id)
+				reply(w, nil, nil)
 				return
 			}
-			go a.Scan(id)
+			var b struct{ Keys []string }
+			if err := body(r, &b); err != nil {
+				reply(w, nil, err)
+				return
+			}
+			a.SpeedTest(id, b.Keys)
 			reply(w, nil, nil)
 		case "ech": // ?off=1 关闭 / ?off=0 恢复使用订阅里的 ECH
 			a.mu.Lock()
@@ -522,7 +573,8 @@ func (a *App) routes(mux *http.ServeMux) {
 			reply(w, nil, err)
 			return
 		}
-		reply(w, map[string]int{"added": a.ImportExits(b.Text)}, nil)
+		n, err := a.ImportExits(b.Text)
+		reply(w, map[string]int{"added": n}, err)
 	})
 	mux.HandleFunc("PATCH /api/exits/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {

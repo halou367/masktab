@@ -171,7 +171,8 @@ func (a *App) applyConfig() error {
 			in.ScanMembers = append(in.ScanMembers, nodeName(sub, n.Key))
 		}
 	}
-	// edgetunnel：每个入口一条不带反代参数的出站；每个反代一条"借用的入口 + 该反代"的出站。
+	// edgetunnel：每个入口一条不带反代参数的出站（自动选线时经它实测）；
+	// socks5 / http 出口各一条"借用的入口 + 该出口"的出站（它们只能经隧道测；proxyip 是本机直接探测的，不需要）。
 	for _, sub := range a.Subs {
 		if sub.Kind != "edgetunnel" || sub.Template == nil {
 			continue
@@ -187,6 +188,9 @@ func (a *App) applyConfig() error {
 		}
 		if via, ok := a.viaLocked(sub, nodes); ok {
 			for _, p := range a.pipsLocked(sub) {
+				if p.Type == "proxyip" {
+					continue
+				}
 				path := exits.Rewrite(sub.Template.BasePath, p.Type, p.Value, a.Settings.PathTemplate)
 				in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(p.Name, *sub.Template, via.Server, via.Port, host, path))...)
 				in.ScanMembers = append(in.ScanMembers, p.Name)
@@ -313,6 +317,13 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	if want.want != "REJECT" {
 		start := time.Now()
 		pr = probe.Run(pport, eps)
+		if pr.Error == "" && state == "on" && (pr.Direct == nil) != (pr.CF == nil) {
+			// 两路出口只探到一路：多半是刚好撞上线路切换，隧道被重建了。等一下再探一次，两路都有才采用。
+			time.Sleep(1500 * time.Millisecond)
+			if again := probe.Run(pport, eps); again.Error == "" && again.Direct != nil && again.CF != nil {
+				pr = again
+			}
+		}
 		if pr.Error != "" && state == "on" {
 			if why := a.core.LastError(proxy.Group("p"+sid), start); why != "" {
 				pr.Error = friendlyErr(why, nil)

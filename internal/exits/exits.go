@@ -3,6 +3,8 @@ package exits
 
 import (
 	"net"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -94,21 +96,37 @@ type Parsed struct {
 	IsDomain           bool
 }
 
-// ParseLines 解析多行粘贴的出口列表。支持：
-// proxyip=1.2.3.4 ｜ 1.2.3.4 ｜ 1.2.3.4:443 ｜ 域名 ｜ socks5://u:p@h:port ｜ http://u:p@h:port ｜ 行尾 #备注
+// ParseLines 解析粘贴进来的地址列表，格式尽量宽：
+//
+//	1.2.3.4 ｜ 1.2.3.4:443 ｜ [2606:4700::1]:443 ｜ 域名 ｜ 域名:端口 ｜ proxyip=1.2.3.4
+//	socks5://u:p@h:port ｜ http://u:p@h:port
+//	行尾 #备注；"1.2.3.4 443"、"1.2.3.4 香港"这种用空白分开的写法；逗号、分号分隔；
+//	测速工具导出的 CSV（"IP,已发送,已接收,丢包率,延迟,速度"）——不是地址的列和表头自动丢掉。
+//
+// 一个地址是 Cloudflare 官方 IP（优选）还是反代，这里不区分，由之后的探测得出。
 func ParseLines(text string) []Parsed {
 	var out []Parsed
 	seen := map[string]bool{}
-	for _, line := range strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == '\r' || r == ',' || r == ';' }) {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+	for _, line := range strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == '\r' || r == ',' || r == ';' || r == '，' || r == '；' }) {
+		line = strings.TrimSpace(strings.Trim(strings.TrimSpace(line), `"'`))
+		if line == "" || strings.HasPrefix(line, "#") || IsListURL(line) {
 			continue
 		}
 		p := Parsed{Type: "proxyip"}
 		if i := strings.Index(line, "#"); i >= 0 {
 			p.Label, line = strings.TrimSpace(line[i+1:]), strings.TrimSpace(line[:i])
 		}
-		line = strings.TrimLeft(line, "/?")
+		// "1.2.3.4 443"、"1.2.3.4<Tab>443<Tab>HK"、"1.2.3.4 香港"
+		if f := strings.Fields(line); len(f) > 1 {
+			line, f = f[0], f[1:]
+			if n, err := strconv.Atoi(f[0]); err == nil && n > 0 && n < 65536 && net.ParseIP(strings.Trim(line, "[]")) != nil {
+				line, f = net.JoinHostPort(strings.Trim(line, "[]"), f[0]), f[1:]
+			}
+			if p.Label == "" {
+				p.Label = strings.Join(f, " ")
+			}
+		}
+		line = strings.TrimRight(strings.TrimLeft(line, "/?"), "/")
 		low := strings.ToLower(line)
 		switch {
 		case strings.HasPrefix(low, "proxyip="):
@@ -123,7 +141,7 @@ func ParseLines(text string) []Parsed {
 			p.Type, line = "http", line[5:]
 		}
 		p.Value = strings.TrimSpace(line)
-		if p.Value == "" || seen[p.Type+p.Value] {
+		if !valid(p.Type, p.Value) || seen[p.Type+p.Value] {
 			continue
 		}
 		seen[p.Type+p.Value] = true
@@ -132,6 +150,50 @@ func ParseLines(text string) []Parsed {
 			p.IsDomain = net.ParseIP(h) == nil
 		}
 		out = append(out, p)
+	}
+	return out
+}
+
+var domainRe = regexp.MustCompile(`(?i)^([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z][a-z0-9-]*[a-z]$`)
+
+// valid 判断解析出来的值像不像一个地址：挡掉 CSV 里的数字列、表头和乱码。
+func valid(typ, v string) bool {
+	if typ != "proxyip" { // socks5 / http：[用户:密码@]主机:端口
+		if i := strings.LastIndex(v, "@"); i >= 0 {
+			v = v[i+1:]
+		}
+		h, port := SplitHostPort(v)
+		return port > 0 && port < 65536 && (net.ParseIP(h) != nil || domainRe.MatchString(h))
+	}
+	h, port := SplitHostPort(v)
+	if strings.Contains(v, ":") && port == 0 && net.ParseIP(h) == nil { // "主机:不是数字的东西"
+		return false
+	}
+	return port < 65536 && (net.ParseIP(h) != nil || domainRe.MatchString(h))
+}
+
+// IsListURL 判断一行是不是"地址列表的网址"（而不是一个 HTTP 代理）：
+// https:// 开头的一律是；http:// 开头、主机后面还带路径的也是（http://主机:端口 是 HTTP 代理）。
+func IsListURL(line string) bool {
+	low := strings.ToLower(strings.TrimSpace(line))
+	if strings.HasPrefix(low, "https://") {
+		return len(low) > 8
+	}
+	if rest, ok := strings.CutPrefix(low, "http://"); ok && !strings.Contains(rest, "@") {
+		if i := strings.Index(rest, "/"); i > 0 && i < len(rest)-1 {
+			return true
+		}
+	}
+	return false
+}
+
+// ListURLs 找出文本里的"地址列表网址"（每行一个）。
+func ListURLs(text string) []string {
+	var out []string
+	for _, line := range strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == '\r' || r == ' ' || r == '\t' }) {
+		if IsListURL(line) {
+			out = append(out, strings.TrimSpace(line))
+		}
 	}
 	return out
 }

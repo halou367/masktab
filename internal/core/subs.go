@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/halou367/masktab/internal/cfprobe"
 	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/netx"
@@ -222,8 +224,39 @@ func (a *App) DeleteSubscription(id string) {
 }
 
 // ImportExits 多行粘贴导入出口条目；域名默认"展开"为 IP。返回新增条数。
-func (a *App) ImportExits(text string) int {
+//
+// 文本里可以夹着"地址列表的网址"（https://…/ip.txt 这类）：把它拉下来，里面的地址一起导入（只在导入时拉这一次）。
+func (a *App) ImportExits(text string) (int, error) {
 	parsed := exits.ParseLines(text)
+	var ferr error
+	for i, u := range exits.ListURLs(text) {
+		if i >= maxListURLs {
+			break
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		b, status, _, err := netx.Get(ctx, u, http.Header{"User-Agent": {"Mozilla/5.0"}}, 1<<20)
+		cancel()
+		switch {
+		case err != nil:
+			ferr = fmt.Errorf("拉取 %s 失败：%s", u, cfprobe.Reason(err))
+		case status != 200:
+			ferr = fmt.Errorf("拉取 %s 失败：HTTP %d", u, status)
+		case strings.HasPrefix(strings.TrimSpace(string(b)), "<"):
+			ferr = fmt.Errorf("%s 返回的是网页，不是地址列表", u)
+		default:
+			got := exits.ParseLines(string(b))
+			if len(got) == 0 {
+				ferr = fmt.Errorf("%s 里没有找到地址（需要具体的 IP 或域名，网段列表不行）", u)
+			}
+			parsed = append(parsed, got...)
+		}
+	}
+	if len(parsed) > maxImport {
+		parsed = parsed[:maxImport]
+	}
+	if len(parsed) == 0 && ferr != nil {
+		return 0, ferr
+	}
 	a.mu.Lock()
 	have := map[string]bool{}
 	for _, e := range a.Exits {
@@ -241,10 +274,48 @@ func (a *App) ImportExits(text string) int {
 	a.saveLocked("exits")
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
-	for _, id := range added {
-		go a.ResolveExit(id)
+	if len(added) > 0 {
+		go func() { // 先把域名解析成 IP，再把新地址测一遍：是优选还是反代、延迟、出口，都由探测得出
+			var wg sync.WaitGroup
+			for _, id := range added {
+				wg.Add(1)
+				go func(id string) { defer wg.Done(); a.ResolveExit(id) }(id)
+			}
+			wg.Wait()
+			a.rescanET()
+		}()
 	}
-	return len(added)
+	return len(added), nil
+}
+
+// 一次导入的上限：列表网址最多拉 5 个，地址最多收 500 个（再多每次探测都要等很久，也用不上）。
+const (
+	maxListURLs = 5
+	maxImport   = 500
+)
+
+// rescanET 把全部 edgetunnel 订阅重新测一遍；有一轮正在测就等它结束再测（否则新加的地址会漏掉）。
+func (a *App) rescanET() {
+	a.mu.Lock()
+	var ids []string
+	for _, s := range a.Subs {
+		if s.Kind == "edgetunnel" && s.Template != nil {
+			ids = append(ids, s.ID)
+		}
+	}
+	a.mu.Unlock()
+	for _, id := range ids {
+		for i := 0; i < 100; i++ {
+			a.mu.Lock()
+			busy := a.scanning[id]
+			a.mu.Unlock()
+			if !busy {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		a.Scan(id)
+	}
 }
 
 // ResolveExit 把域名出口条目解析为 IP 列表。已被实例选中的失效 IP 只标记不替换（由界面对照 resolved 显示）。

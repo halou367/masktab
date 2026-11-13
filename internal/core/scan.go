@@ -153,6 +153,11 @@ func (a *App) pipsLocked(sub *model.Subscription) []pipRef {
 		}
 		seen[k] = true
 		p.Name = hname("p-", sub.ID, k)
+		if p.Type == "proxyip" { // Cloudflare 官方 IP 只能当入口：地址落在官方网段里，或者探测时认出来的
+			if h, _ := exits.SplitHostPort(p.Value); inCF(h) || a.scanLocked(p.Name).Kind == "cf" {
+				return
+			}
+		}
 		out = append(out, p)
 	}
 	for _, e := range a.Exits {
@@ -252,15 +257,21 @@ func (a *App) scanLocked(name string) model.NodeScan {
 
 func (a *App) saveScanLocked() { _ = writeJSON(a.p("state", "scan.json"), a.scan) }
 
-// Scan 测一个订阅：全部入口的延迟和两路出口，全部反代的出口和延迟；结果随测随发到界面。
-// 同一个订阅同时只跑一轮。测完后，开着"自动"的实例按新结果重新确认一次线路。
+// Scan 测一个订阅，结果随测随发到界面。同一个订阅同时只跑一轮。
+//
+//	edgetunnel：本机直接探测全部入口和反代（见 fastscan.go），几秒钟出齐；socks5 / http 出口再经隧道单独测。
+//	通用订阅：经代理内核测每个节点的延迟和出口。
+//
+// 测完后，开着"自动"的实例按新结果重新确认一次线路。
 func (a *App) Scan(subID string) {
-	if !a.coreOK {
-		return
-	}
 	a.mu.Lock()
 	sub := a.subLocked(subID)
 	if sub == nil || a.scanning[subID] {
+		a.mu.Unlock()
+		return
+	}
+	isET := sub.Kind == "edgetunnel" && sub.Template != nil
+	if !isET && !a.coreOK {
 		a.mu.Unlock()
 		return
 	}
@@ -270,6 +281,8 @@ func (a *App) Scan(subID string) {
 	defer func() {
 		a.mu.Lock()
 		delete(a.scanning, subID)
+		delete(a.scanProg, subID)
+		a.scannedAt[subID] = now()
 		a.pruneGoneLocked(sub)
 		a.saveScanLocked()
 		a.bumpLocked("state", "")
@@ -287,31 +300,25 @@ func (a *App) Scan(subID string) {
 			}
 		}
 	}()
+	if isET {
+		a.scanDirect(subID)
+		a.scanGlobalExits(subID)
+		a.echCheck(subID)
+		return
+	}
 	round := func() []nodeRef {
 		a.mu.Lock()
 		nodes := a.nodesLocked(sub)
-		isET := sub.Kind == "edgetunnel"
 		a.mu.Unlock()
 		if err := a.applyConfig(); err != nil {
 			return nodes
 		}
 		a.testDelays(nodes)
-		a.testExits(nodes, isET)
-		if isET {
-			// 借用的入口不通了就换一个（viaLocked 会重选最快的），配置随之更新
-			a.mu.Lock()
-			a.viaLocked(sub, nodes)
-			pips := a.pipsLocked(sub)
-			a.mu.Unlock()
-			if a.applyConfig() == nil {
-				a.testPips(pips)
-			}
-		}
+		a.testExits(nodes, false)
 		return nodes
 	}
 	nodes := round()
-	// 全部入口都不通、且原因是 ECH：这个网络拿不到或用不了 ECH 配置。关掉 ECH 再测一遍
-	//（Cloudflare 上的服务端同时接受不带 ECH 的连接）。
+	// 全部节点都不通、且原因是 ECH：这个网络拿不到或用不了 ECH 配置。关掉 ECH 再测一遍。
 	a.mu.Lock()
 	alive, ech := 0, 0
 	for _, n := range nodes {
@@ -742,6 +749,8 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 		s.Delay = d
 		if d > 0 {
 			s.Err = ""
+		} else if s.Err == "" {
+			s.Err = "直接探测是通的，但经代理内核实际连不上"
 		}
 		a.mu.Unlock()
 		return d > 0

@@ -85,6 +85,9 @@ type App struct {
 	scan      map[string]*model.NodeScan // 测速用出站名 → 最近一次延迟 / 出口 / 失败原因（落盘在 state/scan.json）
 	scanning  map[string]bool            // 正在测速的订阅
 	pipVia    map[string]string          // 订阅 id → 测反代时借用的入口（地址:端口）
+	scanProg  map[string]*scanProg       // 订阅 id → 本轮测速的进度
+	speed     map[string]*speedJob       // 订阅 id → 正在进行的下载测速
+	scannedAt map[string]int64           // 订阅 id → 上一轮测速结束的时刻（只在内存里）
 	setup     Setup
 	events    []Event
 	seq       int64
@@ -187,7 +190,7 @@ type fileWrap[T any] struct {
 
 // Open 载入数据目录；首次运行创建普通实例 #0。
 func Open(dir, exeDir, version string) (*App, error) {
-	a := &App{Dir: dir, ExeDir: exeDir, Version: version, rt: map[string]*Runtime{}, scan: map[string]*model.NodeScan{}, scanning: map[string]bool{}, pipVia: map[string]string{},
+	a := &App{Dir: dir, ExeDir: exeDir, Version: version, rt: map[string]*Runtime{}, scan: map[string]*model.NodeScan{}, scanning: map[string]bool{}, pipVia: map[string]string{}, scanProg: map[string]*scanProg{}, speed: map[string]*speedJob{}, scannedAt: map[string]int64{},
 		kernelUp: make(chan struct{}), waiters: map[chan struct{}]bool{}, connSeen: map[string][2]int64{}, token: randToken(24)}
 	for _, d := range []string{"config", "kernel", "profiles", "extensions", "ext-master", "runtime", "core", "state"} {
 		if err := os.MkdirAll(a.p(d), 0o755); err != nil {

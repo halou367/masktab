@@ -41,6 +41,15 @@ const P = {
   mask: '<path d="M3 8c3-2 6-2 9 0 3-2 6-2 9 0 0 5-3 9-6 9-1.5 0-2-1.5-3-1.5S10.500 17 9 17c-3 0-6-4-6-9z"/><circle cx="8.500" cy="11" r="1.200"/><circle cx="15.500" cy="11" r="1.200"/>',
   chev: '<path d="m6 9 6 6 6-6"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-3 3-3 15 0 18M12 3c3 3 3 15 0 18"/>',
+  back: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  chevR: '<path d="m9 6 6 6-6 6"/>',
+  cloud: '<path d="M7 18a4 4 0 0 1-.6-7.900A5.500 5.500 0 0 1 17 9.600a4.200 4.200 0 0 1 .4 8.400z"/>',
+  down: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
+  device: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  lang: '<path d="M3 6h10M8 4v2M5.500 6c.5 3.500 3 6.500 6.500 8M11 6c-.5 3.500-3.500 6.500-7.500 8"/><path d="m13 20 3.500-9 3.500 9M14.200 17h4.600"/>',
+  pin: '<path d="M12 21s7-6.200 7-11a7 7 0 1 0-14 0c0 4.800 7 11 7 11z"/><circle cx="12" cy="10" r="2.500"/>',
+  enter: '<path d="m10 17 5-5-5-5M15 12H3"/><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/>',
+  ok: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
 };
 export function icon(name, size = 18) {
   const s = document.createElement('span');

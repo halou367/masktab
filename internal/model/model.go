@@ -121,11 +121,19 @@ type IPInfo struct {
 
 // NodeScan 是一条候选线路（入口地址、反代或通用节点）最近一次测速 / 出口探测的结果。
 type NodeScan struct {
-	Delay int     `json:"delay"`          // 往返延迟，毫秒（隧道建好之后一次请求的来回，不含握手）；0 未测；-1 不通
+	Delay int     `json:"delay"`          // 往返延迟，毫秒（连接建好之后一次请求的来回，不含握手）；0 未测；-1 不通
 	Exit  *IPInfo `json:"exit,omitempty"` // 经它访问非 Cloudflare 站点时对方看到的 IP
 	CF    *IPInfo `json:"cf,omitempty"`   // 经它访问托管在 Cloudflare 上的站点时对方看到的 IP（入口：不指定反代时；反代：用它时）
 	Err   string  `json:"err,omitempty"`  // 不通的原因
 	At    int64   `json:"at,omitempty"`
+	// 以下由"直接探测"得到（edgetunnel 的入口地址和反代，不经代理内核）
+	Kind     string  `json:"kind,omitempty"`     // cf = Cloudflare 官方 IP（只能当入口）| proxy = 反代（入口、反代都能当）
+	Colo     string  `json:"colo,omitempty"`     // 落在的 Cloudflare 机房代码
+	TCP      int     `json:"tcp,omitempty"`      // TCP 握手耗时，毫秒
+	Speed    float64 `json:"speed,omitempty"`    // 下载峰值，Mbps
+	SpeedAvg float64 `json:"speedAvg,omitempty"` // 下载平均，Mbps
+	SpeedAt  int64   `json:"speedAt,omitempty"`
+	SpeedErr string  `json:"speedErr,omitempty"`
 }
 
 type ExitProbe struct {

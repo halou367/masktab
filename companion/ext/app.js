@@ -39,9 +39,9 @@ function exits() {
     (() => { const seen = new Set(), cs = st.subscriptions.flatMap((x) => x.nodes).filter((n) => n.from === 'custom' && !seen.has(n.id) && seen.add(n.id));
       return cs.length ? [h('h2', { style: { marginTop: '26px' } }, icon('bolt'), '自定义地址'), cs.map((n) => h('div', { class: 'item' }, h('span', { class: 'no', style: { minWidth: '160px' } }, `${n.server}:${n.port}`), h('span', { class: 'sub grow' }, n.label || ''),
         ibtn('trash', '删除', () => act(() => api('DELETE', `/api/addresses/${n.id}`)), 'danger')))] : null; })(),
-    h('h2', { style: { marginTop: '26px' } }, icon('globe'), '出口列表（ProxyIP / SOCKS5 / HTTP）'),
-    h('form', { onsubmit: (ev) => { ev.preventDefault(); const ta = ev.target.querySelector('textarea'); act(async () => { const r = await api('POST', '/api/exits', { text: ta.value }); toast(`新增 ${r.added} 条`); ta.value = ''; }); } },
-      h('textarea', { placeholder: '每行一条，可多行粘贴：\nproxyip=10.28.138.41\n7.cf.3666888.xyz #备注\nsocks5://user:pass@1.2.3.4:1080\nhttp://user:pass@1.2.3.4:8080' }),
+    h('h2', { style: { marginTop: '26px' } }, icon('globe'), '地址列表（优选 IP / 反代 / SOCKS5 / HTTP）'),
+    h('form', { onsubmit: (ev) => { ev.preventDefault(); const ta = ev.target.querySelector('textarea'); act(async () => { const r = await api('POST', '/api/exits', { text: ta.value }); toast(r.added ? `新增 ${r.added} 条，正在探测…` : '没有新地址'); ta.value = ''; }); } },
+      h('textarea', { placeholder: '每行一条，可多行粘贴（CSV 也行）；是优选还是反代不用区分，探测后自动识别：\n104.16.1.1:443 #备注\n7.cf.3666888.xyz\nhttps://example.com/ip.txt（列表网址，导入时拉取一次）\nsocks5://user:pass@1.2.3.4:1080\nhttp://user:pass@1.2.3.4:8080' }),
       h('div', { class: 'row', style: { margin: '6px 0 14px' } }, h('span', { class: 'sub grow' }, '域名条目默认"展开"为 IP，每 3 小时重新解析；已被实例选中的失效 IP 只标记、不替换。'), h('button', { class: 'ib on', title: '导入' }, icon('plus')))),
     st.exits.map((e) => h('div', { class: 'item' }, h('span', { class: 'sub', style: { minWidth: '52px' } }, e.type), h('span', { class: 'no', style: { minWidth: '160px' } }, e.value),
       h('input', { class: 'name', value: e.label || '', placeholder: '备注', onchange: (ev) => act(() => api('PATCH', `/api/exits/${e.id}`, { label: ev.target.value })) }),

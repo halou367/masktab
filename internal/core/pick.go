@@ -52,7 +52,7 @@ func pickEntry(cs []cand, region, cur string, exclude map[string]bool) (string, 
 }
 
 // pickPip 给入口配反代，目标是两路出口同在一个国家。返回反代候选的 id；空 = 不指定（用服务端默认的）。
-// 顺序：当前选的仍然同国 → 不换；用户自己加的同国反代（没被别的实例占用的优先，再比延迟）；
+// 顺序：当前选的仍然同国 → 不换；用户自己加的同国反代（没被别的实例占用的优先，其次是和入口同一台机器的，再比延迟）；
 // 服务端默认的本来就同国 → 不指定；入口地址里能当反代、且同国的（和入口同一个地址的优先）；都没有 → 不指定。
 // 入口的出口还没探测出来时不动。
 func pickPip(ps []cand, entry cand, cur string) string {
@@ -79,6 +79,9 @@ func pickPip(ps []cand, entry cand, cur string) string {
 		sort.SliceStable(own, func(i, j int) bool {
 			if own[i].Used != own[j].Used {
 				return !own[i].Used
+			}
+			if si, sj := own[i].Key == entry.Key, own[j].Key == entry.Key; si != sj { // 和入口是同一台机器的优先：少绕一跳
+				return si
 			}
 			return own[i].Delay < own[j].Delay
 		})
