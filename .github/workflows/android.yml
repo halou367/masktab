@@ -88,7 +88,12 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      # 测试脚本跑完后，模拟器关机偶尔卡住（存快照后不退出，run 43493186366 卡了 10 分钟）：
+      # 不存快照（-no-snapshot），这一步限时、失败不中断，是否通过由下一步按 shots/result.txt 判定。
       - name: 启动模拟器并测试
+        id: emu
+        timeout-minutes: 25
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           # mihomo 安卓二进制按 API 34 构建（ELF 里写着 for Android 34），模拟器用 35
@@ -98,8 +103,13 @@ jobs:
           profile: pixel_6
           ram-size: 4096M
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash android/scripts/emulator-smoke.sh out/MaskTab-android-x86_64.apk shots
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: timeout 1200 bash android/scripts/emulator-smoke.sh out/MaskTab-android-x86_64.apk shots
+      - name: 判定冒烟结果
+        run: |
+          r=$(cat shots/result.txt 2>/dev/null || echo "没有结果文件")
+          echo "测试脚本结果：$r（模拟器这一步：${{ steps.emu.outcome }}）"
+          [ "$r" = "0" ]
       - uses: actions/upload-artifact@v4
         if: always()
         with:

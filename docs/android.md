@@ -39,7 +39,7 @@ android/
   ext/            安卓专用的扩展文件：manifest（MV2）、background.js、fp.js、fp-boot.js、newtab、app.html + main.js、api.js、app.css
   scripts/
     fetch-mihomo.sh       下载 mihomo v1.19.34 安卓 arm64 / amd64 并校验 SHA-256
-    emulator-smoke.sh     CI 模拟器冒烟：装、启动、截图、查崩溃
+    emulator-smoke.sh     CI 模拟器冒烟：装、启动、截图、查崩溃；第二轮经测试节点验证代理分流与坏节点断流
     preview-pages.mjs     沙箱里用 Playwright 预览扩展页面（假的 Bridge）并检查 fp.js
 ```
 
@@ -55,6 +55,7 @@ android/
 
 代理分流、指纹、自动填写都要先知道“这个请求 / 页面属于哪个实例”。扩展那边能看到的是标签页 id 和 cookieStoreId，app 这边知道会话属于哪个实例，两边这样对上：
 
+0. GeckoView 容器标签页的 cookieStoreId 就是 `firefox-container-mt-<实例id>`（CI 里看到的），后台直接据此认实例；下面两条是兜底。
 1. app 新开标签一律先加载扩展自己的引导页 `newtab.html#inst=<id>&go=<网址>`。引导页向后台登记（后台记下标签页 id 与它的 cookieStoreId → 实例），登记完再跳到网址。扩展页面本身不经过代理，所以第一跳不会漏。
 2. 每个网页的内容脚本在 document_start 用原生消息向 app 要参数；内容脚本的原生消息由**会话自己的** MessageDelegate 接收，app 按会话知道实例，再把结果交给后台登记（网页伪造不了）。
 3. `proxy.onRequest` 查表：标签页 → 实例；查不到时用 `tabs.get(tabId).cookieStoreId`（不用 `details.cookieStoreId`，GeckoView bug 1948114）→ 实例。
@@ -66,6 +67,9 @@ android/
 - 配置（`Mihomo.config`）：`proxy-providers.sub` = 用户填的订阅（`proxy: DIRECT`，否则拉订阅本身会被兜底规则拒掉，沙箱实测）；
   每个实例一个 `listeners` 条目：`type: mixed`、`127.0.0.1:21000+编号`；直连实例指向 `DIRECT`，其余指向自己的策略组 `g-<id>`（第一项 `REJECT`，`use: [sub]`）；
   `rules: MATCH,REJECT`；`external-controller` 只听 127.0.0.1，随机 secret；DNS 全部写 IP（安卓没有 `/etc/resolv.conf`）。
+- 配置文件是 JSON（YAML 的子集）。安卓自带的 org.json 会把 `/` 写成 `\/`，mihomo 的 YAML 解析器不认这个转义（CI 里报 `found unknown escape character`，mihomo 起不来），
+  所以输出后用 `yamlSafeJson` 把 `\/` 换回 `/`（逐字符扫描，字面的反斜杠不受影响）。org.json 的其余转义（`\"` `\\` `\b` `\f` `\n` `\r` `\t` `\uXXXX`）YAML 都认，
+  沙箱里用同版本 mihomo `-t` 试过含引号、反斜杠、制表符、中文、U+2028、控制字符的订阅地址。
 - 每次加载配置后策略组落回 `REJECT`，app 再按实例设置选回节点（`auto` = 健康检查延迟最低的可用节点）。选不上就保持 `REJECT`。
 - 没填订阅时不启动 mihomo，所有实例直连（界面写“直连”）。填了订阅后，原来直连的实例改为“自动”。
 - 出口检测：app 经实例端口（HTTP 代理方式）请求 `ipinfo.io/json`，失败再试 `ip-api.com`，得到 IP、国家、城市、运营商、时区。
@@ -78,7 +82,7 @@ android/
   画布 `getImageData` / `toDataURL` / `toBlob` 加位置相关的最低位噪声；`AudioBuffer.getChannelData` 幂等噪声；`hardwareConcurrency` 4/6/8；`screen.availHeight` 少 0–32 像素；
   `navigator.language(s)`；时区：`getTimezoneOffset`、本地时间各分量、`toString` 系列、`toLocale*`、`Intl.DateTimeFormat`（没指定时区的格式化器）。
   `deviceMemory` 火狐本来不暴露。时区与语言默认跟随出口，可在“指纹与时区”里固定。`Accept-Language` 请求头由后台按实例改写。
-- 注入时机：后台按容器 `contentScripts.register({cookieStoreId})` 注册带参数的同步脚本；如果这台设备的内核不接受按容器注册（GeckoView 的容器是“私有身份”，没验证过），自动改为 `fp-boot.js` 异步注入，新标签页上会提示“指纹异步注入”。
+- 注入时机：后台按容器 `contentScripts.register({cookieStoreId})` 注册带参数的同步脚本（CI 模拟器里注册成功）；注册失败时自动改为 `fp-boot.js` 异步注入，新标签页上会提示“指纹异步注入”。
 - Gecko 偏好（`geckoview-config.yaml`）：`privacy.fingerprintingProtection`、WebRTC 只走代理且不暴露本机地址、关闭 Service Worker（见下文限制）、关闭内核自带的记住密码。
 - 沙箱实测（Chromium 普通页面环境，不是火狐内容脚本环境）：同种子两次画布读回一致、开启后与原值不同；不同种子参数不同；时区 / 语言改写生效。**在 GeckoView 内容脚本里的效果没有验证。**
 
@@ -113,6 +117,18 @@ android/
 | Kotlin 代码对 GeckoView 160 的 API 能编译 | 沙箱里用 kotlinc 2.4.21 + android.jar（37.2）+ GeckoView classes.jar 编译通过；CI 构建见 PROGRESS |
 | APK 构建、模拟器里启动不崩、各页面截图 | CI（`.github/workflows/android.yml`），结果见 `docs/PROGRESS.md` |
 | 扩展页面（菜单、管理、节点、指纹、设置、扩展、新标签页）布局 | 沙箱 Chromium 预览（假数据），`android/scripts/preview-pages.mjs` |
-| mihomo 配置与选节点、失败不直连 | 沙箱 Linux arm64 同版本 mihomo |
+| mihomo 配置与选节点、失败不直连 | 沙箱 Linux arm64 同版本 mihomo；CI 模拟器第二轮（见下） |
 | fp.js 逻辑 | 沙箱 Chromium 普通页面环境 |
 | 真机：代理分流、指纹在 GeckoView 里的实际效果、自动填写、AMO 安装、拖动排序手感、Google 登录 | **没有验证** |
+
+### CI 冒烟第二轮（代理）怎么验证
+
+runner 上起一个 mihomo 当 shadowsocks 节点服务端（`rules: ["MATCH,DIRECT"]`，info 日志记下每条连接），再用 HTTP 服务提供只含这个节点的订阅（模拟器里 `10.0.2.2` = runner）。
+状态文件放两个实例：#1 节点“自动”，#2 指定订阅里没有的节点。状态文件用 `adb push` 到 `/data/local/tmp` 再 `run-as cp` 进 app 目录。检查：
+
+1. 模拟器里有 `libmihomo` 进程；
+2. `adb forward` 从 runner 直接打实例 #1 的端口（21001）访问 `https://example.com`，要 HTTP 200，且节点服务端日志里有这条连接（证明真的经节点，不是直连）；
+3. 打实例 #2 的端口（21002）访问 `https://example.net`，端口要在监听（不能是连不上），请求要失败，节点服务端日志里不能有它；
+4. app 日志：mihomo 启动、订阅 1 个节点、#1 出口检测成功、#1 网页拿到指纹参数、#2 网页加载失败且没有拿到指纹参数。
+
+结果写到 `shots/result.txt`，工作流按它判定；模拟器那一步限时 25 分钟、失败不中断、不存快照（之前关机时存快照后卡住）。

@@ -32,7 +32,10 @@ class Mihomo(ctx: Context) {
     val installed get() = bin.exists()
     val running get() = proc?.isAlive == true
 
-    /** 生成配置。输出 JSON（YAML 的子集，mihomo 直接能读）。 */
+    /**
+     * 生成配置。输出 JSON（YAML 的子集，mihomo 直接能读），再经 [yamlSafeJson] 去掉 YAML 不认的转义。
+     * 安卓的 org.json 会把每个 "/" 写成 "\/"，mihomo 的 YAML 解析器不认这个转义（报 found unknown escape character）。
+     */
     fun config(store: Store): String {
         val insts = store.sorted()
         val hasSub = store.subUrl.isNotEmpty()
@@ -72,7 +75,7 @@ class Mihomo(ctx: Context) {
                 "health-check" to jsonOf("enable" to true, "url" to "https://www.gstatic.com/generate_204", "interval" to 600, "timeout" to 5000, "lazy" to false),
             )))
         }
-        return cfg.toString(2)
+        return yamlSafeJson(cfg.toString(2))
     }
 
     /** 启动（已在运行则重新加载配置）。返回是否成功。 */
@@ -178,4 +181,24 @@ class Mihomo(ctx: Context) {
         val r = ctl("GET", "/proxies/${enc("g-${inst.id}")}")
         if (r.code == 200) JSONObject(r.body).str("now") else ""
     } catch (e: Exception) { "" }
+}
+
+/**
+ * 把 org.json 输出的 JSON 变成 YAML 解析器也认的写法：字符串里的 "\/" 换回 "/"。
+ * 逐字符扫描，反斜杠后面的字符原样跟着走，所以 "\\/"（字面的反斜杠 + 斜杠）不会被拆错。
+ * org.json 其余的转义（\" \\ \b \f \n \r \t \uXXXX）都在 YAML 双引号字符串的转义表里；非 ASCII 字符原样输出（UTF-8）。
+ */
+fun yamlSafeJson(json: String): String {
+    val sb = StringBuilder(json.length)
+    var i = 0
+    while (i < json.length) {
+        val c = json[i]
+        if (c == '\\' && i + 1 < json.length) {
+            val n = json[i + 1]
+            if (n != '/') sb.append(c)
+            sb.append(n)
+            i += 2
+        } else { sb.append(c); i++ }
+    }
+    return sb.toString()
 }
