@@ -77,14 +77,16 @@ class MainActivity : Activity(), CoreUi {
         handleIntent(intent)
     }
 
-    /** 测试用的启动参数（CI 截图）：mt_open=menu|instances|…打开对应页面；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
+    /** 测试用的启动参数（CI 截图）：mt_open=menu|instances|…打开对应页面；mt_inst=<实例id> 切换实例；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
     private fun handleIntent(i: Intent?) {
         if (i == null || !Core.started) return
-        if (i.action == Intent.ACTION_VIEW && i.data != null) { Core.openTab(Core.store.current, i.dataString); return }
+        if (i.action == Intent.ACTION_VIEW && i.data != null) { closeSheet(); Core.openTab(Core.store.current, i.dataString); return }
         if (i.getBooleanExtra("mt_hold", false)) return
         if (hold) { hold = false; hideStartup() }
+        i.getStringExtra("mt_inst")?.let { id -> closeSheet(); Core.switchTo(id) }
         i.getStringExtra("mt_open")?.let { r -> openSheet(r, r != "menu") }
         i.removeExtra("mt_open")
+        i.removeExtra("mt_inst")
     }
 
     // ---------- 界面 ----------

@@ -19,10 +19,6 @@ android {
         targetSdk = 36
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
-        ndk {
-            // 真机 arm64；x86_64 只给 CI 的模拟器用
-            abiFilters += listOf("arm64-v8a", "x86_64")
-        }
     }
     buildTypes {
         getByName("debug") {
@@ -37,6 +33,16 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+    // 只打 arm64-v8a（真机）与 x86_64（CI 模拟器），每个架构单独出一个 APK：手机装 arm64-v8a 那个。
+    // 注意：用了 splits 就不能再写 ndk.abiFilters（AGP 会报冲突）。
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
+        }
     }
     packaging {
         jniLibs {

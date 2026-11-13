@@ -1,7 +1,8 @@
 # 安卓版（GeckoView 内核）的构建与模拟器冒烟测试，见 docs/android.md。
 # 只在非 main 分支、且安卓相关文件有变化时运行；不发布 Release，不影响 ci.yml。
 # 产物（Actions → 本次运行 → Artifacts）：
-#   MaskTab-android-debug：调试签名的 APK（arm64-v8a + x86_64）
+#   MaskTab-android-arm64-v8a：调试签名的 APK，装到手机上用
+#   MaskTab-android-x86_64：同上，x86_64 架构（模拟器用）
 #   android-smoke：模拟器截图（启动进度、新标签页、头像菜单、实例管理、节点、网页）与 logcat
 name: Android
 on:
@@ -55,13 +56,20 @@ jobs:
       - name: 整理产物
         run: |
           mkdir -p out
-          cp android/app/build/outputs/apk/debug/app-debug.apk out/MaskTab-android-debug.apk
+          ls -la android/app/build/outputs/apk/debug/
+          cp android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk out/MaskTab-android-arm64-v8a.apk
+          cp android/app/build/outputs/apk/debug/app-x86_64-debug.apk out/MaskTab-android-x86_64.apk
           ls -la out
-          unzip -l out/MaskTab-android-debug.apk | grep -E "libmihomo|assets/ext/(manifest|background|fp)" || true
+          unzip -l out/MaskTab-android-arm64-v8a.apk | grep -E "libmihomo|libxul|assets/ext/(manifest|background|fp)" || true
       - uses: actions/upload-artifact@v4
         with:
-          name: MaskTab-android-debug
-          path: out/MaskTab-android-debug.apk
+          name: MaskTab-android-arm64-v8a
+          path: out/MaskTab-android-arm64-v8a.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaskTab-android-x86_64
+          path: out/MaskTab-android-x86_64.apk
           if-no-files-found: error
 
   smoke:
@@ -73,7 +81,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: MaskTab-android-debug
+          name: MaskTab-android-x86_64
           path: out
       - name: 打开 KVM
         run: |
@@ -91,7 +99,7 @@ jobs:
           ram-size: 4096M
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash android/scripts/emulator-smoke.sh out/MaskTab-android-debug.apk shots
+          script: bash android/scripts/emulator-smoke.sh out/MaskTab-android-x86_64.apk shots
       - uses: actions/upload-artifact@v4
         if: always()
         with:

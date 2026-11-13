@@ -11,6 +11,7 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
+import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 import java.io.File
 import java.net.URLEncoder
@@ -360,6 +361,11 @@ object Core {
         override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? = popupTab(t.inst)?.let { GeckoResult.fromValue(it) }
         override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
             if (Addons.isXpi(request.uri)) { Addons.install(request.uri); return GeckoResult.deny() }
+            return null
+        }
+        override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
+            // 记日志（CI 冒烟测试用它确认“节点不通时页面打不开、没有直连”），错误页仍用内核自带的
+            logi("加载失败 $uri 实例 ${t.inst} 类别 ${error.category} 代码 ${error.code}")
             return null
         }
     }

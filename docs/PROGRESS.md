@@ -7,8 +7,21 @@
 - **客户端核心已经能跑**：核心服务 + 伴随扩展，在真实 Windows（GitHub Actions 的 Windows Server 2025，有界面模式）上冒烟测试 23 项全过。
 - **代理链路对着本地跑的真实 edgetunnel 脚本验证过**（Linux）：默认、0-RTT、随机路径、ECH、Clash YAML。用户的线上订阅和 Windows 上的代理仍然没有测过。
 - **有安装程序**：完整包自带内核，普通包用于升级；覆盖安装不动数据和内核。
-- **没做**：托盘、密码管理、同步（含 `masktab-sync` 仓库）、手机端。
+- **没做**：托盘、同步（含 `masktab-sync` 仓库）。
+- **安卓版第一版**（分支 `demo/android`，GeckoView 内核）：能构建、能在 CI 模拟器里启动和截图，见下面“2026-11-14：安卓版”和 `docs/android.md`。**没有在真机上用过。**
 - 没有人在真实的 Windows 桌面上手动用过它。CI 截图是目前唯一的界面证据。
+
+## 2026-11-14：安卓版第一版（GeckoView）
+
+- 需求方拍板：安卓版基于火狐 GeckoView，功能尽量与桌面一致，界面像手机 Chrome。方案、取舍、限制见 `docs/android.md`，决策 A-1…A-5。
+- 代码：`android/`（Kotlin 单 Activity + 内置扩展 `android/ext`，复用桌面伴随扩展的 menu.js / instances.js / autofill.js / sites.js / ui.js）。CI：`.github/workflows/android.yml`（非 main 分支、安卓相关文件变化时运行，不发布）。
+- 已实现：多实例容器（contextId）与每实例标签组、后台实例保活；顶部地址栏 + 标签数 + 头像（彩色编号圆点 + 国旗）+ 菜单；头像菜单；实例管理（卡片、国旗点开看 IP、站点图标、长按拖动排序、账号与 Cookie 抽屉、导入邮箱）；
+  mihomo（proxy-providers 订阅、每实例 mixed 入站、REJECT 兜底、external-controller 列节点 / 测速 / 切换）；按标签分流的 proxy.onRequest；出口检测；
+  每实例种子的 UA 与页面指纹（画布、音频、核数、屏幕、语言、时区）、Accept-Language；Keystore 加密的密码库与自动填写（两步登录、只填不提交、注册提示、记住可撤销）；
+  删除实例清容器数据与密码；启动进度页；从 AMO 装扩展与扩展管理；网页弹框与下拉选择。
+- 证据：Kotlin 在沙箱里对 GeckoView 160 编译通过；mihomo 配置在沙箱里用同版本 Linux 二进制验证；扩展页面在沙箱 Chromium 里预览；CI 构建与模拟器冒烟（结果见下表“安卓”行）。
+- **没验证**：真机上的全部表现；指纹在 GeckoView 内容脚本里的实际效果；按容器注册指纹脚本是否被接受；Google 登录等弹窗；AMO 安装流程；拖动排序的手感。
+- 没做：双端同步、下载、edgetunnel 专用功能、书签 / 历史。
 
 ## 2026-11-14：实例管理改版（演示）与网卡绑定
 
@@ -24,6 +37,7 @@
 | L | 无头 Linux 上实测通过（手动或冒烟测试） |
 | U | 只有单元测试 |
 | – | 写了代码但没有验证 |
+| A | 安卓 CI 模拟器冒烟测试（`android/scripts/emulator-smoke.sh`）自动检查通过 |
 
 ## 功能清单
 
@@ -61,7 +75,7 @@
 | 托盘图标与菜单 | 没做 | | |
 | 密码管理（F-PWD） | 没做 | | 内核自带的密码管理已经关掉 |
 | 同步（F-SYNC）与 `masktab-sync` | 没做 | | 那个仓库只有一个说明文件 |
-| 手机端（第 9 章） | 没做 | | |
+| 手机端（第 9 章，改用 GeckoView，decisions A-1） | 第一版 | A | 见 `docs/android.md`；证据 A = 安卓 CI（模拟器冒烟测试与截图），没有真机验证 |
 | 脚本管理（计划里与扩展统一） | 没做 | | 目前的办法是装一个用户脚本管理器扩展 |
 
 ## 计划里的【需验证】项
@@ -98,7 +112,7 @@
 3. 修“已知问题 1、2”；V4 做完后处理“已知问题 4”。
 4. 密码管理（F-PWD）。
 5. `masktab-sync`（计划 8.8）和客户端同步。
-6. 手机端先做 VA1、VA2 两项验证。
+6. 安卓版：在真机上走一遍（代理分流、指纹检测站、自动填写、Google 登录、AMO 装扩展），把结论写进 `docs/android.md`。
 
 需要人来做的事：V2（Google 登录）、V4（泄漏测试）、V5（真实 edgetunnel 订阅），以及在自己的 Windows 上实际用一遍。
 
