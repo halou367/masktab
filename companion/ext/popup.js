@@ -1,4 +1,4 @@
-import { api, fmtBytes, shownExit, RESTART_WHY } from './api.js';
+import { api, fmtBytes, shownExit, mismatch, RESTART_WHY } from './api.js';
 import { h, icon, ibtn, flag, pill, toast, toggle, run, delayText, delayCls, cname } from './ui.js';
 
 const root = document.getElementById('root');
@@ -184,7 +184,7 @@ function render() {
   kids.push(h('header', {},
     h('span', { class: 'dot', style: { background: me.color } }),
     h('span', { class: 'no' }, `#${me.no}`), h('span', { class: 'sub grow' }, me.name || (me.kind === 'normal' ? '普通窗口' : '伪装实例')),
-    on && ex ? flag(ex.country) : null,
+    on && ex ? (mismatch(me) ? [flag(rt.probe.direct.country), flag(rt.probe.cf.country)] : flag(ex.country)) : null, // 两路出口国家不同时两面旗都画出来
     on ? h('span', { class: 'lat ' + delayCls(rt.latency), title: '当前线路的往返延迟：连接建好之后，一次请求来回的时间（不含握手）' }, delayText(rt.latency)) : h('span', { class: 'sub' }, '直连'),
     toggle('代理', on, on ? '关闭代理（直连）' : '开启代理', (v) => patch({ proxy: { state: v ? 'on' : 'off' } }))));
 
