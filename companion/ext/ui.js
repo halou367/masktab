@@ -21,7 +21,7 @@ const P = {
   power: '<path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
-  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   puzzle: '<path d="M9 4h4v3a2 2 0 1 0 4 0h3v5h-3a2 2 0 1 0 0 4h3v4H9v-3a2 2 0 1 0-4 0H4V9h5z"/>',
@@ -50,6 +50,11 @@ const P = {
   pin: '<path d="M12 21s7-6.200 7-11a7 7 0 1 0-14 0c0 4.800 7 11 7 11z"/><circle cx="12" cy="10" r="2.500"/>',
   enter: '<path d="m10 17 5-5-5-5M15 12H3"/><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/>',
   ok: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+  chevL: '<path d="m15 6-6 6 6 6"/>',
+  home: '<path d="m3 11 9-7 9 7"/><path d="M5 9.500V20h14V9.500"/><path d="M10 20v-6h4v6"/>',
+  server: '<rect x="4" y="4" width="16" height="7" rx="1.500"/><rect x="4" y="13" width="16" height="7" rx="1.500"/><path d="M8 7.500h.01M8 16.500h.01"/>',
+  phone: '<rect x="7" y="2.500" width="10" height="19" rx="2"/><path d="M11 18h2"/>',
+  shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
 };
 export function icon(name, size = 18) {
   const s = document.createElement('span');
@@ -93,3 +98,12 @@ const CN = { US: '美国', CA: '加拿大', MX: '墨西哥', BR: '巴西', AR: '
   SG: '新加坡', MY: '马来西亚', TH: '泰国', VN: '越南', PH: '菲律宾', ID: '印度尼西亚', IN: '印度', PK: '巴基斯坦', BD: '孟加拉国', KZ: '哈萨克斯坦', AE: '阿联酋', SA: '沙特', IL: '以色列', IR: '伊朗', IQ: '伊拉克', QA: '卡塔尔',
   KH: '柬埔寨', AU: '澳大利亚', NZ: '新西兰', ZA: '南非', EG: '埃及', NG: '尼日利亚', KE: '肯尼亚', MA: '摩洛哥' };
 export const cname = (c) => (c ? CN[c.toUpperCase()] || c.toUpperCase() : '未知');
+// 纯净度的小圆环：0–100，越满越干净。用 DOM 接口画，不拼 HTML。
+export function ring(score, size = 14) {
+  const NS = 'http://www.w3.org/2000/svg', c = 2 * Math.PI * 7, v = Math.max(0, Math.min(100, Number(score) || 0));
+  const el = (tag, at) => { const e = document.createElementNS(NS, tag); for (const [k, x] of Object.entries(at)) e.setAttribute(k, x); return e; };
+  const svg = el('svg', { width: size, height: size, viewBox: '0 0 18 18' });
+  const base = { cx: 9, cy: 9, r: 7, fill: 'none', stroke: 'currentColor', 'stroke-width': 2.6 };
+  svg.append(el('circle', { ...base, 'stroke-opacity': 0.22 }), el('circle', { ...base, 'stroke-linecap': 'round', 'stroke-dasharray': `${(c * v / 100).toFixed(1)} ${c.toFixed(1)}`, transform: 'rotate(-90 9 9)' }));
+  return svg;
+}

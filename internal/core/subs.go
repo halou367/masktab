@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"sync"
 	"time"
@@ -48,8 +49,11 @@ func (a *App) AddSubscription(name, url, kind string) (*model.Subscription, erro
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return nil, errors.New("订阅地址必须以 http:// 或 https:// 开头")
 	}
-	if name == "" {
+	if name = strings.TrimSpace(name); name == "" { // 没起名字：用订阅地址的域名
 		name = "订阅"
+		if u, err := neturl.Parse(url); err == nil && u.Hostname() != "" {
+			name = u.Hostname()
+		}
 	}
 	s := &model.Subscription{ID: newID(), UpdatedAt: now(), Name: name, URL: url, Kind: "generic", Nodes: []model.ProxyNode{}, Hosts: []string{}}
 	if kind == "edgetunnel" || kind == "generic" {
@@ -147,7 +151,8 @@ func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, has
 		}
 	}
 	if isET {
-		s.Kind, s.Template, s.Hosts = "edgetunnel", &info.Template, info.Hosts
+		// Template / Hosts 是第一套参数的（测速、直接探测只用它）；实例实际用哪一套看 Profiles
+		s.Kind, s.Template, s.Hosts, s.Profiles = "edgetunnel", &info.Profiles[0].Template, info.Profiles[0].Hosts, info.Profiles
 		fresh := map[string]bool{}
 		for _, ad := range info.Addresses {
 			k := fmt.Sprintf("%s:%d", ad.Server, ad.Port)
@@ -171,7 +176,7 @@ func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, has
 		if !s.KindLocked {
 			s.Kind = "generic"
 		}
-		s.Template, s.Hosts = nil, []string{}
+		s.Template, s.Hosts, s.Profiles = nil, []string{}, nil
 	}
 	a.Addresses = keep
 	for _, in := range a.Instances {
@@ -184,10 +189,14 @@ func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, has
 				in.Proxy.AddressID = a.bestAddrLocked(s.ID)
 				r.Notice = "原来的入口地址已经没有了，已换成延迟最低的"
 			}
-			if !contains(s.Hosts, in.Proxy.Host) {
-				in.Proxy.Host = ""
-				a.fillProxyLocked(in, s)
+			// 原来用的那套参数 / Host 不在了：按默认规则重新分配
+			if in.Proxy.Profile != "" && profileOf(s, in.Proxy.Profile, "").Key != in.Proxy.Profile {
+				in.Proxy.Profile = ""
 			}
+			if !contains(profileOf(s, in.Proxy.Profile, in.Proxy.Host).Hosts, in.Proxy.Host) {
+				in.Proxy.Host = ""
+			}
+			a.fillProxyLocked(in, s)
 		} else if !hasNode(s, in.Proxy.NodeKey) && in.Proxy.NodeKey != "" {
 			r.Notice = "所选节点已不在订阅里，已断流，请重新选择" // 不自动换节点，也不回落直连
 		}

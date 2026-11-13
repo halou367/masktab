@@ -119,13 +119,20 @@ func str(m map[string]any, path ...string) string {
 	return fmt.Sprint(cur)
 }
 
-// Key = sha1(type|server|port|uuid或password|host|path)，订阅刷新后选择不丢。
+// Key = sha1(type|server|port|uuid或password|host|path[|传输])，订阅刷新后选择不丢。
 func Key(p map[string]any) string {
 	cred := str(p, "uuid")
 	if cred == "" {
 		cred = str(p, "password")
 	}
-	s := strings.Join([]string{str(p, "type"), str(p, "server"), str(p, "port"), cred, HostOf(p), str(p, "ws-opts", "path")}, "|")
+	path := str(p, "ws-opts", "path")
+	if path == "" {
+		path = str(p, "xhttp-opts", "path")
+	}
+	s := strings.Join([]string{str(p, "type"), str(p, "server"), str(p, "port"), cred, HostOf(p), path}, "|")
+	if n := str(p, "network"); n != "" && n != "ws" && n != "tcp" { // 同一个地址同时有 ws 和 xhttp 两个节点：是两个节点（ws 不加，旧 key 不变）
+		s += "|" + n
+	}
 	h := sha1.Sum([]byte(s))
 	return hex.EncodeToString(h[:])
 }
@@ -133,6 +140,9 @@ func Key(p map[string]any) string {
 // HostOf 取 WebSocket Host 头，缺省用 servername / sni。
 func HostOf(p map[string]any) string {
 	if h := str(p, "ws-opts", "headers", "Host"); h != "" {
+		return h
+	}
+	if h := str(p, "xhttp-opts", "host"); h != "" {
 		return h
 	}
 	if h := str(p, "servername"); h != "" {
@@ -241,6 +251,20 @@ func parseVT(line string) (map[string]any, error) {
 			opts["v2ray-http-upgrade"] = true
 		}
 		m["ws-opts"] = opts
+	case "xhttp", "splithttp": // XHTTP（旧名 splithttp）
+		m["network"] = "xhttp"
+		path := q.Get("path")
+		if path == "" {
+			path = "/"
+		}
+		opts := map[string]any{"path": path}
+		if host != "" {
+			opts["host"] = host
+		}
+		if mode := q.Get("mode"); mode != "" {
+			opts["mode"] = mode
+		}
+		m["xhttp-opts"] = opts
 	case "grpc":
 		m["network"] = "grpc"
 		m["grpc-opts"] = map[string]any{"grpc-service-name": q.Get("serviceName")}

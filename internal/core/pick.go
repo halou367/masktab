@@ -103,6 +103,63 @@ func pickPip(ps []cand, entry cand, cur string) string {
 	return ""
 }
 
+// pipKey 是反代在"试过不通"名单里的键（和入口的 id 放在同一张表里，加前缀区分）。
+func pipKey(id string) string { return "pip\x00" + id }
+
+// exitOrder 把 region（空 = 不限）里可用的反代按优先顺序排好：用户自己加的在前（没被别的实例占用的优先），
+// 来自入口地址的在后；各自按延迟从低到高。exclude 里的（键见 pipKey）不要。
+func exitOrder(ps []cand, region string, exclude map[string]bool) []cand {
+	var out []cand
+	for _, p := range ps {
+		if p.alive() && !exclude[pipKey(p.ID)] && (region == "" || strings.EqualFold(p.Country, region)) {
+			out = append(out, p)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Derived != out[j].Derived {
+			return !out[i].Derived
+		}
+		if out[i].Used != out[j].Used {
+			return !out[i].Used
+		}
+		return out[i].Delay < out[j].Delay
+	})
+	return out
+}
+
+// pickExit 出口"自动"：在 region 这个国家里挑一个反代。当前的仍然可用、仍在这个国家就不换（出口稳定比快更重要）。
+// 这个国家一个可用的都没有时返回 ok = false，调用方不得换到别的国家。
+func pickExit(ps []cand, region, cur string, exclude map[string]bool) (string, bool) {
+	order := exitOrder(ps, region, exclude)
+	for _, p := range order {
+		if p.ID == cur && cur != "" {
+			return cur, true
+		}
+	}
+	if len(order) == 0 {
+		return "", false
+	}
+	return order[0].ID, true
+}
+
+// nextExit 是"换一个"：在同一个国家里换到下一个可用的反代——按 exitOrder 的顺序取当前这个后面的那个，到头了从头再来。
+// 除了当前这个没有别的可用时返回 ok = false。
+func nextExit(ps []cand, region, cur string) (string, bool) {
+	order := exitOrder(ps, region, nil)
+	at := -1
+	for i, p := range order {
+		if p.ID == cur {
+			at = i
+		}
+	}
+	for k := 1; k <= len(order); k++ {
+		if p := order[(at+k+len(order))%len(order)]; p.ID != cur {
+			return p.ID, true
+		}
+	}
+	return "", false
+}
+
 // keepGone 决定哪些"已不在最新订阅里"的地址继续留用：正在被实例使用的全留；
 // 其余只留测过可用的，每个出口国家最多 perCountry 个（延迟低的优先），免得随机订阅把列表越撑越长。
 func keepGone(gone []cand, inUse map[string]bool, perCountry int) map[string]bool {

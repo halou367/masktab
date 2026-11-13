@@ -23,13 +23,20 @@ type InstProxy struct {
 	SubscriptionID string `json:"subscriptionId,omitempty"`
 	ExitID         string `json:"exitId,omitempty"`
 	ExitIP         string `json:"exitIp,omitempty"`
-	Auto           bool   `json:"auto"`             // 自动：按出口地区选最快的入口，并配一个同地区的反代；当前线路不通时自动换
-	Region         string `json:"region,omitempty"` // 自动时限定的出口地区（国家代码，如 KR）；空 = 不限
-	AddressMode    string `json:"addressMode"`      // same-as-exit | custom
+	Auto           bool   `json:"auto"`                // 旧字段（一个开关管入口和出口）。现在只在升级时读一次，之后跟着 ExitMode 写
+	ExitMode       string `json:"exitMode,omitempty"`  // 出口：auto = 只定国家，程序在这个国家里挑，不通自动换 | manual = 钉死 ExitID，不通也不换
+	EntryMode      string `json:"entryMode,omitempty"` // 入口：auto = 跟着出口（同一台机器能当入口就用它，否则挑延迟最低的）| manual = 钉死 AddressID
+	Region         string `json:"region,omitempty"`    // 出口自动时限定的国家（国家代码，如 KR）；空 = 不限
+	Profile        string `json:"profile,omitempty"`   // 用订阅里的哪一套连接参数（Subscription.Profiles 的 key）；空 = 自动分配
+	AddressMode    string `json:"addressMode"`         // same-as-exit | custom
 	AddressID      string `json:"addressId,omitempty"`
 	Host           string `json:"host,omitempty"`
 	NodeKey        string `json:"nodeKey,omitempty"`
 }
+
+// ExitAuto / EntryAuto：没写过的（空）按自动算，这是默认值。
+func (p InstProxy) ExitAuto() bool  { return p.ExitMode != "manual" }
+func (p InstProxy) EntryAuto() bool { return p.EntryMode != "manual" }
 
 type FP struct {
 	Seed                string   `json:"seed"`               // 32 字节 base64
@@ -62,6 +69,17 @@ type Template struct {
 	BasePath string         `json:"basePath"`
 }
 
+// Profile 是 edgetunnel 订阅里的一套连接参数：同一个凭据、同一种协议和传输、同一个 Host（或同一个通配域名下的一组随机 Host）。
+// 一个订阅通常只有一套；同时开了 ws 和 xhttp、或者配了几个域名的订阅会有几套，实例可以在它们之间切换。
+type Profile struct {
+	Key      string   `json:"key"`
+	Host     string   `json:"host"`  // 展示用：单个 Host，或 *.example.com
+	Hosts    []string `json:"hosts"` // 实际可用的 Host；多于一个时按实例平分（计划 8.3）
+	Type     string   `json:"type"`  // vless | trojan
+	Net      string   `json:"net"`   // ws | xhttp
+	Template Template `json:"template"`
+}
+
 type Subscription struct {
 	ID          string      `json:"id"`
 	UpdatedAt   int64       `json:"updatedAt"`
@@ -77,6 +95,7 @@ type Subscription struct {
 	Nodes       []ProxyNode `json:"nodes"`
 	Template    *Template   `json:"template,omitempty"`
 	Hosts       []string    `json:"hosts"`
+	Profiles    []Profile   `json:"profiles,omitempty"` // edgetunnel：订阅里的全部连接参数；Template / Hosts 是第一套的（旧数据只有它们）
 	// ECHOff：不使用订阅里的 ECH。全部节点都因 ECH 连不上时由测速自动置上（这个网络拿不到或用不了 ECH 配置），也可以手动开关。
 	ECHOff bool `json:"echOff,omitempty"`
 	HasECH bool `json:"hasEch,omitempty"` // 订阅里的节点带 ECH
@@ -136,6 +155,14 @@ type NodeScan struct {
 	SpeedErr string  `json:"speedErr,omitempty"`
 }
 
+// IPQ 是一个出口 IP 的"成色"：是住宅还是机房、纯净度多少。来自第三方查询，查不到不影响使用。
+type IPQ struct {
+	Type  string `json:"type,omitempty"` // res 住宅 | dc 机房 | mobile 移动；空 = 不知道
+	Score int    `json:"score"`          // 纯净度 0–100，越高越干净；-1 = 不知道
+	Src   string `json:"src,omitempty"`  // 数据来源
+	At    int64  `json:"at"`
+}
+
 type ExitProbe struct {
 	CF     *IPInfo `json:"cf,omitempty"`
 	Direct *IPInfo `json:"direct,omitempty"`
@@ -176,7 +203,8 @@ type Settings struct {
 	PathTemplate          string   `json:"pathTemplate"` // query | segment（8.4）
 	SubRefreshHours       int      `json:"subRefreshHours"`
 	IPInfoEndpoints       []string `json:"ipInfoEndpoints"`
-	TZSourceDefault       string   `json:"tzSourceDefault"` // exit-cf | exit-direct
+	TZSourceDefault       string   `json:"tzSourceDefault"`  // exit-cf | exit-direct
+	IPQOff                bool     `json:"ipqOff,omitempty"` // 不向第三方查询出口 IP 的类型和纯净度
 }
 
 func DefaultSettings() Settings {

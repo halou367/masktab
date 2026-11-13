@@ -1,4 +1,4 @@
-import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY } from './api.js';
+import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText } from './api.js';
 
 let seq = 0;
 let looping = false;
@@ -42,7 +42,7 @@ async function paint(st) {
   if (on && rt.latency > 0) lines.push(`延迟：${rt.latency} ms`);
   if (rt.running) lines.push(`↑ ${fmtBytes(rt.upRate)}/s  ↓ ${fmtBytes(rt.downRate)}/s`, `已用 ↑ ${fmtBytes(rt.up)}  ↓ ${fmtBytes(rt.down)}`);
   if (rt.needRestart?.length) { badge = '↻'; bcolor = '#1a73e8'; lines.push('需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、')); }
-  if (rt.notice) lines.push(rt.notice);
+  if (rt.notice) lines.push(noticeText(rt.notice));
   await setIcon(kind, ex?.country, me.color);
   await chrome.action.setBadgeText({ text: badge });
   await chrome.action.setBadgeBackgroundColor({ color: bcolor });

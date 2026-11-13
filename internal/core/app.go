@@ -48,7 +48,8 @@ type Runtime struct {
 	extSetHash string
 	pulled     map[string]string // 共享扩展：启动时拉入后的内容哈希
 	done       chan struct{}
-	startedAt  int64 // 本次启动时刻（毫秒），用来判断伴随扩展后台是否一直没起来
+	startedAt  int64           // 本次启动时刻（毫秒），用来判断伴随扩展后台是否一直没起来
+	seenExit   map[string]bool // "换一个"这一轮已经轮到过的出口
 }
 
 // Setup 是组件准备的进度。Error 只表示"浏览器内核没准备好"（此时任何窗口都开不了）；
@@ -87,6 +88,8 @@ type App struct {
 	pipVia    map[string]string          // 订阅 id → 测反代时借用的入口（地址:端口）
 	scanProg  map[string]*scanProg       // 订阅 id → 本轮测速的进度
 	speed     map[string]*speedJob       // 订阅 id → 正在进行的下载测速
+	ipq       map[string]*model.IPQ      // 出口 IP → 类型和纯净度（见 ipq.go，落盘在 state/ipq.json）
+	ipqBusy   map[string]bool            // 正在查的 IP
 	scannedAt map[string]int64           // 订阅 id → 上一轮测速结束的时刻（只在内存里）
 	setup     Setup
 	events    []Event
@@ -222,15 +225,25 @@ func Open(dir, exeDir, version string) (*App, error) {
 	a.adapter = kernel.Get(a.Settings.Kernel)
 	// 旧版的"入口用 ProxyIP"：改成直接选中反代列表里的那个地址当入口，效果相同。
 	for _, in := range a.Instances {
+		// 0.1.11 及以前只有一个"自动"开关，而且手动点一下入口或反代就会把它关掉（用户反馈：地区老是自己变成"指定"）。
+		// 现在出口、入口各有一个开关，默认都是自动；旧数据一律按自动迁移，所选的国家保留。
+		if in.Proxy.ExitMode == "" {
+			in.Proxy.ExitMode = "auto"
+		}
+		if in.Proxy.EntryMode == "" {
+			in.Proxy.EntryMode = "auto"
+		}
+		in.Proxy.Auto = in.Proxy.ExitAuto()
 		if in.Proxy.AddressMode != "same-as-exit" {
 			continue
 		}
 		in.Proxy.AddressMode = "custom"
 		if typ, val := a.pipValueLocked(in); typ == "proxyip" {
 			h, port := exits.SplitHostPort(val)
-			in.Proxy.AddressID, in.Proxy.Auto = "x:"+hostPort(h, port), false
+			in.Proxy.AddressID = "x:" + hostPort(h, port)
 		}
 	}
+	a.loadIPQ()
 	if a.inst0() == nil {
 		a.mu.Lock()
 		a.newInstanceLocked("normal")
@@ -377,7 +390,7 @@ func (a *App) newInstanceLocked(kind string) *model.Instance {
 		FP:     model.FP{Seed: base64.StdEncoding.EncodeToString(seed), DisableSpoofing: []string{}},
 		TZ:     model.TZ{Mode: "auto", Source: a.Settings.TZSourceDefault},
 		Locale: model.Locale{Mode: "follow-exit"},
-		Proxy:  model.InstProxy{State: "off", Auto: true, AddressMode: "custom"},
+		Proxy:  model.InstProxy{State: "off", Auto: true, ExitMode: "auto", EntryMode: "auto", AddressMode: "custom"},
 	}
 	if kind == "normal" {
 		in.Color = "#5F6368"

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -288,7 +289,7 @@ func (a *App) Scan(subID string) {
 		a.bumpLocked("state", "")
 		var auto []string
 		for _, in := range a.Instances {
-			if r := a.rt[in.ID]; r != nil && r.active && in.Proxy.Auto && in.Proxy.State == "on" && in.Proxy.SubscriptionID == subID {
+			if r := a.rt[in.ID]; r != nil && r.active && (in.Proxy.ExitAuto() || in.Proxy.EntryAuto()) && in.Proxy.State == "on" && in.Proxy.SubscriptionID == subID {
 				auto = append(auto, in.ID)
 			}
 		}
@@ -709,18 +710,21 @@ func (a *App) pruneGoneLocked(sub *model.Subscription) {
 	}
 }
 
-// autoPick 给开了"自动"的实例确认线路。返回是否换了。
+// autoPick 给实例确认线路（出口、入口里开着"自动"的那一半）。返回是否换了。exclude 是这一轮试过不通的（入口 id，反代见 pipKey）。
 //
-//	入口：出口在所选地区（不限则全部）的可用入口里延迟最低的。当前入口仍然符合就不动——出口稳定比快更重要。
-//	      所选地区一个可用的都没有时保持原样并提示，绝不悄悄换到别的地区。
-//	反代：让两路出口同在一个国家（规则见 pickPip）。
+//	出口（反代）自动：只认国家。在所选国家里挑一个可用的反代，当前的仍然可用就不动；不通了换同一个国家里的下一个。
+//	      这个国家没有反代可挑时退回老办法：挑一个出口在这个国家的入口，反代配成和它同国。
+//	      一个都没有就保持原样并提示，绝不悄悄换到别的国家。没选国家（不限）时：入口挑最快的，反代配成和入口同国。
+//	出口手动：钉死，不通也不换。
+//	入口自动：反代那台机器自己能当入口就用它（同一台机器，少绕一跳）；不能就挑延迟最低的，先同国、再全部——能连上最要紧。
+//	入口手动：钉死。
 func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	if !a.coreOK {
 		return false
 	}
 	a.mu.Lock()
 	in := a.instLocked(id)
-	if in == nil || !in.Proxy.Auto || in.Proxy.State != "on" || in.Proxy.AddressMode == "same-as-exit" {
+	if in == nil || in.Proxy.State != "on" || in.Proxy.AddressMode == "same-as-exit" {
 		a.mu.Unlock()
 		return false
 	}
@@ -729,8 +733,40 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 		a.mu.Unlock()
 		return false
 	}
+	isET := sub.Kind == "edgetunnel" && sub.Template != nil
+	exitAuto, entryAuto := in.Proxy.ExitAuto(), in.Proxy.EntryAuto()
+	if !isET { // 通用订阅：节点就是出口，只有一个开关
+		entryAuto, exitAuto = exitAuto, false
+	}
+	if !exitAuto && !entryAuto {
+		a.mu.Unlock()
+		return false
+	}
 	nodes := a.nodesLocked(sub)
 	cur, region, url := currentNode(in, sub), in.Proxy.Region, a.Settings.DelayURL
+	curPip := pipID(in)
+	// 第一步：出口。选了国家、开着自动 → 先在这个国家里定反代。
+	newPip, pipOK := curPip, false
+	var pipKeyOf string // 定下来的反代是哪台机器（地址:端口）
+	if isET {
+		ps := a.pipCandsLocked(sub, in)
+		if exitAuto && region != "" {
+			newPip, pipOK = pickExit(ps, region, curPip, exclude)
+			if !pipOK {
+				newPip = curPip
+			}
+		}
+		p, found := findCand(ps, newPip)
+		found = found && newPip != ""
+		if !exitAuto { // 出口手动：入口跟着它（同一台机器，或者它所在的国家）；没指定反代就只挑最快的
+			region = ""
+			if found {
+				region, pipKeyOf = p.Country, p.Key
+			}
+		} else if found && pipOK {
+			pipKeyOf = p.Key
+		}
+	}
 	a.mu.Unlock()
 	if len(nodes) == 0 {
 		return false
@@ -738,53 +774,81 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	if err := a.applyConfig(); err != nil {
 		return false
 	}
-	nameOf := map[string]string{}
-	for _, n := range nodes {
-		nameOf[n.ID] = n.Name
-	}
-	verify := func(nid string) bool { // 现测一次，结果记回去
-		d := a.delayOnce(nameOf[nid], url, 5000)
-		a.mu.Lock()
-		s := a.slotLocked(nameOf[nid])
-		s.Delay = d
-		if d > 0 {
-			s.Err = ""
-		} else if s.Err == "" {
-			s.Err = "直接探测是通的，但经代理内核实际连不上"
+	chosen, ok := cur, false
+	if entryAuto {
+		nameOf := map[string]string{}
+		for _, n := range nodes {
+			nameOf[n.ID] = n.Name
 		}
-		a.mu.Unlock()
-		return d > 0
-	}
-	pick := func() (string, bool) {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return pickEntry(a.entryCandsLocked(nodes), region, cur, exclude)
-	}
-	chosen, ok := "", false
-	if nameOf[cur] != "" && !exclude[cur] {
-		verify(cur)
-	}
-	for i := 0; i < 5 && !ok; i++ { // 按上次的结果从快到慢逐个现测，通了就用
-		c, found := pick()
-		if !found {
-			break
+		verify := func(nid string) bool { // 现测一次，结果记回去
+			d := a.delayOnce(nameOf[nid], url, 5000)
+			a.mu.Lock()
+			s := a.slotLocked(nameOf[nid])
+			s.Delay = d
+			if d > 0 {
+				s.Err = ""
+			} else if s.Err == "" {
+				s.Err = "直接探测是通的，但经代理内核实际连不上"
+			}
+			a.mu.Unlock()
+			return d > 0
 		}
-		if c == cur || verify(c) {
-			chosen, ok = c, true
+		curOK := false
+		if nameOf[cur] != "" && !exclude[cur] {
+			curOK = verify(cur)
 		}
-	}
-	if !ok { // 记录都过期了：把这个地区的入口重测一遍再挑（出口未知的入口测了也归不进地区，不测）
-		a.mu.Lock()
-		var again []nodeRef
-		for i, c := range a.entryCandsLocked(nodes) {
-			if !exclude[c.ID] && (region == "" || strings.EqualFold(c.Country, region)) {
-				again = append(again, nodes[i])
+		try := func(country string) (string, bool) { // 按上次的结果从快到慢逐个现测，通了就用
+			for i := 0; i < 5; i++ {
+				a.mu.Lock()
+				c, found := pickEntry(a.entryCandsLocked(nodes), country, cur, exclude)
+				a.mu.Unlock()
+				if !found {
+					return "", false
+				}
+				if (c == cur && curOK) || verify(c) {
+					return c, true
+				}
+			}
+			return "", false
+		}
+		// 反代那台机器自己能当入口：用它
+		if pipKeyOf != "" {
+			for _, n := range nodes {
+				if n.key() != pipKeyOf || exclude[n.ID] {
+					continue
+				}
+				a.mu.Lock()
+				d := a.scanLocked(n.Name).Delay
+				a.mu.Unlock()
+				if (n.ID == cur && curOK) || (d > 0 && verify(n.ID)) {
+					chosen, ok = n.ID, true
+				}
+				break
 			}
 		}
-		a.mu.Unlock()
-		if len(again) > 0 {
-			a.testDelays(again)
-			chosen, ok = pick()
+		// 反代已经定在所选国家里（或者是手动钉死的）：入口只管连得上，同国没有就用全部里最快的
+		anyCountry := pipKeyOf != "" && region != ""
+		if !ok {
+			chosen, ok = try(region)
+		}
+		if !ok && anyCountry {
+			chosen, ok = try("")
+		}
+		if !ok { // 记录都过期了：把这个地区的入口重测一遍再挑（出口未知的入口测了也归不进地区，不测）
+			a.mu.Lock()
+			var again []nodeRef
+			for i, c := range a.entryCandsLocked(nodes) {
+				if !exclude[c.ID] && (region == "" || anyCountry || strings.EqualFold(c.Country, region)) {
+					again = append(again, nodes[i])
+				}
+			}
+			a.mu.Unlock()
+			if len(again) > 0 {
+				a.testDelays(again)
+				if chosen, ok = try(region); !ok && anyCountry {
+					chosen, ok = try("")
+				}
+			}
 		}
 	}
 	a.mu.Lock()
@@ -794,19 +858,25 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	}
 	changed := false
 	r := a.rtLocked(id)
-	if ok && chosen != cur {
+	if entryAuto && ok && chosen != cur {
 		setNode(in, sub, chosen)
 		changed = true
 	}
-	if !ok && region != "" {
-		r.Notice = "所选出口地区（" + region + "）暂时没有可用的线路，线路保持不变。可以点测速重试，或换一个地区。"
-	}
-	if sub.Kind == "edgetunnel" {
-		entry, _ := findCand(a.entryCandsLocked(nodes), currentNode(in, sub))
-		if np, old := pickPip(a.pipCandsLocked(sub, in), entry, pipID(in)), pipID(in); np != old {
-			setPip(in, np)
+	if isET && exitAuto {
+		if !pipOK { // 所选国家里没有反代（或没选国家）：反代配成和入口同国
+			entry, _ := findCand(a.entryCandsLocked(nodes), currentNode(in, sub))
+			if region == "" || strings.EqualFold(entry.Country, region) {
+				newPip = pickPip(a.pipCandsLocked(sub, in), entry, curPip)
+				pipOK = region != "" && entry.alive()
+			}
+		}
+		if newPip != pipID(in) {
+			setPip(in, newPip)
 			changed = true
 		}
+	}
+	if region != "" && ((isET && exitAuto && !pipOK) || (!isET && !ok)) {
+		r.Notice = "noexit:" + strings.ToUpper(region) // 界面上显示成"<国家>无可用出口"
 	}
 	if changed {
 		in.UpdatedAt = now()
@@ -815,4 +885,74 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 		a.bumpLocked("state", id)
 	}
 	return changed
+}
+
+// NextExit 是面板上的"换一个"：出口自动时，在同一个国家里换到下一个可用的出口。
+func (a *App) NextExit(id string) error {
+	a.mu.Lock()
+	in := a.instLocked(id)
+	if in == nil {
+		a.mu.Unlock()
+		return errors.New("实例不存在")
+	}
+	sub := a.subLocked(in.Proxy.SubscriptionID)
+	if sub == nil || in.Proxy.State != "on" {
+		a.mu.Unlock()
+		return errors.New("代理没有打开")
+	}
+	if !in.Proxy.ExitAuto() {
+		a.mu.Unlock()
+		return errors.New("出口是手动指定的，不会自动换。请直接在列表里选，或者打开自动")
+	}
+	r := a.rtLocked(id)
+	if r.seenExit == nil {
+		r.seenExit = map[string]bool{}
+	}
+	isET := sub.Kind == "edgetunnel" && sub.Template != nil
+	region := in.Proxy.Region
+	done := false
+	if isET {
+		ps := a.pipCandsLocked(sub, in)
+		cur := pipID(in)
+		country := region
+		if p, ok := findCand(ps, cur); ok && country == "" {
+			country = p.Country
+		}
+		if np, ok := nextExit(ps, country, cur); ok && (country != "" || cur != "") {
+			setPip(in, np)
+			done = true
+		}
+	}
+	if !done && isET && !in.Proxy.EntryAuto() { // 剩下的办法是换入口，但入口是手动钉死的
+		a.mu.Unlock()
+		return errors.New("这个国家只有这一个可用的出口")
+	}
+	if !done { // 没有反代可换（通用订阅，或这个国家只靠入口决定出口）：换入口
+		cs := a.entryCandsLocked(a.nodesLocked(sub))
+		cur := currentNode(in, sub)
+		r.seenExit[cur] = true
+		np, ok := pickEntry(cs, region, "", r.seenExit)
+		if !ok {
+			for k := range r.seenExit {
+				delete(r.seenExit, k)
+			}
+			r.seenExit[cur] = true
+			np, ok = pickEntry(cs, region, "", r.seenExit)
+		}
+		if !ok {
+			a.mu.Unlock()
+			return errors.New("这个国家只有这一个可用的出口")
+		}
+		r.seenExit[np] = true
+		setNode(in, sub, np)
+	}
+	in.UpdatedAt = now()
+	a.saveLocked("instances")
+	active := r.active
+	a.bumpLocked("state", id)
+	a.mu.Unlock()
+	if active {
+		go a.refresh(id)
+	}
+	return nil
 }

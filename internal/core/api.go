@@ -172,6 +172,16 @@ type subView struct {
 	ScannedAt int64      `json:"scannedAt"`          // 上一轮测速结束的时刻；0 = 核心服务启动后还没测过
 	Speeding  bool       `json:"speeding"`           // 有下载测速在进行或排队
 	Template  any        `json:"template,omitempty"`
+	Profiles  []profView `json:"profiles"` // 盖住订阅里带凭据的 Profiles：界面只需要名字
+}
+
+// profView 是订阅里的一套连接参数在界面上的样子（不带凭据）。
+type profView struct {
+	Key   string `json:"key"`
+	Host  string `json:"host"`
+	Hosts int    `json:"hosts"`
+	Type  string `json:"type"`
+	Net   string `json:"net"`
 }
 
 type extView struct {
@@ -211,6 +221,10 @@ func (a *App) State(me string) map[string]any {
 			v.Progress = &cp
 		}
 		isET := s.Kind == "edgetunnel" && s.Template != nil
+		v.Profiles = []profView{}
+		for _, p := range subProfiles(s) {
+			v.Profiles = append(v.Profiles, profView{Key: p.Key, Host: p.Host, Hosts: len(p.Hosts), Type: p.Type, Net: p.Net})
+		}
 		for _, n := range a.nodesLocked(s) {
 			sc := a.scanLocked(n.Name)
 			nv := nodeView{ID: n.ID, Server: n.Server, Port: n.Port, Label: n.Label, Host: n.Host, Type: n.Type, From: n.From, Gone: n.Gone, Delay: sc.Delay, Exit: sc.Exit, CF: sc.CF, Err: sc.Err}
@@ -244,7 +258,7 @@ func (a *App) State(me string) map[string]any {
 		exitsOut = []*model.ExitEntry{}
 	}
 	return map[string]any{
-		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts,
+		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts, "ipq": a.ipqViewLocked(),
 		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version,
 		"kernel": map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": kernel.KernelVersion, "path": a.kernelExe},
 		"core":   map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
@@ -257,6 +271,8 @@ type proxyPatch struct {
 	PipID                                                                        *string // 手动选反代（反代列表里一行的 id；空 = 不指定）：关闭"自动"
 	Region                                                                       *string // 选出口地区（国家代码；空 = 不限）：打开"自动"
 	Auto                                                                         *bool
+	ExitMode, EntryMode                                                          *string // auto | manual：出口、入口各自的开关。只有这两个字段（和旧的 auto）会改模式
+	Profile                                                                      *string // 换订阅里的另一套连接参数（Host / 协议）
 }
 
 type instPatch struct {
@@ -357,7 +373,7 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 		setIf(&in.Proxy.State, pp.State)
 		setIf(&in.Proxy.SubscriptionID, pp.SubscriptionID)
 		if in.Proxy.SubscriptionID != oldSub { // 换订阅：清空旧选择，按默认规则重新补全
-			in.Proxy.AddressID, in.Proxy.Host, in.Proxy.NodeKey = "", "", ""
+			in.Proxy.AddressID, in.Proxy.Host, in.Proxy.NodeKey, in.Proxy.Profile = "", "", "", ""
 			if strings.HasPrefix(in.Proxy.ExitID, "a:") { // 取自旧订阅入口地址的反代，跟着一起清掉
 				in.Proxy.ExitID, in.Proxy.ExitIP = "", ""
 			}
@@ -371,23 +387,48 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 		setIf(&in.Proxy.AddressID, pp.AddressID)
 		setIf(&in.Proxy.Host, pp.Host)
 		setIf(&in.Proxy.NodeKey, pp.NodeKey)
+		if pp.Profile != nil && *pp.Profile != in.Proxy.Profile {
+			in.Proxy.Profile = *pp.Profile
+			if pp.Host == nil {
+				in.Proxy.Host = "" // Host 跟着这一套重新分配
+			}
+		}
+		// 模式只由开关改：在列表里点一个入口或出口，改的是"选了哪个"，不会把另一半（或自己）的自动悄悄关掉。
+		// 0.1.11 及以前点一下入口就把整条线变成"指定"，之后不通也不再自动换（用户反馈的问题）。
+		mode := func(dst *string, v string) {
+			if v == "auto" || v == "manual" {
+				*dst = v
+			}
+		}
 		if pp.Auto != nil {
-			in.Proxy.Auto = *pp.Auto
+			v := "manual"
+			if *pp.Auto {
+				v = "auto"
+			}
+			in.Proxy.ExitMode, in.Proxy.EntryMode = v, v
+		}
+		if pp.ExitMode != nil {
+			mode(&in.Proxy.ExitMode, *pp.ExitMode)
+		}
+		if pp.EntryMode != nil {
+			mode(&in.Proxy.EntryMode, *pp.EntryMode)
 		}
 		if pp.NodeID != nil {
 			setNode(in, a.subLocked(in.Proxy.SubscriptionID), *pp.NodeID)
-			in.Proxy.Auto = false
 		}
 		if pp.PipID != nil {
 			setPip(in, *pp.PipID)
-			in.Proxy.Auto = false
 		}
 		if pp.Region != nil {
-			in.Proxy.Region, in.Proxy.Auto = strings.ToUpper(strings.TrimSpace(*pp.Region)), true
+			in.Proxy.Region = strings.ToUpper(strings.TrimSpace(*pp.Region))
 			if in.Proxy.AddressMode == "same-as-exit" {
 				in.Proxy.AddressMode = "custom"
 			}
 		}
+		if pp.NodeID != nil || pp.PipID != nil || pp.Region != nil || pp.ExitMode != nil || pp.EntryMode != nil {
+			r.seenExit = nil // "换一个"的轮转从头算
+		}
+		in.Proxy.Auto = in.Proxy.ExitAuto()
 		if in.Proxy.State == "on" && in.Proxy.SubscriptionID == "" {
 			a.defaultProxyLocked(in)
 			if in.Proxy.SubscriptionID == "" {
@@ -469,6 +510,11 @@ func (a *App) routes(mux *http.ServeMux) {
 			}()
 		case "stop":
 			go a.Stop(id)
+		case "next":
+			if err := a.NextExit(id); err != nil {
+				reply(w, nil, err)
+				return
+			}
 		case "restart":
 			go func() {
 				if err := a.Restart(id); err != nil {

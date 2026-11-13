@@ -108,14 +108,60 @@ func (a *App) resolveLocked(in *model.Instance) resolved {
 		}
 		server, port = n.Server, n.Port
 	}
+	prof := profileOf(sub, in.Proxy.Profile, in.Proxy.Host)
 	host := in.Proxy.Host
-	if host == "" && len(sub.Hosts) > 0 {
-		host = sub.Hosts[0]
+	if !contains(prof.Hosts, host) {
+		host = ""
+		if len(prof.Hosts) > 0 {
+			host = prof.Hosts[0]
+		}
 	}
 	name := "n-" + short(in.ID)
-	path := exits.Rewrite(sub.Template.BasePath, typ, val, a.Settings.PathTemplate)
-	ob := subscription.BuildOutbound(name, *sub.Template, server, port, host, path)
+	path := exits.Rewrite(prof.Template.BasePath, typ, val, a.Settings.PathTemplate)
+	ob := subscription.BuildOutbound(name, prof.Template, server, port, host, path)
 	return resolved{members: []string{name}, proxies: []map[string]any{ob}, want: name}
+}
+
+// subProfiles 返回 edgetunnel 订阅的全部连接参数。旧数据（只有一个模板 + Host 池）当成一套。
+func subProfiles(sub *model.Subscription) []model.Profile {
+	if sub == nil || sub.Template == nil {
+		return nil
+	}
+	if len(sub.Profiles) > 0 {
+		return sub.Profiles
+	}
+	typ, _ := sub.Template.Base["type"].(string)
+	host := ""
+	if len(sub.Hosts) > 0 {
+		host = sub.Hosts[0]
+	}
+	if len(sub.Hosts) > 1 {
+		host += " 等 " + strconv.Itoa(len(sub.Hosts)) + " 个"
+	}
+	return []model.Profile{{Key: "", Host: host, Hosts: sub.Hosts, Type: typ, Net: "ws", Template: *sub.Template}}
+}
+
+// profileOf 返回实例在订阅里用的那一套：按 key 找；没有就按它当前的 Host 找；再没有用第一套。
+func profileOf(sub *model.Subscription, key, host string) model.Profile {
+	ps := subProfiles(sub)
+	if len(ps) == 0 {
+		return model.Profile{}
+	}
+	if key != "" {
+		for _, p := range ps {
+			if p.Key == key {
+				return p
+			}
+		}
+	}
+	if host != "" {
+		for _, p := range ps {
+			if contains(p.Hosts, host) {
+				return p
+			}
+		}
+	}
+	return ps[0]
 }
 
 // applyConfig 由状态整体生成 mihomo 配置；有变化才重载；然后逐个把策略组切到应有选项（计划 8.6）。
@@ -330,7 +376,7 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 			} else {
 				pr.Error = "代理不通"
 			}
-			if try < 2 { // "自动"：换下一个可用节点再试，最多换两次
+			if try < 2 { // 入口"自动"：整条线都不通，换下一个可用的入口再试，最多换两次（入口手动时 autoPick 不会动它）
 				a.mu.Lock()
 				tried[currentNode(in, a.subLocked(in.Proxy.SubscriptionID))] = true
 				a.mu.Unlock()
@@ -339,7 +385,18 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 					return
 				}
 			}
+		} else if pr.Error == "" && state == "on" && pr.Direct != nil && pr.CF == nil && try < 2 {
+			// 普通网站通、Cloudflare 网站不通：反代坏了。出口"自动"时换同一个国家里的下一个（手动时不换，只提示）。
+			a.mu.Lock()
+			pid, auto := pipID(in), in.Proxy.ExitAuto()
+			tried[pipKey(pid)] = true
+			a.mu.Unlock()
+			if auto && pid != "" && a.autoPick(id, tried) {
+				a.refreshTry(id, tried, try+1)
+				return
+			}
 		}
+		go a.ipqEnsure(probeIPs(&pr)...)
 	} else {
 		pr = model.ExitProbe{At: now(), Error: want.err}
 	}
@@ -358,6 +415,9 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 		r.Error = ""
 	default:
 		r.Cut, r.Error = "", ""
+	}
+	if try > 0 && r.Error == "" && r.Notice == "" {
+		r.Notice = "switched" // 界面上显示成"已自动换线路"
 	}
 	a.bumpLocked("state", id)
 	a.mu.Unlock()
@@ -446,7 +506,7 @@ func (a *App) fillProxyLocked(in *model.Instance, sub *model.Subscription) {
 		}
 		return
 	}
-	if in.Proxy.ExitID == "" && a.Settings.ExitPick == "unused" && !in.Proxy.Auto { // 开着"自动"时反代由 autoPick 按出口地区来配
+	if in.Proxy.ExitID == "" && a.Settings.ExitPick == "unused" && !in.Proxy.ExitAuto() { // 出口"自动"时反代由 autoPick 按国家来配
 		used := map[string]bool{}
 		for _, o := range a.Instances {
 			if o.ID != in.ID && o.Proxy.ExitID != "" {
@@ -477,14 +537,43 @@ func (a *App) fillProxyLocked(in *model.Instance, sub *model.Subscription) {
 	if _, ok := a.entryLocked(sub, in.Proxy.AddressID); !ok {
 		in.Proxy.AddressID = a.bestAddrLocked(sub.ID)
 	}
-	if in.Proxy.Host == "" || !contains(sub.Hosts, in.Proxy.Host) {
+	// 连接参数：用户选过的那一套还在就不动；否则在"和第一套同一种传输"的几套里按实例平分
+	// （ws 排在最前，是验证得最多的；xhttp 之类要用户自己切过去）。
+	ps := subProfiles(sub)
+	if len(ps) == 0 {
+		return
+	}
+	found := false
+	for _, p := range ps {
+		if (p.Key == in.Proxy.Profile && p.Key != "") || (in.Proxy.Profile == "" && in.Proxy.Host != "" && contains(p.Hosts, in.Proxy.Host)) {
+			in.Proxy.Profile, found = p.Key, true
+			break
+		}
+	}
+	if !found {
+		used := map[string]int{}
+		for _, o := range a.Instances {
+			if o.ID != in.ID && o.Proxy.SubscriptionID == sub.ID {
+				used[o.Proxy.Profile]++
+			}
+		}
+		var keys []string
+		for _, p := range ps {
+			if p.Net == ps[0].Net {
+				keys = append(keys, p.Key)
+			}
+		}
+		in.Proxy.Profile = subscription.PickHost(keys, used, seed32(in.FP.Seed))
+	}
+	prof := profileOf(sub, in.Proxy.Profile, in.Proxy.Host)
+	if in.Proxy.Host == "" || !contains(prof.Hosts, in.Proxy.Host) {
 		used := map[string]int{}
 		for _, o := range a.Instances {
 			if o.ID != in.ID && o.Proxy.SubscriptionID == sub.ID && o.Proxy.Host != "" {
 				used[o.Proxy.Host]++
 			}
 		}
-		in.Proxy.Host = subscription.PickHost(sub.Hosts, used, seed32(in.FP.Seed))
+		in.Proxy.Host = subscription.PickHost(prof.Hosts, used, seed32(in.FP.Seed))
 	}
 }
 

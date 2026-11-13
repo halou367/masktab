@@ -254,19 +254,30 @@ func (a *App) scanDirect(subID string) {
 	go a.enrich(subID)
 }
 
-// enrich 给反代的出口 IP 补上城市和运营商（一次批量查询；查不到不影响使用）。
+// enrich 给反代的出口 IP 补上城市和运营商（一次批量查询；查不到不影响使用），再查它们的类型和纯净度。
 func (a *App) enrich(subID string) {
 	a.mu.Lock()
 	sub := a.subLocked(subID)
 	want := map[string][]*model.IPInfo{}
+	var all []string
+	seen := map[string]bool{}
 	if sub != nil {
 		for _, p := range a.pipsLocked(sub) {
-			if s := a.scan[p.Name]; s != nil && s.CF != nil && s.CF.IP != "" && s.CF.City == "" && s.CF.Org == "" {
+			s := a.scan[p.Name]
+			if s == nil || s.CF == nil || s.CF.IP == "" {
+				continue
+			}
+			if s.CF.City == "" && s.CF.Org == "" {
 				want[s.CF.IP] = append(want[s.CF.IP], s.CF)
+			}
+			if s.Delay > 0 && !seen[s.CF.IP] { // 纯净度只查能用的
+				seen[s.CF.IP] = true
+				all = append(all, s.CF.IP)
 			}
 		}
 	}
 	a.mu.Unlock()
+	defer a.ipqEnsure(all...)
 	if len(want) == 0 {
 		return
 	}
@@ -279,11 +290,14 @@ func (a *App) enrich(subID string) {
 	for i := 0; i < len(ips); i += 100 {
 		end := min(i+100, len(ips))
 		body, _ := json.Marshal(ips[i:end])
-		resp, err := hc.Post("http://ip-api.com/batch?fields=status,query,countryCode,regionName,city,timezone,org,isp", "application/json", bytes.NewReader(body))
+		resp, err := hc.Post("http://ip-api.com/batch?fields=status,query,countryCode,regionName,city,timezone,org,isp,mobile,hosting", "application/json", bytes.NewReader(body))
 		if err != nil {
 			return
 		}
-		var rows []struct{ Status, Query, CountryCode, RegionName, City, Timezone, Org, Isp string }
+		var rows []struct {
+			Status, Query, CountryCode, RegionName, City, Timezone, Org, Isp string
+			Mobile, Hosting                                                  bool
+		}
 		err = json.NewDecoder(resp.Body).Decode(&rows)
 		resp.Body.Close()
 		if err != nil {
@@ -294,6 +308,13 @@ func (a *App) enrich(subID string) {
 			if r.Status != "success" {
 				continue
 			}
+			typ := "res" // 兜底：不是机房、不是移动网络的，按住宅 / 宽带算
+			if r.Hosting {
+				typ = "dc"
+			} else if r.Mobile {
+				typ = "mobile"
+			}
+			a.ipqTypeLocked(r.Query, typ, "ip-api.com")
 			for _, info := range want[r.Query] {
 				info.City, info.Region, info.Timezone = r.City, r.RegionName, r.Timezone
 				if info.Org = r.Org; info.Org == "" {

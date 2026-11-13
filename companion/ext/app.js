@@ -29,7 +29,7 @@ function instances() {
 
 function exits() {
   return [h('h2', {}, icon('link'), '订阅'),
-    st.subscriptions.map((s) => h('div', { class: 'item' }, h('span', { class: 'no', style: { minWidth: '120px' } }, s.name), h('span', { class: 'sub grow', title: s.url }, `${s.kind === 'edgetunnel' ? 'edgetunnel' : '通用'} · ${s.nodeCount} 个节点${s.kind === 'edgetunnel' ? ` · ${s.hosts.length} 个 Host` : ''} · ${s.fetchedAt ? new Date(s.fetchedAt).toLocaleString() : '未拉取'}`, s.lastError ? h('span', { class: 'bad' }, ' · ' + s.lastError) : null),
+    st.subscriptions.map((s) => h('div', { class: 'item' }, h('span', { class: 'no', style: { minWidth: '120px' } }, s.name), h('span', { class: 'sub grow', title: s.url }, `${s.kind === 'edgetunnel' ? 'edgetunnel' : '通用'} · ${s.nodeCount} 个节点${s.kind === 'edgetunnel' ? ` · ${(s.profiles || []).length} 条线路` : ''} · ${s.fetchedAt ? new Date(s.fetchedAt).toLocaleString() : '未拉取'}`, s.lastError ? h('span', { class: 'bad' }, ' · ' + s.lastError) : null),
       ibtn('star', '设为默认订阅', () => act(() => api('POST', `/api/subscriptions/${s.id}/default`)), st.settings.defaultSubscriptionId === s.id ? 'on' : ''),
       ibtn('refresh', '立即刷新', () => act(() => api('POST', `/api/subscriptions/${s.id}/refresh?force=1`), '已刷新')),
       ibtn('trash', '删除订阅', () => confirm(`删除订阅"${s.name}"？`) && act(() => api('DELETE', `/api/subscriptions/${s.id}`)), 'danger'))),
@@ -80,6 +80,7 @@ function settings() {
     rowEl('clock', '时区默认跟随', pill([['exit-cf', 'CF 站点出口'], ['exit-direct', '其他站点出口']], s.tzSourceDefault, (v) => set('tzSourceDefault', v))),
     rowEl('undo', '启动时恢复上次的实例', pill([[true, '开'], [false, '关']], s.restoreOnStart, (v) => set('restoreOnStart', v))),
     rowEl('swap', 'ProxyIP 的 path 写法', pill([['query', '?proxyip=', '/?proxyip=值&其余参数（默认）'], ['segment', '/proxyip=', '/proxyip=值?其余参数（备选）']], s.pathTemplate, (v) => set('pathTemplate', v))),
+    rowEl('home', '查出口 IP 的类型和纯净度', pill([[true, '开', '把出口 IP 发给 ip.net.coffee 查询住宅 / 机房和纯净度；结果存 7 天'], [false, '关', '不向第三方查询，面板里不显示类型和纯净度']], !s.ipqOff, (v) => set('ipqOff', !v))),
     rowEl('refresh', '订阅过期时间（小时）', h('input', { type: 'number', min: 1, value: s.subRefreshHours, style: { width: '90px' }, onchange: (ev) => set('subRefreshHours', +ev.target.value || 6) })),
     rowEl('bolt', '测速地址', h('input', { value: s.delayUrl, style: { width: '100%' }, onchange: (ev) => set('delayUrl', ev.target.value) })),
     rowEl('link', '搜索地址（%s 为关键词）', h('input', { value: s.searchUrl, style: { width: '100%' }, onchange: (ev) => set('searchUrl', ev.target.value) })),

@@ -126,3 +126,56 @@ func TestECHAndSSPlugin(t *testing.T) {
 		t.Errorf("ss 插件：%v %v", n["plugin"], po)
 	}
 }
+
+// 一个订阅里同时有 ws 和 xhttp、或者配了两个域名：拆成几套连接参数，地址共用。
+func TestEdgetunnelProfiles(t *testing.T) {
+	mk := func(addr, typ, host string) string {
+		return "vless://a715370f-ae91-4ae6-8bbc-748d1cd9038c@" + addr + "?security=tls&type=" + typ + "&host=" + host + "&fp=chrome&sni=" + host + "&path=%2F%3Fed%3D2560&encryption=none&mode=stream-one#" + typ + "-" + addr
+	}
+	var lines []string
+	for _, a := range []string{"104.16.1.1:443", "104.16.1.2:443", "104.16.1.3:2053"} {
+		lines = append(lines, mk(a, "xhttp", "w.example.com"), mk(a, "ws", "w.example.com"), mk(a, "ws", "w2.example.net"))
+	}
+	nodes, err := Parse([]byte(strings.Join(lines, "\n")))
+	if err != nil || len(nodes) != 9 { // 同一个地址、同一个 Host 的 ws 和 xhttp 是两个节点，不能被去重掉
+		t.Fatalf("解析：%v，%d 个节点", err, len(nodes))
+	}
+	if x := nodes[0].Raw; x["network"] != "xhttp" || str(x, "xhttp-opts", "path") != "/?ed=2560" || str(x, "xhttp-opts", "host") != "w.example.com" || str(x, "xhttp-opts", "mode") != "stream-one" {
+		t.Errorf("xhttp 链接解析不对：%v", x)
+	}
+	info, ok := DetectEdgetunnel(nodes, false)
+	if !ok {
+		t.Fatal("ws + xhttp 混合的订阅应识别为 edgetunnel")
+	}
+	if len(info.Addresses) != 3 || len(info.Profiles) != 3 {
+		t.Fatalf("应有 3 个地址、3 套参数：%d / %d", len(info.Addresses), len(info.Profiles))
+	}
+	if p := info.Profiles[0]; p.Net != "ws" || p.Host != "w.example.com" || info.Template.Base["network"] != "ws" {
+		t.Errorf("ws 应排在最前并作为默认模板：%+v", p)
+	}
+	keys := map[string]bool{}
+	var xp *int
+	for i, p := range info.Profiles {
+		keys[p.Key] = true
+		if p.Net == "xhttp" {
+			xp = &i
+		}
+	}
+	if len(keys) != 3 || xp == nil {
+		t.Fatalf("每套参数要有各自的 key，且包含 xhttp：%v", keys)
+	}
+	ob := BuildOutbound("n-x", info.Profiles[*xp].Template, "10.0.0.1", 443, "x.example.com", "/?proxyip=1.2.3.4&ed=2560")
+	if ob["network"] != "xhttp" || ob["ws-opts"] != nil || str(ob, "xhttp-opts", "path") != "/?proxyip=1.2.3.4&ed=2560" || str(ob, "xhttp-opts", "host") != "x.example.com" || ob["servername"] != "x.example.com" {
+		t.Errorf("xhttp 出站不对：%v", ob)
+	}
+	// 通配域名：每个节点随机一个子域 → 合成一套，Host 都留着
+	var rnd []string
+	for i, a := range []string{"104.16.2.1:443", "104.16.2.2:443", "104.16.2.3:443", "104.16.2.4:443", "104.16.2.5:443", "104.16.2.6:443"} {
+		rnd = append(rnd, mk(a, "ws", string(rune('a'+i))+"x.wild.example.org"))
+	}
+	n2, _ := Parse([]byte(strings.Join(rnd, "\n")))
+	info2, ok := DetectEdgetunnel(n2, false)
+	if !ok || len(info2.Profiles) != 1 || info2.Profiles[0].Host != "*.wild.example.org" || len(info2.Profiles[0].Hosts) != 6 {
+		t.Errorf("随机子域应合成一套：%v %+v", ok, info2)
+	}
+}
