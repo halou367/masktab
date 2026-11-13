@@ -232,6 +232,7 @@ try {
     await evalPage(prof(a.id), PAGE, `(()=>{document.cookie='smk=1; max-age=3600';return 1})()`);
     const ck = await evalTarget(prof(a.id), `${COMPANION}/background.js`, `(async()=>{await reportCookies(true);return 1})()`);
     const ckA = (await inst(a.id))?.acct;
+    await evalPage(prof(a.id), PAGE, `(()=>{document.cookie='smk=; max-age=0';return 1})()`); // 别影响后面“重启后登录态”的精确比较
     rec(ckA?.cookieN > 0 ? 'ok' : 'warn', '伴随扩展上报 Cookie 汇总', ckA ? `${ckA.cookieN} 条 / ${ckA.cookies?.length || 0} 个站点` : JSON.stringify(ck).slice(0, 120));
   } catch (e) { rec('fail', '实例管理改版接口', e.message); }
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/newtab.html`, '1-newtab.png');
