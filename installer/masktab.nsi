@@ -39,6 +39,12 @@ SetCompressorDictSize 64
 !ifndef OUT
   !define OUT "MaskTab-Setup.exe"
 !endif
+; makensis 在 Windows 上只认反斜杠路径，在 Linux 上只认正斜杠
+!ifdef NSIS_WIN32_MAKENSIS
+  !define SEP "\"
+!else
+  !define SEP "/"
+!endif
 !define APP "MaskTab"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MaskTab"
 
@@ -95,7 +101,7 @@ Section "MaskTab" SecMain
   !insertmacro StopRunning
   SetOutPath "$INSTDIR"
   SetOverwrite on
-  File "${SRC}/masktab.exe"
+  File "${SRC}${SEP}masktab.exe"
 
 !ifdef FULL
   ; ---- 代理内核：版本相同就跳过 ----
@@ -130,7 +136,7 @@ Section "MaskTab" SecMain
     FindClose $0
     SetOutPath "$INSTDIR\kernel\fingerprint-chromium\${KVER}"
     SetDetailsPrint textonly
-    File /r "${KERNEL}/*.*"
+    File /r "${KERNEL}${SEP}*.*"
     SetDetailsPrint both
     FileOpen $0 "$INSTDIR\kernel\fingerprint-chromium\${KVER}\installed.ok" w
     FileClose $0
