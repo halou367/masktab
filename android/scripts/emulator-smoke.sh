@@ -50,6 +50,18 @@ if adb shell pidof $PKG > /dev/null; then echo "进程在运行"; else echo "进
 adb logcat -d > "$OUT/logcat.txt"
 adb logcat -d -s MaskTab:V GeckoConsole:V > "$OUT/logcat-masktab.txt" || true
 adb shell ls -la /data/app/ > /dev/null 2>&1 || true
+# 功能检查：扩展后台、各页面、新标签页都要在 logcat 里报“就绪”；原生消息不能有回传失败
+need() { if grep -q "$1" "$OUT/logcat-masktab.txt"; then echo "通过：$2"; else echo "失败：$2（logcat 里没有“$1”）"; fail=1; fi; }
+need "MaskTab 后台就绪" "扩展后台拿到 app 状态"
+need "MaskTab 新标签页就绪" "新标签页"
+need "MaskTab 页面就绪 menu 有状态" "头像菜单"
+need "MaskTab 页面就绪 instances 有状态" "实例管理页"
+need "MaskTab 页面就绪 node 有状态" "节点与出口页"
+need "MaskTab 标签页登记" "标签页登记到实例"
+need "MaskTab 指纹参数 example.com" "网页里拿到实例指纹参数"
+if grep -q "Invalid event data for callback" "$OUT/logcat-masktab.txt"; then echo "失败：原生消息回传失败（Invalid event data）"; fail=1; fi
+grep -E "MaskTab (指纹脚本|后台|标签页)" "$OUT/logcat-masktab.txt" | head -20
+
 if grep -E "FATAL EXCEPTION|Process: $PKG|Fatal signal" "$OUT/logcat.txt" | grep -v "^--" > "$OUT/crash.txt"; then
   echo "logcat 里有崩溃："; cat "$OUT/crash.txt"; fail=1
 else

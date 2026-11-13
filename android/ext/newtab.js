@@ -15,7 +15,7 @@ if (go) {
   // 只跳网页地址；登记失败时照样跳：认不出实例的请求会被后台拒绝，不会直连
   if (/^https?:\/\//i.test(go)) location.replace(go);
 } else {
-  render().catch((e) => root.replaceChildren(h('div', { class: 'sub' }, e.message)));
+  render().then(() => console.info('MaskTab 新标签页就绪', inst, bound ? bound.reg : '未登记'), (e) => { console.warn('MaskTab 新标签页出错', e.message); root.replaceChildren(h('div', { class: 'sub' }, e.message)); });
 }
 
 async function render() {

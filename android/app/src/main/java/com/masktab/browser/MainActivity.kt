@@ -287,6 +287,7 @@ class MainActivity : Activity(), CoreUi {
         s.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onCloseRequest(session: GeckoSession) { closeSheet() }
         }
+        Core.ext?.let { s.webExtensionController.setMessageDelegate(it, Core.sessionMsg(null), Core.NATIVE) }
         s.open(Core.ensureRuntime())
         v.setSession(s)
         s.loadUri(Core.pageUrl(route))

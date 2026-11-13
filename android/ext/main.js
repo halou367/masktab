@@ -169,4 +169,5 @@ addEventListener('hashchange', () => render());
 document.addEventListener('touchmove', (e) => { if (document.body.classList.contains('dragging')) e.preventDefault(); }, { passive: false });
 document.addEventListener('contextmenu', (e) => { if (e.target.closest?.('.cardi')) e.preventDefault(); });
 await load(true);
+console.info('MaskTab 页面就绪', route(), st ? '有状态' : '无状态'); // CI 冒烟测试在 logcat 里找这一行
 setInterval(() => { if (!document.hidden) load(false); }, 4000);

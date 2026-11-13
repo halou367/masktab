@@ -341,3 +341,40 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - 原生个人资料按钮和菜单是内核的 C++ 界面，不打补丁改不了。做法：伴随扩展按钮（已固定在工具栏）图标画成实例色圆 + 首字母 + 国旗角标，点开先显示实例菜单；节点面板变成菜单里的一项。
 - 字形表 `assets/rgba/_glyphs.gz` 由 `scripts/glyphs/gen.py` 生成（0–9、A–Z，18×18 透明度），后台逐像素拼图，不经画布（K-3）。
 - 断流 / 出错时仍显示原来的状态图标，延迟仍在角标上。
+
+## 安卓版（2026-11-14，分支 demo/android，详见 docs/android.md）
+
+### A-1 安卓用 GeckoView，不用计划第 9 章的系统 WebView（偏离计划 D14）
+
+- **结论**：安卓版内核用 Mozilla 的 GeckoView（固定 160.0.20261104181552），需求方 2026-11-14 拍板。
+- **原因**：
+  - 计划里的系统 WebView 方案本身就把“Google 登录可能被拦”（VA2）列为风险，备选正是 GeckoView。
+  - 多实例隔离：GeckoView 有 `contextId` 容器，一个进程里多个实例同时存活、各自 Cookie / 存储隔离；WebView 要靠“进程槽位 + `setDataDirectorySuffix`”，每个实例一个进程、数量有上限、切换要重启进程（VA1 未验证）。
+  - 每实例代理：WebView 的 `ProxyController` 是整个进程一个代理；GeckoView 里内置扩展的 `proxy.onRequest` 可以按标签页分流，一个进程里多个实例走不同出口。
+  - 扩展：GeckoView 支持 WebExtension，桌面伴随扩展的 `autofill.js`、`menu.js`、`instances.js` 能复用；用户还能从 AMO 装扩展（计划里手机端原本“不做扩展”）。
+  - 内核版本由 app 自带、跟着 Firefox 正式版走，不受手机系统 WebView 版本影响。
+- **代价**：APK 大（每个架构约 80 MB 的 libxul）；网站看到的是安卓火狐（不伪装 Chrome）；只能装 AMO 签名的火狐扩展；页面指纹在扩展层做，弱于桌面内核级；Service Worker 第一版关闭（A-3）。
+- **回退**：WebView 方案仍可按计划第 9 章做，`android/` 下的 mihomo、密码库、扩展页面大部分可复用，只有 `Core.kt`（会话、容器、代理分流）要重写。
+
+### A-2 mihomo 的 proxy-providers 必须写 `proxy: DIRECT`
+
+- 沙箱实测（mihomo v1.19.34 Linux arm64）：provider 不写 `proxy` 时，拉订阅这个请求也走规则匹配，被兜底的 `MATCH,REJECT` 拒掉，日志是 `EOF`。写 `proxy: DIRECT` 后正常拉取。
+- 订阅里的节点不在 `/proxies/<名>` 下，单测延迟要用 `/providers/proxies/sub/<名>/healthcheck`。
+
+### A-3 关闭 Service Worker
+
+- Service Worker 发出的请求 `tabId = -1`，而 GeckoView 里 `details.cookieStoreId` 不准（bug 1948114），分不出属于哪个实例。为了守住“认不出就拒绝、绝不直连”，第一版用偏好 `dom.serviceWorkers.enabled: false` 关掉。
+- 影响：离线、推送等依赖 Service Worker 的网站功能没有。以后 GeckoView 修好 cookieStoreId 后可以打开，改 `Core.writeGeckoConfig` 与 `ext/background.js` 的 `proxy.onRequest`。
+
+### A-4 标签页 → 实例的识别
+
+- app 开的每个标签先进扩展自己的引导页 `newtab.html#inst=<id>&go=<网址>` 登记，再跳网址（扩展页不走代理，第一跳不漏）。
+- 网页内容脚本的原生消息由会话自己的 MessageDelegate 接收（app 按会话知道实例），再告诉后台；网页伪造不了。
+- 指纹脚本按容器 `contentScripts.register({cookieStoreId})` 同步注入；GeckoView 容器是私有身份，这个调用是否被接受没验证，失败时自动改异步注入（`fp-boot.js`）。
+
+### A-5 安卓版的构建方式
+
+- AGP 9.5.1（自带 Kotlin 编译），根项目声明 Kotlin 插件 2.4.21 是为了能读 GeckoView 160 依赖的 kotlin-stdlib 2.4；compileSdk 37.2 是 GeckoView 的 AAR 元数据要求的。
+- 没有 Gradle wrapper（不提交二进制 jar）：CI 用 `gradle/actions/setup-gradle` 装 9.9.1。
+- 内置扩展由构建任务 `buildExt` 把桌面伴随扩展的可复用文件与 `android/ext` 合成到 `assets/ext/`，桌面那份是唯一来源。
+- mihomo 版本与桌面一致（v1.19.34），`android/scripts/fetch-mihomo.sh` 下载并按上游 digest 校验，不入库。

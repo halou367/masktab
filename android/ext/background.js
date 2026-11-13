@@ -17,7 +17,10 @@ const regs = new Map();    // cookieStoreId → {key, reg}
 const pending = new Map(); // 两步登录暂存：`${tabId}|${主域名}` → {u, at}
 let regBroken = '';        // contentScripts.register 不支持按容器注册时记下原因，之后不再试
 
-const native = (m, p, b, extra) => browser.runtime.sendNativeMessage(NATIVE, { m, p, b: b ?? null, ...(extra || {}) }).then((r) => {
+// app 的回复是 JSON 字符串（GeckoView 不直接回传 JSONObject）
+const parse = (r) => (typeof r === 'string' ? JSON.parse(r) : r);
+const native = (m, p, b, extra) => browser.runtime.sendNativeMessage(NATIVE, { m, p, b: b ?? null, ...(extra || {}) }).then((r0) => {
+  const r = parse(r0);
   if (!r) throw new Error('应用未响应');
   if (r.error) throw new Error(r.error);
   return r.data;
@@ -41,7 +44,7 @@ function connect() {
   } catch (e) { console.warn('connectNative 失败', e); setTimeout(connect, 2000); }
 }
 connect();
-ready = native('GET', '/ext/state').then(applyState).catch((e) => console.warn('取状态失败', e));
+ready = native('GET', '/ext/state').then((s) => { applyState(s); console.info('MaskTab 后台就绪', Object.keys(insts).length, '个实例'); }).catch((e) => console.warn('MaskTab 后台取状态失败', e?.message || e));
 
 // ---------- 标签页属于哪个实例 ----------
 const isContainer = (cs) => typeof cs === 'string' && cs.startsWith('firefox-container-');
@@ -118,6 +121,7 @@ async function registerFp(cs, id) {
       matches: ['<all_urls>'], runAt: 'document_start', allFrames: true, matchAboutBlank: true, cookieStoreId: cs,
     });
     if (regs.get(cs)?.key === key) regs.set(cs, { key, reg }); else reg.unregister();
+    console.info('MaskTab 指纹脚本已按容器注册', cs);
     old?.reg?.unregister();
   } catch (e) {
     regBroken = String(e?.message || e);
@@ -158,7 +162,10 @@ browser.runtime.onMessage.addListener((m, sender) => {
   const t = String(m.t || '');
   // 新标签页 / 引导页（扩展自己的页面）登记：这个标签页属于 m.inst
   if (t === 'bind' && sender.tab) {
-    return ready.then(() => bind(sender.tab, String(m.inst))).then(() => ({ ok: true, cs: sender.tab.cookieStoreId, reg: regBroken ? 'async' : 'sync' }));
+    return ready.then(() => bind(sender.tab, String(m.inst))).then(() => {
+      console.info('MaskTab 标签页登记', sender.tab.id, sender.tab.cookieStoreId, '→', m.inst);
+      return { ok: true, cs: sender.tab.cookieStoreId, reg: regBroken ? 'async' : 'sync' };
+    });
   }
   // 内容脚本拿到 app 给的实例参数后登记（会话决定实例，网页伪造不了）
   if (t === 'seen' && sender.tab) {

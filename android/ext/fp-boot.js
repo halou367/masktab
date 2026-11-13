@@ -6,9 +6,13 @@
   const apply = (c) => { if (c && !c.error && window.MTFP) window.MTFP.run(window, c); return c; };
   let p;
   try { p = browser.runtime.sendNativeMessage('masktab', { t: 'hello' }); } catch (e) { p = Promise.reject(e); }
-  p.then((c) => {
+  p.then((r) => {
+    const c = typeof r === 'string' ? JSON.parse(r) : r;
     if (!c || c.error) throw new Error((c && c.error) || '无参数');
     apply(c);
-    if (window === window.top) browser.runtime.sendMessage({ t: 'seen', inst: c.id }).catch(() => {});
+    if (window === window.top) {
+      browser.runtime.sendMessage({ t: 'seen', inst: c.id }).catch(() => {});
+      console.info('MaskTab 指纹参数', location.host, '#' + c.no, navigator.hardwareConcurrency, navigator.language);
+    }
   }).catch(() => browser.runtime.sendMessage({ t: 'fp:cfg' }).then(apply).catch(() => {}));
 })();

@@ -3,6 +3,7 @@
 export async function api(method, path, body) {
   let r;
   try { r = await browser.runtime.sendNativeMessage('masktab', { m: method, p: path, b: body ?? null }); } catch (e) { throw new Error('应用未响应：' + (e?.message || e)); }
+  if (typeof r === 'string') r = JSON.parse(r); // app 回 JSON 字符串（GeckoView 不直接回传 JSONObject）
   if (!r) throw new Error('应用未响应');
   if (r.error) throw new Error(r.error);
   return r.data;

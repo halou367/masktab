@@ -147,7 +147,7 @@ object Core {
         s.contentDelegate = Content(t)
         s.promptDelegate = PromptBridge
         s.open(ensureRuntime())
-        ext?.let { s.webExtensionController.setMessageDelegate(it, contentMsg(t.inst), NATIVE) }
+        ext?.let { s.webExtensionController.setMessageDelegate(it, sessionMsg(t.inst), NATIVE) }
     }
 
     /** 在实例里开一个标签页。url 为空 = 新标签页。 */
@@ -172,7 +172,7 @@ object Core {
         t.session.progressDelegate = Progress(t)
         t.session.contentDelegate = Content(t)
         t.session.promptDelegate = PromptBridge
-        ext?.let { t.session.webExtensionController.setMessageDelegate(it, contentMsg(t.inst), NATIVE) }
+        ext?.let { t.session.webExtensionController.setMessageDelegate(it, sessionMsg(t.inst), NATIVE) }
         tabsOf(i.id).add(t)
         active[i.id] = t
         mainHandler.post { ui?.onTabsChanged() }
@@ -304,12 +304,15 @@ object Core {
 
     fun pushState() = ui { try { bgPort?.postMessage(extState()) } catch (e: Exception) { logw("推送状态失败", e) } }
 
-    /** 扩展后台与扩展页面（菜单、管理页、新标签页）的请求：形如 {m, p, b}，见 Bridge。 */
+    /**
+     * 扩展后台与扩展页面（菜单、管理页、新标签页）的请求：形如 {m, p, b}，见 Bridge。
+     * 回复一律是 JSON 字符串：GeckoView 把回复交回 JS 时不认 JSONObject（CI 里报 “Invalid event data for callback”），JS 那边再 JSON.parse。
+     */
     private val extDelegate = object : WebExtension.MessageDelegate {
         override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
             val r = GeckoResult<Any>()
-            val j = message as? JSONObject ?: return GeckoResult.fromValue(jsonOf("error" to "格式不对"))
-            Bridge.handle(j) { out -> r.complete(out) }
+            val j = message as? JSONObject ?: return GeckoResult.fromValue(jsonOf("error" to "格式不对").toString())
+            Bridge.handle(j) { out -> r.complete(out.toString()) }
             return r
         }
 
@@ -323,15 +326,24 @@ object Core {
         }
     }
 
-    /** 网页里内容脚本的请求：会话本身就说明了它属于哪个实例（不靠网页能伪造的任何东西）。 */
-    private fun contentMsg(instId: String) = object : WebExtension.MessageDelegate {
+    /**
+     * 会话级的消息：GeckoView 把“来自某个会话”的原生消息交给这个会话自己的 delegate（没设就一直挂着，CI 里实测），
+     * 包括这个会话里的内容脚本、以及在会话里打开的扩展页面（新标签页、实例菜单、管理页）。
+     * - 内容脚本只能要本实例参数（hello）；会话本身就说明了它属于哪个实例，网页伪造不了。
+     * - 扩展页面走完整的 Bridge；没写 inst 的请求按这个会话的实例算。
+     */
+    fun sessionMsg(instId: String?) = object : WebExtension.MessageDelegate {
         override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
-            val j = message as? JSONObject ?: return null
-            val i = store.get(instId) ?: return GeckoResult.fromValue(jsonOf("error" to "实例不存在"))
-            return when (j.str("t")) {
-                "hello" -> GeckoResult.fromValue(Fp.cfg(i, store.rtOf(i.id).exit).put("port", i.port).put("direct", i.direct))
-                else -> GeckoResult.fromValue(jsonOf("error" to "未知请求"))
+            val j = message as? JSONObject ?: return GeckoResult.fromValue(jsonOf("error" to "格式不对").toString())
+            if (j.str("t") == "hello") {
+                val i = store.get(instId) ?: return GeckoResult.fromValue(jsonOf("error" to "不是实例标签页").toString())
+                return GeckoResult.fromValue(Fp.cfg(i, store.rtOf(i.id).exit).put("port", i.port).put("direct", i.direct).toString())
             }
+            if (sender.environmentType != WebExtension.MessageSender.ENV_TYPE_EXTENSION) return GeckoResult.fromValue(jsonOf("error" to "内容脚本不能调用这个接口").toString())
+            if (instId != null && !j.has("inst")) j.put("inst", instId)
+            val r = GeckoResult<Any>()
+            Bridge.handle(j) { out -> r.complete(out.toString()) }
+            return r
         }
     }
 
