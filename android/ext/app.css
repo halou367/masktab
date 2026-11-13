@@ -1,0 +1,113 @@
+/* 安卓版内置扩展页面的样式。
+   第一段取自桌面 companion/ext/app.html（实例卡片、抽屉、导入弹窗），第二段取自 popup.html（实例菜单），改桌面样式时同步这里。
+   最后是安卓专用：触屏尺寸、顶栏、节点 / 指纹 / 设置 / 扩展页、新标签页。 */
+
+/* ---- 桌面 app.html ---- */
+main{flex:1;max-width:1280px;padding:20px 28px} h2{font-size:18px;font-weight:500;margin:0 0 14px;display:flex;align-items:center;gap:8px}
+.item{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap} .item .no{font-weight:600;min-width:34px} .item input.name{border-color:transparent;background:transparent;width:150px} .item input.name:hover,.item input.name:focus{border-color:var(--line)}
+.sw{display:flex;gap:3px} .sw button{width:16px;height:16px;border-radius:50%;border:2px solid transparent} .sw button.on{border-color:var(--fg)}
+textarea{width:100%;min-height:90px;font-family:ui-monospace,Consolas,monospace} .full{flex-basis:100%} .set{display:grid;grid-template-columns:28px 220px 1fr;gap:12px 10px;align-items:center;max-width:760px} label.ck{display:inline-flex;align-items:center;gap:4px;margin-right:10px}
+
+.btn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 14px;border-radius:99px;border:1px solid var(--line);font-size:13px} .btn:hover:not(:disabled){background:var(--hover)} .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff} .btn.pri:hover:not(:disabled){filter:brightness(1.08);background:var(--accent)} .btn.danger{color:var(--bad)}
+h2 .btn{margin-left:6px}
+/* 卡片网格 */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.cardi{position:relative;border:1px solid var(--line);border-radius:14px;padding:12px 12px 8px;background:var(--bg);cursor:pointer;display:flex;flex-direction:column;gap:9px;transition:box-shadow .15s,border-color .15s;user-select:none;border-top:3px solid var(--c)}
+.cardi:hover{box-shadow:0 2px 10px rgba(0,0,0,.08)} .cardi.running{border-color:color-mix(in srgb,var(--c) 45%,var(--line));border-top-color:var(--c)}
+.cardi.lift{position:fixed;z-index:50;pointer-events:none;box-shadow:0 14px 34px rgba(0,0,0,.22);transform:rotate(1.2deg) scale(1.02)} .cardi.ph{border:2px dashed var(--line);background:var(--card);box-shadow:none}
+body.dragging{cursor:grabbing;user-select:none}
+.ct{display:flex;align-items:center;gap:8px;min-width:0} .ct .no{font-weight:600;flex:none} .ct .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl{position:relative;display:inline-flex;align-items:center;padding:4px;border-radius:6px;color:var(--sub);flex:none;outline:none} .fl .flag{width:24px;height:17px}
+.fl .tip{display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:20;background:#202124;color:#fff;border-radius:10px;padding:8px 10px;font-size:12px;white-space:nowrap;box-shadow:0 6px 18px rgba(0,0,0,.25);line-height:1.6;cursor:default} .fl .tip b{font-size:13.5px;font-variant-numeric:tabular-nums}
+.fl .tip .good{color:#81c995} .fl .tip .mid{color:#fdd663} .fl .tip .bad{color:#f28b82}
+.fl:hover .tip,.fl:focus .tip{display:block}
+.cs{display:flex;align-items:center;gap:5px;min-height:24px;flex-wrap:wrap} .cs .more{font-size:11.5px;color:var(--sub)}
+.site{width:22px;height:22px;border-radius:7px;background:var(--bg);box-shadow:0 0 0 1px var(--line);display:inline-flex;align-items:center;justify-content:center;flex:none;color:var(--sub)}
+.cw{font-size:12px;display:flex;align-items:center;gap:5px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cb{display:flex;align-items:center;gap:2px;border-top:1px solid var(--line);padding-top:6px;margin:0 -2px}
+.state{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--sub)} .state i{width:7px;height:7px;border-radius:50%;background:#c4c7c5} .state.on i{background:var(--good)} .state.on{color:var(--fg)}
+.cnt{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;color:var(--sub);margin-right:4px;font-variant-numeric:tabular-nums} .cnt .ic+.ic,.cnt>.ic:nth-of-type(2){margin-left:6px}
+.face{position:relative;width:28px;height:28px;border-radius:50%;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;flex:none}
+.face.big{width:52px;height:52px;font-size:22px} .face .flag{position:absolute;right:-4px;bottom:-2px;width:15px;height:10.5px;box-shadow:0 0 0 1.5px var(--bg)} .face.big .flag{width:20px;height:14px}
+.face .run{position:absolute;left:-2px;bottom:-1px;width:9px;height:9px;border-radius:50%;background:#c4c7c5;box-shadow:0 0 0 1.5px var(--bg)} .face .run.on{background:var(--good)}
+.stp{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--accent);white-space:nowrap} .stb{width:70px;height:4px;border-radius:4px;background:var(--line);overflow:hidden} .stb i{display:block;height:100%;background:var(--accent);transition:width .4s}
+/* 抽屉 */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:30;display:flex;justify-content:flex-end;animation:fade .15s} .scrim.center{justify-content:center;align-items:center}
+@keyframes fade{from{opacity:0}} @keyframes slide{from{transform:translateX(30px);opacity:0}}
+.drawer{width:440px;max-width:100%;height:100%;overflow-y:auto;background:var(--bg);padding:18px 18px 30px;box-shadow:-10px 0 30px rgba(0,0,0,.15);animation:slide .18s}
+.dh{display:flex;align-items:center;gap:12px;margin-bottom:12px} .dh input.name{font-size:16px;font-weight:600;border-color:transparent;padding:4px 6px;margin-left:-6px;width:100%} .dh input.name:hover,.dh input.name:focus{border-color:var(--line)}
+.drawer h3{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin:20px 0 4px} .hint{margin-bottom:8px;line-height:1.5}
+.acc{display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--line)} .acc .u{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .acc .pw{font-family:ui-monospace,Consolas,monospace}
+.acc.edit{flex-wrap:wrap} .acc.edit input{flex:1 1 120px;min-width:0}
+.tag{font-size:10.5px;border:1px solid var(--line);border-radius:5px;padding:0 4px;color:var(--sub);margin-left:6px}
+.cks{display:flex;flex-wrap:wrap;gap:6px} .ck{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:99px;padding:2px 10px 2px 3px;font-size:12px} .ck b{font-weight:500;color:var(--sub);font-variant-numeric:tabular-nums}
+.dz{margin-top:28px;border-top:1px solid var(--line);padding-top:14px}
+.modal{width:560px;max-width:calc(100% - 32px);background:var(--bg);border-radius:16px;padding:18px 20px 20px;box-shadow:0 20px 60px rgba(0,0,0,.25);animation:fade .15s} .modal h3{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:16px}
+
+/* ---- 桌面 popup.html：实例菜单 ---- */
+body.menu #root{padding:8px 0 6px}
+.hero{margin:0 8px 6px;border-radius:14px;background:color-mix(in srgb,var(--c) 14%,var(--bg));padding:16px 12px 12px;display:flex;flex-direction:column;align-items:center;gap:5px;text-align:center}
+.hero .t{font-size:14.5px;font-weight:600;margin-top:4px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hero .ex{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--sub);border-radius:7px;padding:2px 6px;font-variant-numeric:tabular-nums} .hero .ex:hover{background:color-mix(in srgb,var(--c) 14%,transparent)} .hero .ex b{font-weight:400}
+.hero .sites{display:flex;gap:5px;margin-top:4px;flex-wrap:wrap;justify-content:center} .hero .more{font-size:11px;color:var(--sub);align-self:center}
+.face{position:relative;width:28px;height:28px;border-radius:50%;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;flex:none}
+.face.big{width:64px;height:64px;font-size:27px;box-shadow:0 0 0 3px var(--bg)}
+.face .flag{position:absolute;right:-4px;bottom:-2px;width:15px;height:10.5px;box-shadow:0 0 0 1.5px var(--bg)} .face.big .flag{width:24px;height:17px;right:-6px;bottom:0;box-shadow:0 0 0 2.5px var(--bg)}
+.face .run{position:absolute;left:-2px;bottom:-1px;width:9px;height:9px;border-radius:50%;background:#c4c7c5;box-shadow:0 0 0 1.5px var(--bg)} .face .run.on{background:var(--good)} .face .run.st{background:var(--accent);animation:ind .6s ease-in-out infinite alternate}
+.grp{border-top:1px solid var(--line);padding:5px 0} .hero+.grp{border-top:0}
+.mi{display:flex;align-items:center;gap:14px;width:100%;height:34px;padding:0 16px;text-align:left} .mi:hover{background:var(--hover)} .mi>.ic{color:var(--sub)} .mi .k{color:var(--sub);font-size:11.5px;display:inline-flex}
+.lbl{display:flex;align-items:center;font-size:11.5px;color:var(--sub);padding:3px 16px 4px}
+.qs{display:flex;align-items:center;gap:6px;margin:0 10px 4px;height:30px;border-radius:99px;background:var(--card);padding:0 10px;color:var(--sub)} .qs input{border:0;background:none;padding:0;flex:1;min-width:0;font-size:12.5px;color:var(--fg)}
+.insts{max-height:236px;overflow-y:auto}
+.inst{display:flex;align-items:center;gap:11px;width:100%;min-height:44px;padding:4px 12px 4px 16px;text-align:left} .inst:hover{background:var(--hover)}
+.inst .tx{flex:1;min-width:0;display:flex;flex-direction:column} .inst .n,.inst .sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .inst .sub{font-size:11.5px}
+.inst .go{font-size:11.5px;color:var(--sub)} .inst:hover .go{color:var(--accent)}
+.stp{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--accent);white-space:nowrap} .stb{width:54px;height:4px;border-radius:4px;background:var(--line);overflow:hidden;flex:none} .stb i{display:block;height:100%;background:var(--accent);transition:width .4s}
+body.menu .empty{padding:10px}
+
+/* ---- 安卓专用 ---- */
+html{-webkit-text-size-adjust:100%} body{font-size:14px;-webkit-tap-highlight-color:transparent}
+.ib{width:40px;height:40px} .btn{height:38px}
+input,select,textarea{font-size:15px;padding:9px 11px;border-radius:10px}
+.top{position:sticky;top:0;z-index:20;background:var(--bg);display:flex;align-items:center;gap:6px;padding:8px 8px 8px 4px;border-bottom:1px solid var(--line)}
+.top h1{font-size:17px;font-weight:600;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top .face{margin-left:2px}
+main.pg{padding:14px 14px 40px;max-width:760px;margin:0 auto}
+main.pg h2{font-size:16px;font-weight:600;margin:4px 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+main.pg h2 .sub{font-weight:400}
+.grid{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+.cardi{touch-action:pan-y;-webkit-touch-callout:none} .cardi .ib{width:36px;height:36px}
+.fl .tip{right:-6px}
+.drawer{width:100%;max-width:520px;padding:16px 14px 40px}
+.modal{width:100%;max-width:560px;max-height:calc(100% - 24px);overflow-y:auto}
+.box{border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:14px;background:var(--bg)}
+.box>.hd{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:8px}
+.box .hint{color:var(--sub);font-size:12.5px;line-height:1.5;margin:-2px 0 10px}
+.kv2{display:grid;grid-template-columns:22px 76px minmax(0,1fr);gap:10px 8px;align-items:center}
+.kv2>.ic{color:var(--sub)} .kv2>b{font-weight:400;color:var(--sub);font-size:13px} .kv2 code{font-size:12px;word-break:break-all;color:var(--fg)}
+.exitc{display:flex;align-items:center;gap:12px} .exitc .flag{width:34px;height:24px;border-radius:4px} .exitc .ip{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.nodes{display:flex;flex-direction:column;margin:0 -4px}
+.node{display:flex;align-items:center;gap:10px;min-height:46px;padding:4px 8px;border-radius:10px;text-align:left;width:100%}
+.node:active{background:var(--hover)} .node.on{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.node .ck{width:20px;color:var(--accent);display:inline-flex;justify-content:center;flex:none} .node .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .ty{font-size:11px;color:var(--sub);border:1px solid var(--line);border-radius:5px;padding:0 5px;flex:none} .node .d{font-size:12.5px;min-width:56px;text-align:right;font-variant-numeric:tabular-nums;flex:none}
+.fq{display:flex;gap:8px;margin-bottom:8px} .fq input{flex:1;min-width:0}
+.addon{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line)} .addon .tx{flex:1;min-width:0} .addon .n{font-weight:500} .addon .sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{padding:22px 8px;color:var(--sub);text-align:center}
+.spin{animation:spin 1s linear infinite;display:inline-flex} @keyframes spin{to{transform:rotate(360deg)}}
+/* 实例菜单（点头像弹出的小窗） */
+body.menu{background:var(--bg)} body.menu #root{padding:8px 0 6px} body.menu .mi{height:46px;font-size:15px} body.menu .inst{min-height:54px} body.menu .insts{max-height:none}
+/* 新标签页 */
+body.ntp{min-height:100vh;display:flex;justify-content:center}
+body.ntp #root{width:100%;max-width:560px;padding:12vh 18px 30px;display:flex;flex-direction:column;align-items:center;gap:22px}
+.who{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
+.who .big{width:64px;height:64px;border-radius:50%;color:#fff;font-size:28px;font-weight:600;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 6px color-mix(in srgb,var(--c) 18%,transparent)}
+.who .nm{font-size:17px;font-weight:600;margin-top:6px;max-width:90vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.who .ex{display:flex;align-items:center;gap:4px;color:var(--sub);font-size:13px;font-variant-numeric:tabular-nums}
+body.ntp form{width:100%;position:relative} body.ntp .qi{position:absolute;left:16px;top:50%;margin-top:-9px;color:var(--sub)}
+body.ntp #q{width:100%;padding:14px 18px 14px 46px;border-radius:999px;font-size:16px;background:var(--card);border-color:transparent}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:14px 8px;width:100%}
+.tile{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--fg);text-decoration:none;font-size:12px}
+.tile .site{width:48px;height:48px;border-radius:16px;background:var(--card);box-shadow:none}
+.tile span:last-child{max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.warnline{display:flex;align-items:center;gap:4px}

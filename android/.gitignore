@@ -1,0 +1,8 @@
+.gradle/
+build/
+app/build/
+local.properties
+# mihomo 二进制由 scripts/fetch-mihomo.sh 下载并校验，不入库
+app/src/main/jniLibs/
+*.apk
+.cache/

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动图标：蓝底白面具（与桌面伴随扩展的面具图标同一造型） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#1A73E8" android:pathData="M12,1a11,11 0,1 1,0 22a11,11 0,1 1,0 -22z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M4.5,9c2.5,-1.7 5,-1.7 7.5,0c2.5,-1.7 5,-1.7 7.5,0c0,4.2 -2.5,7.5 -5,7.5c-1.250,0 -1.700,-1.250 -2.500,-1.250s-1.250,1.250 -2.500,1.250c-2.500,0 -5,-3.300 -5,-7.500z" />
+    <path android:fillColor="#1A73E8" android:pathData="M9.1,11.6m-1.1,0a1.1,1.1 0,1 1,2.2 0a1.1,1.1 0,1 1,-2.2 0" />
+    <path android:fillColor="#1A73E8" android:pathData="M14.9,11.6m-1.1,0a1.1,1.1 0,1 1,2.2 0a1.1,1.1 0,1 1,-2.2 0" />
+</vector>

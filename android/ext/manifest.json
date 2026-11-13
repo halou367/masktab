@@ -1,0 +1,43 @@
+{
+  "manifest_version": 2,
+  "name": "MaskTab",
+  "version": "0.1.0",
+  "description": "MaskTab 安卓版内置扩展：按实例分流代理、页面指纹、自动填写、实例菜单与管理页。",
+  "browser_specific_settings": {
+    "gecko": { "id": "masktab@halou367" }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
+    "proxy",
+    "tabs",
+    "cookies",
+    "storage",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "icons": {
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["fp.js", "fp-boot.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["autofill.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

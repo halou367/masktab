@@ -4,7 +4,9 @@ import { api, shownExit } from './api.js';
 import { h, icon, flag, run, delayText, delayCls, cname } from './ui.js';
 import { siteIcon, uniqSites } from './sites.js';
 
-export const letterOf = (i) => { const m = /[A-Za-z0-9]/.exec(i.name || ''); return (m ? m[0] : String(i.no)[0] || '0').toUpperCase(); };
+// 安卓版（docs/android.md）复用这个文件：手机上头像写编号（与工具栏的彩色编号圆点一致），不显示键盘快捷键。
+const MOBILE = /Android/i.test(navigator.userAgent);
+export const letterOf = (i) => { if (MOBILE) return String(i.no); const m = /[A-Za-z0-9]/.exec(i.name || ''); return (m ? m[0] : String(i.no)[0] || '0').toUpperCase(); };
 
 // 头像：实例色圆 + 首字母 + 国旗角标（+ 运行中的小绿点）。
 export function face(i, big, withDot, noFlag) {
@@ -36,7 +38,7 @@ export function menuView(st, nav) {
       on ? (ex ? [`${ex.ip}`, h('b', { class: delayCls(rt.latency) }, ' · ' + delayText(rt.latency))] : '出口探测中…') : me.kind === 'normal' ? '直连 · 不伪装' : '直连中，网站看到真实 IP'),
     rt.starting && stepLine(me, st.launchSteps),
     sites.length > 0 && h('div', { class: 'sites', title: '记住了账号的站点' }, sites.slice(0, 8).map((s) => siteIcon(s, 15)), sites.length > 8 && h('span', { class: 'more' }, `+${sites.length - 8}`))));
-  const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic), h('span', { class: 'grow' }, label), k != null && h('span', { class: 'k' }, k));
+  const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic), h('span', { class: 'grow' }, label), k != null && !(MOBILE && /^Ctrl/.test(k)) && h('span', { class: 'k' }, k));
   kids.push(h('div', { class: 'grp' },
     mi('key', '账号与密码', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),
     mi('globe', '节点与出口', nav.node, ex ? h('span', { class: 'k' }, flag(ex.country)) : ''),

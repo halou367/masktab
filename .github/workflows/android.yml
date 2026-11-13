@@ -1,0 +1,99 @@
+# 安卓版（GeckoView 内核）的构建与模拟器冒烟测试，见 docs/android.md。
+# 只在非 main 分支、且安卓相关文件有变化时运行；不发布 Release，不影响 ci.yml。
+# 产物（Actions → 本次运行 → Artifacts）：
+#   MaskTab-android-debug：调试签名的 APK（arm64-v8a + x86_64）
+#   android-smoke：模拟器截图（启动进度、新标签页、头像菜单、实例管理、节点、网页）与 logcat
+name: Android
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'android/**'
+      - 'companion/ext/ui.js'
+      - 'companion/ext/ui.css'
+      - 'companion/ext/sites.js'
+      - 'companion/ext/menu.js'
+      - 'companion/ext/instances.js'
+      - 'companion/ext/autofill.js'
+      - 'companion/ext/assets/flags/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 构建 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.9.1'
+      - name: 安卓 SDK 组件（GeckoView 160 要 compileSdk 37.2）
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-37.2" "build-tools;37.0.0" "platform-tools" > /dev/null
+          "$SDKM" --list_installed | grep -E "platforms|build-tools" || true
+      - name: 下载并校验 mihomo
+        run: bash android/scripts/fetch-mihomo.sh
+      - name: 检查内置扩展脚本语法
+        run: |
+          for f in android/ext/*.js companion/ext/menu.js companion/ext/instances.js companion/ext/autofill.js companion/ext/ui.js companion/ext/sites.js; do
+            node --check "$f" 2>/dev/null || node --input-type=module --check < "$f" || { echo "语法错误：$f"; exit 1; }
+          done
+      - name: 构建
+        working-directory: android
+        run: gradle assembleDebug --stacktrace --no-daemon
+      - name: 整理产物
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk out/MaskTab-android-debug.apk
+          ls -la out
+          unzip -l out/MaskTab-android-debug.apk | grep -E "libmihomo|assets/ext/(manifest|background|fp)" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaskTab-android-debug
+          path: out/MaskTab-android-debug.apk
+          if-no-files-found: error
+
+  smoke:
+    name: 模拟器冒烟测试（x86_64）
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: MaskTab-android-debug
+          path: out
+      - name: 打开 KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: 启动模拟器并测试
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          # mihomo 安卓二进制按 API 34 构建（ELF 里写着 for Android 34），模拟器用 35
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash android/scripts/emulator-smoke.sh out/MaskTab-android-debug.apk shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-smoke
+          path: shots
