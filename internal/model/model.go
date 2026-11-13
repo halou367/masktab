@@ -203,8 +203,9 @@ type Settings struct {
 	PathTemplate          string   `json:"pathTemplate"` // query | segment（8.4）
 	SubRefreshHours       int      `json:"subRefreshHours"`
 	IPInfoEndpoints       []string `json:"ipInfoEndpoints"`
-	TZSourceDefault       string   `json:"tzSourceDefault"`  // exit-cf | exit-direct
-	IPQOff                bool     `json:"ipqOff,omitempty"` // 不向第三方查询出口 IP 的类型和纯净度
+	TZSourceDefault       string   `json:"tzSourceDefault"`     // exit-cf | exit-direct
+	IPQOff                bool     `json:"ipqOff,omitempty"`    // 不向第三方查询出口 IP 的类型和纯净度
+	BindIface             string   `json:"bindIface,omitempty"` // 出站绑定的网卡：空 = 自动识别物理网卡（绕过 TUN）；off = 不绑定；其它 = 网卡名
 }
 
 func DefaultSettings() Settings {

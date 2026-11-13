@@ -54,6 +54,7 @@ const P = {
   home: '<path d="m3 11 9-7 9 7"/><path d="M5 9.500V20h14V9.500"/><path d="M10 20v-6h4v6"/>',
   server: '<rect x="4" y="4" width="16" height="7" rx="1.500"/><rect x="4" y="13" width="16" height="7" rx="1.500"/><path d="M8 7.500h.01M8 16.500h.01"/>',
   phone: '<rect x="7" y="2.500" width="10" height="19" rx="2"/><path d="M11 18h2"/>',
+  shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
   shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
 };
 export function icon(name, size = 18) {

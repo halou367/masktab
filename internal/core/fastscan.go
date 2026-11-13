@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/halou367/masktab/internal/netx"
 	"log"
 	"net"
 	"net/http"
@@ -286,7 +287,7 @@ func (a *App) enrich(subID string) {
 		ips = append(ips, ip)
 	}
 	sort.Strings(ips)
-	hc := &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	hc := &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{Proxy: nil, DialContext: netx.BindDialer(net.Dialer{Timeout: 8 * time.Second}).DialContext}}
 	for i := 0; i < len(ips); i += 100 {
 		end := min(i+100, len(ips))
 		body, _ := json.Marshal(ips[i:end])

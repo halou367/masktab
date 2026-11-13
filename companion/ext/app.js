@@ -81,6 +81,8 @@ function settings() {
     rowEl('undo', '启动时恢复上次的实例', pill([[true, '开'], [false, '关']], s.restoreOnStart, (v) => set('restoreOnStart', v))),
     rowEl('swap', 'ProxyIP 的 path 写法', pill([['query', '?proxyip=', '/?proxyip=值&其余参数（默认）'], ['segment', '/proxyip=', '/proxyip=值?其余参数（备选）']], s.pathTemplate, (v) => set('pathTemplate', v))),
     rowEl('home', '查出口 IP 的类型和纯净度', pill([[true, '开', '把出口 IP 发给 ip.net.coffee 查询住宅 / 机房和纯净度；结果存 7 天'], [false, '关', '不向第三方查询，面板里不显示类型和纯净度']], !s.ipqOff, (v) => set('ipqOff', !v))),
+    rowEl('shield', '不受本机 TUN / 系统代理影响', h('span', {}, pill([['', '自动绑定物理网卡', '出站和 DNS 绑定到识别出的物理网卡，本机开着的 TUN、系统代理都接管不到'], ['off', '关', '按系统路由走（本机 TUN 会接管 MaskTab 的流量）']], s.bindIface === 'off' ? 'off' : '', (v) => set('bindIface', v)),
+      h('span', { class: 'sub' }, '  ', st.net?.iface ? `当前：${st.net.iface}${st.net.ipv4 ? ' · ' + st.net.ipv4 : ''}` : '未绑定', st.net?.tun?.length ? ` · 发现 TUN：${st.net.tun.join('、')}` : ''))),
     rowEl('refresh', '订阅过期时间（小时）', h('input', { type: 'number', min: 1, value: s.subRefreshHours, style: { width: '90px' }, onchange: (ev) => set('subRefreshHours', +ev.target.value || 6) })),
     rowEl('bolt', '测速地址', h('input', { value: s.delayUrl, style: { width: '100%' }, onchange: (ev) => set('delayUrl', ev.target.value) })),
     rowEl('link', '搜索地址（%s 为关键词）', h('input', { value: s.searchUrl, style: { width: '100%' }, onchange: (ev) => set('searchUrl', ev.target.value) })),

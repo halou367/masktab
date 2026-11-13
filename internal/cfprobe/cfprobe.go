@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/halou367/masktab/internal/netx"
 	"io"
 	"net"
 	"net/http"
@@ -32,7 +33,7 @@ const SpeedHost = "speed.cloudflare.com"
 
 // dial 返回连接、TCP 握手耗时和实际连上的 IP。TCP 连上了但 TLS 握手失败时，后两项仍然有值。
 func dial(ctx context.Context, server string, port int, sni string, useTLS bool) (net.Conn, int, string, error) {
-	d := net.Dialer{Timeout: 3 * time.Second}
+	d := netx.BindDialer(net.Dialer{Timeout: 3 * time.Second})
 	start := time.Now()
 	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(strings.Trim(server, "[]"), strconv.Itoa(port)))
 	if err != nil {

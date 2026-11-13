@@ -67,3 +67,27 @@ func TestGenerateUnifiedDelay(t *testing.T) {
 		t.Fatal("配置里应当开启 unified-delay")
 	}
 }
+
+func TestGenerateBindInterface(t *testing.T) {
+	var cfg map[string]any
+	if err := json.Unmarshal(Generate(Input{ControlPort: 1, Secret: "s", Interface: "以太网"}), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["interface-name"] != "以太网" {
+		t.Fatalf("没有绑定网卡：%v", cfg["interface-name"])
+	}
+	dns, _ := cfg["dns"].(map[string]any)
+	if dns == nil || dns["enable"] != true {
+		t.Fatal("绑定网卡时必须打开 DNS 模块")
+	}
+	for _, n := range dns["nameserver"].([]any) {
+		if n == "system" {
+			t.Fatal("绑定网卡时不能用系统 DNS（可能被 TUN 劫持）")
+		}
+	}
+	var plain map[string]any
+	_ = json.Unmarshal(Generate(Input{ControlPort: 1, Secret: "s"}), &plain)
+	if _, ok := plain["interface-name"]; ok {
+		t.Fatal("没设网卡时不应出现 interface-name")
+	}
+}

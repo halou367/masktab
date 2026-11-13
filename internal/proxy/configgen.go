@@ -20,7 +20,13 @@ type Input struct {
 	Instances   []InstCfg
 	ScanPorts   []int    // 测速 / 出口探测用的入站端口（每个端口一条独立通道，可并行）
 	ScanMembers []string // 这些通道可以切到的出站（全部订阅的全部节点）
+	// Interface 非空时，全部出站与 DNS 绑定到这块物理网卡（mihomo 的 interface-name），
+	// 本机开着的 TUN / 系统代理都接管不到。DNS 同时改用直连 IP 的解析服务器，不用可能被 TUN 劫持的系统 DNS。
+	Interface string
 }
+
+// boundDNS 是绑定网卡时用的解析服务器：都写 IP，不依赖系统 DNS。
+var boundDNS = []string{"223.5.5.5", "119.29.29.29", "https://223.5.5.5/dns-query"}
 
 func Group(id string) string    { return "g-" + id }
 func Listener(id string) string { return "in-" + id }
@@ -99,16 +105,26 @@ func Generate(in Input) []byte {
 		"listeners":    listeners,
 		"rules":        []string{"MATCH,REJECT"},
 	}
-	if len(echNames) > 0 {
+	if in.Interface != "" {
+		cfg["interface-name"] = in.Interface
+	}
+	if len(echNames) > 0 || in.Interface != "" {
 		policy := map[string]any{}
 		for n := range echNames {
 			policy[n] = echDoH
 		}
-		cfg["dns"] = map[string]any{
+		dns := map[string]any{
 			"enable": true, "ipv6": false, "enhanced-mode": "redir-host",
 			"nameserver": []string{"system"}, "default-nameserver": []string{"system", "223.5.5.5", "119.29.29.29"},
-			"nameserver-policy": policy,
 		}
+		if in.Interface != "" {
+			dns["nameserver"] = boundDNS
+			dns["default-nameserver"] = []string{"223.5.5.5", "119.29.29.29"}
+		}
+		if len(policy) > 0 {
+			dns["nameserver-policy"] = policy
+		}
+		cfg["dns"] = dns
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	return b

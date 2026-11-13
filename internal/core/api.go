@@ -262,6 +262,7 @@ func (a *App) State(me string) map[string]any {
 		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version,
 		"kernel": map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": kernel.KernelVersion, "path": a.kernelExe},
 		"core":   map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
+		"net":    a.netInfoLocked(),
 	}
 }
 
@@ -725,10 +726,16 @@ func (a *App) routes(mux *http.ServeMux) {
 			return
 		}
 		a.mu.Lock()
+		bindChanged := a.Settings.BindIface != s.BindIface
 		a.Settings = s
 		a.saveLocked("settings")
 		a.bumpLocked("state", "")
 		a.mu.Unlock()
+		if bindChanged { // 换了绑定网卡：重新识别并重载 mihomo 配置
+			a.refreshBind()
+			reply(w, nil, a.applyConfig())
+			return
+		}
 		reply(w, nil, nil)
 	})
 	mux.HandleFunc("POST /api/extensions", func(w http.ResponseWriter, r *http.Request) {

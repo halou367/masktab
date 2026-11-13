@@ -105,7 +105,7 @@ func (a *App) ensureCore() {
 		_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)
 		go func() { _ = a.applyConfig() }()
 	}
-	if _, err := c.WriteConfig(proxy.Generate(proxy.Input{ControlPort: c.Port, Secret: c.Secret})); err != nil {
+	if _, err := c.WriteConfig(proxy.Generate(proxy.Input{ControlPort: c.Port, Secret: c.Secret, Interface: a.refreshBind()})); err != nil {
 		fail("写入代理配置失败：" + err.Error())
 		return
 	}

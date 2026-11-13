@@ -316,3 +316,13 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - 面板截图：用调试端口新开 `chrome-extension://<ID>/popup.html`，`Emulation.setDeviceMetricsOverride` 设成 320 宽再截。
 - 调试扩展后台：用调试端口附着到 `service_worker` 目标求值。不要从扩展页面 `import('./background.js')`，那会启动长轮询、永远不返回。
 - `pkill -f "模式"` 可能把调用它的 shell 也杀掉，模式里用 `[x]` 写法，例如 `pkill -f "[h]ttp.server 28080"`。
+
+### N-1 出站绑定物理网卡，绕过本机 TUN（2026-11-14）
+
+- 问题：浏览器只走本地 mihomo，但 mihomo 的出站按系统路由表走；本机开 TUN 后会被二次代理，出口 IP、延迟、DNS 都变。
+- 做法：自动识别物理网卡（排除虚拟网卡名、无 MAC、TUN 地址段 198.18.0.0/15 等），mihomo 全局 `interface-name` 绑定；
+  绑定时 DNS 模块打开，用 223.5.5.5 / 119.29.29.29 / DoH（按 IP），不用 `system`（TUN 的 fake-ip 会把系统 DNS 劫持成 198.18.x）。
+  核心服务自己的直连请求用 `netx.BindDialer`（Windows IP_UNICAST_IF、Linux SO_BINDTODEVICE、macOS IP_BOUND_IF）。
+- 设置 `bindIface`：空 = 自动（默认）；`off` = 不绑定；其它 = 指定网卡名。识别失败时不绑定（行为与以前一样）并写日志。
+- 风险：识别错网卡会导致全部不通（R-1 下是切断，不会泄漏）；遇到时在设置里关掉或指定网卡名。没在 Windows + TUN 上实测。
+- 回退：设置里选“关”，或删掉 `Input.Interface` 的赋值。

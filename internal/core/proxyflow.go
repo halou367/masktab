@@ -172,7 +172,7 @@ func (a *App) applyConfig() error {
 		return nil
 	}
 	a.mu.Lock()
-	in := proxy.Input{ControlPort: a.core.Port, Secret: a.core.Secret}
+	in := proxy.Input{ControlPort: a.core.Port, Secret: a.core.Secret, Interface: a.bindIfaceLocked()}
 	wants := map[string]string{}
 	for _, inst := range a.Instances {
 		r := a.rt[inst.ID]

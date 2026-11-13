@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"github.com/halou367/masktab/internal/netx"
 	"io"
 	"net"
 	"net/http"
@@ -102,7 +103,7 @@ func (a *App) ipqEnsure(ips ...string) {
 	if len(todo) == 0 {
 		return
 	}
-	hcs = append(hcs, &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}})
+	hcs = append(hcs, &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: netx.BindDialer(net.Dialer{Timeout: 8 * time.Second}).DialContext}})
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, ipqWorkers)
 	for i, ip := range todo {

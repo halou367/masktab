@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>MaskTab · 实例管理（演示）</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+/* ===== 与 companion/ext/ui.css 一致的基础变量 ===== */
+:root { --bg:#fff; --fg:#1f1f1f; --sub:#5f6368; --line:#e0e3e7; --card:#f6f8fa; --hover:#eef1f4; --accent:#1a73e8; --good:#188038; --mid:#b06000; --bad:#d93025; }
+@media (prefers-color-scheme: dark) { :root { --bg:#202124; --fg:#e8eaed; --sub:#9aa0a6; --line:#3c4043; --card:#292a2d; --hover:#35363a; --accent:#8ab4f8; --good:#81c995; --mid:#fdd663; --bad:#f28b82; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 system-ui,"Segoe UI","Microsoft YaHei",sans-serif; }
+button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; padding:0; }
+input, select, textarea { font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; outline:none; }
+input:focus, textarea:focus { border-color:var(--accent); }
+.ic { display:inline-flex; vertical-align:middle; }
+.ib { width:30px; height:30px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; color:var(--sub); transition:background .12s; flex:none; }
+.ib:hover { background:var(--hover); color:var(--fg); } .ib.on { color:var(--accent); } .ib.danger:hover { color:var(--bad); }
+.sub { color:var(--sub); font-size:12px; } .grow { flex:1; min-width:0; }
+.good { color:var(--good); } .mid { color:var(--mid); } .bad { color:var(--bad); }
+.flag { width:22px; height:15px; border-radius:2px; object-fit:cover; flex:none; box-shadow:0 0 0 1px rgba(0,0,0,.12); display:block; }
+.btn { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:9px; background:var(--accent); color:#fff; font-weight:500; }
+.btn.ghost { background:none; color:var(--fg); border:1px solid var(--line); } .btn.ghost:hover { background:var(--hover); }
+#toast { position:fixed; left:50%; bottom:16px; transform:translateX(-50%) translateY(20px); background:#323232; color:#fff; padding:8px 14px; border-radius:8px; opacity:0; transition:.2s; pointer-events:none; z-index:99; }
+#toast.show { opacity:1; transform:translateX(-50%); }
+
+/* ===== 布局 ===== */
+body { display:flex; min-height:100vh; }
+nav { width:64px; border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center; gap:6px; padding:14px 0; }
+nav .ib { width:42px; height:42px; } nav .ib.on { background:var(--hover); }
+main { flex:1; padding:20px 28px; max-width:1180px; }
+h2 { font-size:18px; font-weight:500; margin:0 0 6px; display:flex; align-items:center; gap:8px; }
+.toolbar { display:flex; align-items:center; gap:8px; margin:0 0 14px; }
+.hint { font-size:12px; color:var(--sub); margin-bottom:14px; }
+
+/* ===== 实例卡片 ===== */
+#grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; }
+.card { position:relative; border:1px solid var(--line); border-radius:14px; background:var(--card); padding:12px 12px 10px 16px; user-select:none; touch-action:none;
+  transition:transform .18s cubic-bezier(.2,.8,.2,1), box-shadow .18s, opacity .18s; overflow:hidden; cursor:default; }
+.card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--c); }
+.card:hover { box-shadow:0 2px 10px rgba(0,0,0,.07); }
+.card.pressing { transform:scale(.985); }
+.card.lifted { z-index:20; box-shadow:0 14px 34px rgba(0,0,0,.22); transform:scale(1.03) rotate(-.6deg); transition:box-shadow .18s, transform .12s; cursor:grabbing; }
+.card.ghost { opacity:.0; }
+.ph { border:2px dashed var(--accent); border-radius:14px; background:color-mix(in srgb,var(--accent) 6%,transparent); }
+.card .top { display:flex; align-items:center; gap:8px; }
+.card .no { font-weight:600; font-size:13px; color:var(--sub); }
+.card .nm { font-weight:500; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.card .st { width:8px; height:8px; border-radius:50%; background:var(--line); flex:none; }
+.card .st.run { background:var(--good); box-shadow:0 0 0 3px color-mix(in srgb,var(--good) 22%,transparent); }
+.flagwrap { position:relative; display:inline-flex; padding:3px; border-radius:5px; }
+.flagwrap:hover { background:var(--hover); }
+.sites { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 10px; min-height:30px; align-items:center; }
+.site { width:30px; height:30px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; background:var(--bg); box-shadow:0 0 0 1px var(--line); position:relative; }
+.site svg { width:18px; height:18px; display:block; }
+.site .k { position:absolute; right:-3px; bottom:-3px; width:12px; height:12px; border-radius:50%; background:var(--good); color:#fff; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 2px var(--card); }
+.site .k svg { width:8px; height:8px; }
+.site.cookie .k { background:var(--sub); }
+.site.more { font-size:11px; color:var(--sub); }
+.sites .none { font-size:12px; color:var(--sub); }
+.card .bot { display:flex; align-items:center; gap:2px; border-top:1px solid var(--line); padding-top:6px; margin-top:2px; }
+.card .bot .sub { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.card .grip { position:absolute; right:8px; top:8px; color:var(--sub); opacity:0; transition:opacity .15s; }
+.card:hover .grip { opacity:.6; }
+
+/* ===== 悬浮信息卡（国旗 / 站点） ===== */
+#tip { position:fixed; z-index:60; pointer-events:none; opacity:0; transform:translateY(4px); transition:opacity .12s, transform .12s; background:var(--bg); border:1px solid var(--line); border-radius:12px;
+  box-shadow:0 10px 28px rgba(0,0,0,.16); padding:10px 12px; font-size:12.5px; min-width:220px; max-width:320px; }
+#tip.show { opacity:1; transform:none; }
+#tip .r { display:grid; grid-template-columns:62px 1fr; gap:4px 8px; }
+#tip .r b { font-weight:400; color:var(--sub); }
+#tip .hd { display:flex; align-items:center; gap:8px; font-weight:500; margin-bottom:7px; }
+.ty { display:inline-flex; font-size:11px; border-radius:6px; padding:0 6px; }
+.ty.r { color:var(--good); background:color-mix(in srgb,var(--good) 13%,transparent); } .ty.d { color:var(--sub); background:color-mix(in srgb,var(--sub) 13%,transparent); }
+.mono { font-family:ui-monospace,Consolas,monospace; font-variant-numeric:tabular-nums; }
+
+/* ===== 详情抽屉 ===== */
+#mask { position:fixed; inset:0; background:rgba(0,0,0,.28); opacity:0; pointer-events:none; transition:opacity .2s; z-index:40; }
+#mask.show { opacity:1; pointer-events:auto; }
+#drawer { position:fixed; top:0; right:0; bottom:0; width:480px; max-width:100%; background:var(--bg); z-index:41; transform:translateX(102%); transition:transform .25s cubic-bezier(.2,.8,.2,1);
+  border-left:1px solid var(--line); display:flex; flex-direction:column; }
+#drawer.show { transform:none; }
+#drawer header { padding:16px 18px 12px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+#drawer header .bar { width:6px; align-self:stretch; border-radius:4px; }
+#drawer .body { overflow:auto; padding:12px 18px 24px; flex:1; }
+.sec h4 { font-size:12px; font-weight:500; color:var(--sub); margin:14px 0 8px; display:flex; align-items:center; gap:6px; }
+.acct { display:flex; align-items:center; gap:10px; padding:9px 10px; border:1px solid var(--line); border-radius:11px; margin-bottom:7px; }
+.acct .site { flex:none; }
+.acct .u { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.acct .pw { display:flex; align-items:center; gap:4px; white-space:nowrap; overflow:hidden; } .acct .ib { width:28px; height:28px; }
+.acct .pw span.mono { letter-spacing:1px; }
+.tag { font-size:11px; border-radius:6px; padding:0 6px; border:1px solid var(--line); color:var(--sub); white-space:nowrap; }
+.tag.on { color:var(--good); border-color:color-mix(in srgb,var(--good) 40%,transparent); }
+.ck { display:flex; align-items:center; gap:8px; padding:6px 2px; border-bottom:1px dashed var(--line); font-size:12.5px; }
+.ck:last-child { border-bottom:0; }
+.tg { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--sub); }
+.tg i { width:28px; height:16px; border-radius:99px; background:var(--line); position:relative; transition:background .15s; flex:none; }
+.tg i::after { content:''; position:absolute; left:2px; top:2px; width:12px; height:12px; border-radius:50%; background:#fff; transition:left .15s; box-shadow:0 0 0 1px rgba(0,0,0,.15); }
+.tg.on { color:var(--fg); } .tg.on i { background:var(--accent); } .tg.on i::after { left:14px; }
+
+/* ===== 弹窗（导入邮箱 / 模拟网站） ===== */
+.modal { position:fixed; inset:0; background:rgba(0,0,0,.28); display:flex; align-items:center; justify-content:center; z-index:50; pointer-events:none; opacity:0; transition:opacity .18s; }
+.modal.show { opacity:1; pointer-events:auto; }
+.modal .box { width:640px; max-width:calc(100% - 32px); max-height:calc(100% - 40px); overflow:auto; background:var(--bg); border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,.3); padding:18px 20px; transform:translateY(10px) scale(.98); transition:transform .2s; }
+.modal.show .box { transform:none; }
+.modal h3 { margin:0 0 4px; font-size:16px; font-weight:500; display:flex; align-items:center; gap:8px; }
+.field { display:flex; align-items:center; gap:8px; margin:12px 0; }
+.field label { width:76px; color:var(--sub); font-size:12.5px; flex:none; }
+textarea#emails { width:100%; min-height:150px; font-family:ui-monospace,Consolas,monospace; font-size:12.5px; }
+.pv { margin-top:10px; border:1px solid var(--line); border-radius:10px; max-height:200px; overflow:auto; }
+.pv .row { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--line); font-size:12.5px; }
+.pv .row:last-child { border-bottom:0; }
+.pv .row .e { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.foot { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; align-items:center; }
+
+/* 模拟网站窗口 */
+.browser { width:520px; max-width:calc(100% - 32px); background:var(--bg); border-radius:12px; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.3); transform:translateY(10px); transition:transform .2s; }
+.modal.show .browser { transform:none; }
+.browser .chrome { background:var(--c); padding:8px 10px; display:flex; align-items:center; gap:8px; color:#fff; }
+.browser .addr { flex:1; background:rgba(255,255,255,.92); color:#333; border-radius:99px; padding:4px 12px; font-size:12px; display:flex; align-items:center; gap:6px; }
+.browser .page { padding:22px 40px 26px; position:relative; min-height:260px; }
+.browser .page h1 { font-size:20px; font-weight:500; margin:6px 0 16px; text-align:center; }
+.browser .page input { width:100%; margin-bottom:10px; padding:9px 10px; }
+.browser .page input.filled { background:color-mix(in srgb,#fbbc04 18%,var(--bg)); transition:background .4s; }
+.af { position:absolute; left:40px; right:40px; background:var(--bg); border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.16); overflow:hidden; z-index:2; }
+.af .it { display:flex; align-items:center; gap:10px; padding:9px 12px; cursor:pointer; }
+.af .it:hover { background:var(--hover); }
+.af .ft { font-size:11.5px; color:var(--sub); padding:6px 12px; border-top:1px solid var(--line); display:flex; align-items:center; gap:6px; }
+.remind { margin-top:4px; border-radius:10px; padding:9px 11px; font-size:12.5px; display:flex; gap:8px; align-items:flex-start; background:color-mix(in srgb,var(--accent) 9%,transparent); border:1px solid color-mix(in srgb,var(--accent) 30%,transparent); }
+
+/* ===== 启动进度动画 ===== */
+#boot { position:fixed; inset:0; z-index:90; background:var(--bg); display:flex; align-items:center; justify-content:center; transition:opacity .45s, visibility .45s; }
+#boot.done { opacity:0; visibility:hidden; }
+#boot .wrap { width:440px; max-width:calc(100% - 40px); }
+#boot .logo { display:flex; align-items:center; gap:12px; margin-bottom:22px; }
+#boot .logo .m { width:46px; height:46px; border-radius:14px; background:linear-gradient(135deg,#1a73e8,#7b61ff); display:flex; align-items:center; justify-content:center; color:#fff; position:relative; }
+#boot .logo .m::after { content:''; position:absolute; inset:-5px; border-radius:18px; border:2px solid #1a73e8; opacity:.0; animation:pulse 1.6s infinite; }
+@keyframes pulse { 0% { opacity:.55; transform:scale(.9); } 100% { opacity:0; transform:scale(1.25); } }
+#boot .logo b { font-size:20px; font-weight:600; letter-spacing:.3px; }
+.step { display:flex; align-items:center; gap:12px; padding:9px 0; opacity:.38; transition:opacity .25s; }
+.step.act, .step.ok, .step.warn { opacity:1; }
+.step .ind { width:22px; height:22px; flex:none; position:relative; display:flex; align-items:center; justify-content:center; }
+.step .ind .sp { width:18px; height:18px; border-radius:50%; border:2.2px solid var(--line); }
+.step.act .ind .sp { border-color:var(--accent) transparent var(--accent) transparent; animation:spin .8s linear infinite; }
+.step.ok .ind .sp, .step.warn .ind .sp { display:none; }
+.step .ind .okm { display:none; color:#fff; width:20px; height:20px; border-radius:50%; background:var(--good); align-items:center; justify-content:center; animation:pop .3s cubic-bezier(.2,1.6,.4,1); }
+.step.ok .ind .okm { display:flex; } .step.warn .ind .okm { display:flex; background:var(--mid); }
+@keyframes spin { to { transform:rotate(360deg); } }
+@keyframes pop { from { transform:scale(.3); } to { transform:scale(1); } }
+.step .tx { flex:1; min-width:0; } .step .tx div:first-child { font-size:13.5px; } .step .tx .sub { min-height:16px; }
+.step .viz { width:120px; display:flex; justify-content:flex-end; }
+/* 网络连通动画：本机 → 网卡 → 互联网，数据点流动 */
+.net { display:flex; align-items:center; gap:0; }
+.net .nd { width:20px; height:20px; border-radius:6px; border:1.6px solid var(--sub); display:flex; align-items:center; justify-content:center; color:var(--sub); background:var(--bg); z-index:1; }
+.net .ln { width:30px; height:2px; background:var(--line); position:relative; overflow:hidden; }
+.net .ln::after { content:''; position:absolute; top:-1px; left:-8px; width:8px; height:4px; border-radius:2px; background:var(--accent); animation:flow 0.9s linear infinite; }
+.net .ln.l2::after { animation-delay:.45s; }
+.step.ok .net .ln::after { animation:none; left:0; width:100%; background:var(--good); }
+.step.ok .net .nd { border-color:var(--good); color:var(--good); }
+@keyframes flow { to { left:100%; } }
+.bars { display:flex; gap:3px; align-items:flex-end; height:18px; }
+.bars i { width:4px; border-radius:2px; background:var(--accent); animation:eq 1s ease-in-out infinite; }
+.bars i:nth-child(2){animation-delay:.15s} .bars i:nth-child(3){animation-delay:.3s} .bars i:nth-child(4){animation-delay:.45s} .bars i:nth-child(5){animation-delay:.6s}
+.step.ok .bars i { animation:none; background:var(--good); }
+@keyframes eq { 0%,100% { height:4px; } 50% { height:18px; } }
+.prog { height:4px; background:var(--line); border-radius:99px; overflow:hidden; margin-top:16px; }
+.prog i { display:block; height:100%; width:0; background:linear-gradient(90deg,#1a73e8,#7b61ff); transition:width .4s; }
+#boot .skip { margin-top:12px; font-size:12px; color:var(--sub); text-align:right; }
+#boot .skip button { color:var(--accent); }
+.shield { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; color:var(--good); background:color-mix(in srgb,var(--good) 12%,transparent); padding:1px 7px; border-radius:99px; }
+</style></head>
+<body>
+<nav id="nav"></nav>
+<main>
+  <h2><span id="hIcon"></span>实例 <span class="shield" id="shield" title="浏览器流量只走 MaskTab 自己的代理内核，并绑定物理网卡：不受本机 TUN、系统代理、环境变量影响"></span><span class="grow"></span></h2>
+  <div class="hint">长按卡片拖动可调整顺序 · 鼠标移到国旗上看出口 IP · 网站图标是这个实例记住的账号，点卡片看详情</div>
+  <div class="toolbar">
+    <button class="btn" id="bNew"></button>
+    <button class="btn ghost" id="bImport"></button>
+    <span class="grow"></span>
+    <button class="btn ghost" id="bReboot" title="重新播放启动动画"></button>
+  </div>
+  <div id="grid"></div>
+</main>
+<div id="tip"></div>
+<div id="mask"></div>
+<aside id="drawer"></aside>
+<div class="modal" id="mImport"></div>
+<div class="modal" id="mSite"></div>
+<div id="boot"></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+// ====================================================================================
+// 演示数据 & 小工具。正式版里这些来自核心服务 /api/state（见 docs/manager-demo.md 的接口草案）。
+// ====================================================================================
+const FLAGS = {"us": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAVBAMAAADGNLEtAAAALVBMVEX////GU3LZjKGzGUINM2PsxtAYPWotT3hed5enma46WoBPa46zGkMkR3Jrgp+6ntXWAAAAiklEQVQY02Nwc0lJcQMSxghgw+CRVdaWkVXWooQEGFxaPLxKWjxcGJCBn1fJExAWRAJglUuAKlEEPdyXgA1A0e62LTu9bFt2CopF3iCh9LItKE5yX5tVe31tVgmq9pL0NLcy95RQJMAAdiUQo2ifCQUoKrECY0xgw6CEBWDXLogFYBfECrBahM1JAItMTcEiMDpsAAAAAElFTkSuQmCC", "jp": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAOVBMVEW8AC3dfJPMPF7ILFHQTGvuvcjADzn////55urjkaXyzte9BTHqrbvDHEP++fr77/Hst8PmobHXZ4H4lhdsAAAAcUlEQVQ4y9XTuw6AIAyF4XKVclXf/2FNjDF0OMjgwj9/YWgLbZPRkjA4Zhc+YbB0Z8MYHp6efB7BmOgtRQyroQ6aCmEm0Q6hklBBqCXUEHoJPYRm9kUr4QkhS8gQttK70vBmHM1tRkyS/7me+Xtc+hdeTWcZDIhvaeAAAAAASUVORK5CYII=", "sg": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAPFBMVEXtKTnvRFL5srj3oajvPEryW2fuM0L////2k5vtKjr1hY30doH+6On2lJzzbXjwTlv6wcb7ztL82Nv/9/iW1qa7AAAAe0lEQVQ4y+3RORIDIQxE0Q9IaATMfv+7OnDgyINyu+NXqmo1TijOG3pSicB9DAWZwn6fAi3XCazDNoStPdx0HNRu12OHevRH2OxCSgWaPsJuA/DPD77BZCakkmrRSetimXQKeZtAv6wHl9nXrDUCA1uvSygrFswf/g58AZjBEs/aTMUHAAAAAElFTkSuQmCC", "gb": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAMAAADImI+JAAAANlBMVEX////w8vfyxcx8jbJCWpAOLHFVa5sBIWnIEC7WTGLnv8qAkLTheYpecqHx0digrMfz3+T21dqBS5WQAAAApUlEQVQoz8WTyxpFMAyEpyqOuhTv/7IntImmurAzC59kfsIIhA5wnn6iASMLgzbIT2Fk6joUaAUKBsiJm+kJ0iyuR1mQBam8Cex1dINkZ6EesSZwrR8JfdYWl7AcbCRw5ypytYmPpy6w3X6jL8HXL6PxOODgTPYEcnXmFe94cuBsdJzwpIFrRwK3WPkJLQqL2aUoUVisXjOvLizWWNyMVljrV0gz/wdhEi0lRIbcAAAAAElFTkSuQmCC", "de": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAYAgMAAAD16ldTAAAACVBMVEUAAADdAAD/zgDGIigcAAAAFUlEQVQY02NgoBEIhQPqMlfBAVWZANYST7G6bxb2AAAAAElFTkSuQmCC", "hk": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAVFBMVEXuHCX1eH794+T3mJzyU1rxRUv2io7/////+fn//v7uJC32g4j7vsH5pqn6t7rwOkL81dfzXGL/9PX0bnT3kJX7y8393N3+7e71fYLzY2nwNT35sLPTyISVAAAAmUlEQVQYGe3B13XDMBAEwEXcOyQSzJb679NugBC/9TyDbzeZjieycsIDQUmPBxyrVnwQABS7MPacPe75eWs/zcq188+ccKeTIpdcUeczkxF3JtXK1Znc3xSJBrccRawPoRlXPEaM1aOG1S024YOw+lZWXSrGXgsp+1sOTRiKdMp4SqPHSD94sqRNyAkjYZfZAHjZgme2hH/AL5JVBleYonGCAAAAAElFTkSuQmCC"};
+const PALETTE = ['#1a73e8', '#d93025', '#188038', '#f9ab00', '#9334e6', '#e8710a', '#12b5cb', '#e52592'];
+
+// 站点图标（演示用内置几种常见站点的矢量图标；正式版优先用实例自己的 favicon 缓存）
+const SITES = {
+  google:    { name: 'Google',    dom: 'accounts.google.com', svg: '<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.6 12.2c0-.8-.1-1.5-.2-2.2H12v4.2h5.9a5 5 0 0 1-2.2 3.3v2.7h3.6c2.1-1.9 3.3-4.8 3.3-8z"/><path fill="#34A853" d="M12 23c3 0 5.5-1 7.3-2.7l-3.6-2.7c-1 .7-2.2 1.1-3.7 1.1-2.9 0-5.3-1.9-6.2-4.5H2.1v2.8A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.8 14.2a6.6 6.6 0 0 1 0-4.3V7.1H2.1a11 11 0 0 0 0 9.9z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3.1.6 4.2 1.7l3.2-3.2A11 11 0 0 0 2.1 7.1l3.7 2.8C6.7 7.3 9.1 5.4 12 5.4z"/></svg>' },
+  github:    { name: 'GitHub',    dom: 'github.com', svg: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 1.5a10.5 10.5 0 0 0-3.3 20.5c.5.1.7-.2.7-.5v-1.8c-2.9.6-3.5-1.4-3.5-1.4-.5-1.2-1.2-1.5-1.2-1.5-.9-.6.1-.6.1-.6 1 .1 1.6 1.1 1.6 1.1.9 1.6 2.5 1.1 3.1.9.1-.7.4-1.1.7-1.4-2.3-.3-4.8-1.2-4.8-5.2 0-1.1.4-2.1 1.1-2.8-.1-.3-.5-1.3.1-2.8 0 0 .9-.3 2.9 1.1a10 10 0 0 1 5.3 0c2-1.4 2.9-1.1 2.9-1.1.6 1.5.2 2.5.1 2.8.7.7 1.1 1.7 1.1 2.8 0 4-2.5 4.9-4.8 5.2.4.3.7 1 .7 2v2.9c0 .3.2.6.7.5A10.5 10.5 0 0 0 12 1.5z"/></svg>' },
+  microsoft: { name: 'Microsoft', dom: 'login.live.com', svg: '<svg viewBox="0 0 24 24"><path fill="#F25022" d="M2 2h9.5v9.5H2z"/><path fill="#7FBA00" d="M12.5 2H22v9.5h-9.5z"/><path fill="#00A4EF" d="M2 12.5h9.5V22H2z"/><path fill="#FFB900" d="M12.5 12.5H22V22h-9.5z"/></svg>' },
+  x:         { name: 'X',         dom: 'x.com', svg: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M17.8 2.5h3.1l-6.8 7.8 8 10.7h-6.3l-4.9-6.4-5.6 6.4H2.2l7.3-8.3L1.8 2.5h6.4l4.4 5.9zm-1.1 16.6h1.7L7.4 4.3H5.6z"/></svg>' },
+  discord:   { name: 'Discord',   dom: 'discord.com', svg: '<svg viewBox="0 0 24 24"><path fill="#5865F2" d="M20.3 4.4A19.6 19.6 0 0 0 15.4 3l-.6 1.3a18 18 0 0 0-5.6 0L8.6 3a19.5 19.5 0 0 0-4.9 1.5C.6 9.1-.3 13.6.2 18a19.7 19.7 0 0 0 6 3l1.3-2a12.7 12.7 0 0 1-2-1l.5-.4a14 14 0 0 0 12 0l.5.4-2 1 1.3 2a19.6 19.6 0 0 0 6-3c.5-5.1-.9-9.6-3.5-13.6zM8 15.3c-1.2 0-2.1-1.1-2.1-2.4S6.8 10.5 8 10.5s2.2 1.1 2.1 2.4c0 1.3-.9 2.4-2.1 2.4zm8 0c-1.2 0-2.1-1.1-2.1-2.4s.9-2.4 2.1-2.4 2.2 1.1 2.1 2.4c0 1.3-.9 2.4-2.1 2.4z"/></svg>' },
+  telegram:  { name: 'Telegram',  dom: 'web.telegram.org', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#29A9EB"/><path fill="#fff" d="m5.4 11.7 11.3-4.4c.5-.2 1 .1.8.9l-1.9 9c-.1.6-.5.8-1.1.5l-2.9-2.2-1.4 1.4c-.2.2-.3.3-.6.3l.2-3 5.5-5c.2-.2 0-.3-.3-.1l-6.8 4.3-2.9-.9c-.6-.2-.6-.6.1-.8z"/></svg>' },
+  openai:    { name: 'ChatGPT',   dom: 'chatgpt.com', svg: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M21.6 9.8a5.7 5.7 0 0 0-.5-4.7 5.8 5.8 0 0 0-6.2-2.8A5.7 5.7 0 0 0 10.6.4a5.8 5.8 0 0 0-5.5 4 5.7 5.7 0 0 0-3.8 2.8 5.8 5.8 0 0 0 .7 6.8 5.7 5.7 0 0 0 .5 4.7 5.8 5.8 0 0 0 6.2 2.8 5.7 5.7 0 0 0 4.3 1.9 5.8 5.8 0 0 0 5.5-4 5.7 5.7 0 0 0 3.8-2.8 5.8 5.8 0 0 0-.7-6.8zm-8.6 12a4.3 4.3 0 0 1-2.7-1l.1-.1 4.6-2.6a.7.7 0 0 0 .4-.7v-6.4l1.9 1.1v5.3a4.3 4.3 0 0 1-4.3 4.4zM3.8 17.9a4.3 4.3 0 0 1-.5-2.9l.1.1 4.6 2.7c.2.1.5.1.8 0l5.6-3.2v2.2l-4.6 2.7a4.3 4.3 0 0 1-6-1.6zm-1.2-10a4.3 4.3 0 0 1 2.2-1.9v5.5c0 .3.2.6.4.7l5.6 3.2-1.9 1.1-4.6-2.6a4.3 4.3 0 0 1-1.7-6zm16 3.7-5.6-3.3 1.9-1.1 4.6 2.6a4.3 4.3 0 0 1-.6 7.8v-5.4a.8.8 0 0 0-.3-.6zm1.9-2.9-.1-.1-4.6-2.7a.8.8 0 0 0-.8 0L9.4 9.2V7l4.6-2.7a4.3 4.3 0 0 1 6.5 4.4zM8.6 12.6l-1.9-1.1V6.2a4.3 4.3 0 0 1 7.1-3.3l-.1.1-4.6 2.6a.8.8 0 0 0-.4.7zm1-2.2 2.5-1.4 2.5 1.4v2.9l-2.5 1.4-2.5-1.4z"/></svg>' },
+  apple:     { name: 'Apple',     dom: 'appleid.apple.com', svg: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M16.4 12.6c0-2.6 2.1-3.8 2.2-3.9a4.8 4.8 0 0 0-3.8-2c-1.6-.2-3.1.9-3.9.9s-2-.9-3.4-.9a5 5 0 0 0-4.2 2.6c-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6s1.8-.8 3.3-.8 2 .8 3.4.8 2.2-1.3 3.1-2.5a11 11 0 0 0 1.4-2.9 4.5 4.5 0 0 1-2.6-4.1zM13.8 5a4.4 4.4 0 0 0 1-3.2 4.6 4.6 0 0 0-3 1.5 4.2 4.2 0 0 0-1 3.1 3.8 3.8 0 0 0 3-1.4z"/></svg>' },
+};
+// 不在内置表里的站点：取域名首字母画一个色块（正式版用 favicon）
+function letterSite(dom) {
+  const n = dom.replace(/^www\./, '').split('.')[0];
+  let hsh = 0; for (const ch of n) hsh = (hsh * 31 + ch.charCodeAt(0)) >>> 0;
+  const col = PALETTE[hsh % PALETTE.length];
+  return { name: n[0].toUpperCase() + n.slice(1), dom, svg: `<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="${col}"/><text x="12" y="16.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="system-ui,sans-serif">${n[0].toUpperCase()}</text></svg>` };
+}
+const siteOf = (key) => SITES[key] || letterSite(key);
+// 邮箱域名 → 对应的账号站点（导入邮箱时自动给实例记上这个邮箱本身的登录）
+const MAIL_SITE = { 'gmail.com': 'google', 'googlemail.com': 'google', 'outlook.com': 'microsoft', 'hotmail.com': 'microsoft', 'live.com': 'microsoft', 'icloud.com': 'apple', 'me.com': 'apple' };
+
+const EXITS = [
+  { cc: 'us', ip: '104.28.212.47', org: 'Cloudflare WARP', city: 'Los Angeles', tz: 'America/Los_Angeles', type: '机房', pure: 82, lat: 168 },
+  { cc: 'jp', ip: '45.76.219.103', org: 'Vultr Holdings', city: 'Tokyo', tz: 'Asia/Tokyo', type: '机房', pure: 74, lat: 52 },
+  { cc: 'sg', ip: '139.180.141.22', org: 'Singtel Fibre', city: 'Singapore', tz: 'Asia/Singapore', type: '住宅', pure: 93, lat: 88 },
+  { cc: 'gb', ip: '81.92.204.61', org: 'BT Broadband', city: 'London', tz: 'Europe/London', type: '住宅', pure: 90, lat: 231 },
+  { cc: 'de', ip: '5.75.163.9', org: 'Hetzner Online', city: 'Falkenstein', tz: 'Europe/Berlin', type: '机房', pure: 61, lat: 246 },
+  { cc: 'hk', ip: '103.151.172.18', org: 'HKBN', city: 'Hong Kong', tz: 'Asia/Hong_Kong', type: '住宅', pure: 88, lat: 39 },
+];
+
+const now = Date.now(), day = 864e5;
+let state = load() || seed();
+function seed() {
+  const mk = (no, name, color, exit, running, accts, cookies) => ({ id: 'i' + no, no, name, color, exit, running, accounts: accts, cookies });
+  const A = (site, user, pw, auto = true, ago = 1) => ({ site, user, pw, auto, at: now - ago * day });
+  return { defaultPw: 'Mask#2026', seq: 9, instances: [
+    mk(0, '普通窗口', '#5f6368', null, true, [], [{ dom: 'bing.com', n: 6 }]),
+    mk(1, 'alice.work@gmail.com', '#1a73e8', 0, true,
+      [A('google', 'alice.work@gmail.com', 'Mask#2026'), A('github', 'alice-dev', 'Mask#2026'), A('openai', 'alice.work@gmail.com', 'Mask#2026', true, 3), A('vorflux.com', 'alice.work@gmail.com', 'Mask#2026', true, 5)],
+      [{ dom: 'google.com', n: 31 }, { dom: 'github.com', n: 9 }, { dom: 'chatgpt.com', n: 14 }, { dom: 'vorflux.com', n: 4 }, { dom: 'x.com', n: 7 }]),
+    mk(2, 'bob.shop@outlook.com', '#188038', 2, false,
+      [A('microsoft', 'bob.shop@outlook.com', 'Mask#2026'), A('discord', 'bob_shop', 'Mask#2026', false, 8), A('x', '@bobshop', 'Mask#2026', true, 2)],
+      [{ dom: 'live.com', n: 12 }, { dom: 'discord.com', n: 6 }, { dom: 'x.com', n: 11 }, { dom: 'telegram.org', n: 3 }]),
+    mk(3, 'carol.test@gmail.com', '#9334e6', 1, false,
+      [A('google', 'carol.test@gmail.com', 'Mask#2026'), A('telegram', '+81 90-xxxx', '', true, 4)],
+      [{ dom: 'google.com', n: 28 }, { dom: 'telegram.org', n: 5 }]),
+    mk(4, 'dave.ads@gmail.com', '#e8710a', 3, true,
+      [A('google', 'dave.ads@gmail.com', 'Mask#2026'), A('github', 'dave-ads', 'Mask#2026'), A('x', '@dave_ads', 'Mask#2026'), A('discord', 'dave#1024', 'Mask#2026'), A('apple', 'dave.ads@gmail.com', 'Mask#2026'), A('openai', 'dave.ads@gmail.com', 'Mask#2026')],
+      [{ dom: 'google.com', n: 40 }, { dom: 'github.com', n: 8 }, { dom: 'x.com', n: 10 }, { dom: 'discord.com', n: 7 }, { dom: 'apple.com', n: 9 }, { dom: 'chatgpt.com', n: 12 }]),
+    mk(5, '', '#12b5cb', 5, false, [], []),
+  ] };
+}
+function save() { try { localStorage.setItem('masktab-demo', JSON.stringify(state)); } catch {} }
+function load() { try { return JSON.parse(localStorage.getItem('masktab-demo')); } catch { return null; } }
+
+// 与 ui.js 相同的 h()：外来字符串一律走 textContent
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'style' && typeof v === 'object') { for (const [sk, sv] of Object.entries(v)) sk.startsWith('--') ? el.style.setProperty(sk, sv) : (el.style[sk] = sv); }
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'value' || k === 'checked') el[k] = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat(Infinity)) { if (kid == null || kid === false) continue; el.append(kid instanceof Node ? kid : document.createTextNode(String(kid))); }
+  return el;
+}
+const P = {
+  layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>', list: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
+  puzzle: '<path d="M9 4h4v3a2 2 0 1 0 4 0h3v5h-3a2 2 0 1 0 0 4h3v4H9v-3a2 2 0 1 0-4 0H4V9h5z"/>', gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+  mask: '<path d="M3 8c3-2 6-2 9 0 3-2 6-2 9 0 0 5-3 9-6 9-1.5 0-2-1.5-3-1.5S10.5 17 9 17c-3 0-6-4-6-9z"/><circle cx="8.5" cy="11" r="1.2"/><circle cx="15.5" cy="11" r="1.2"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>', play: '<path d="M7 4v16l13-8z"/>', stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
+  refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>', trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>', grip: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>', cookie: '<path d="M21 12a9 9 0 1 1-9-9 3 3 0 0 0 4 4 3 3 0 0 0 5 5z"/><path d="M8.5 9.5h.01M15.5 15.5h.01M9.5 15h.01M13 12h.01"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>', check: '<path d="m5 12 5 5 9-10"/>', shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
+  pc: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>', nic: '<path d="M4 10h16v8H4z"/><path d="M8 10V6h8v4M8 14h.01M12 14h.01M16 14h.01"/>', globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-3 3-3 15 0 18M12 3c3 3 3 15 0 18"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', open: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>', lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  warn: '<path d="M12 3 2 20h20z"/><path d="M12 10v5M12 17.5v.5"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+};
+function icon(n, s = 18, sw = 1.8) { const e = document.createElement('span'); e.className = 'ic'; e.innerHTML = `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${P[n] || ''}</svg>`; return e; }
+function ibtn(n, title, fn, cls = '') { return h('button', { class: 'ib ' + cls, title, 'aria-label': title, onclick: (e) => { e.stopPropagation(); fn(e); } }, icon(n)); }
+function flagImg(cc) { return h('img', { class: 'flag', src: FLAGS[cc] || '', alt: cc.toUpperCase() }); }
+function siteIcon(key, extra = '') { const s = siteOf(key); const e = h('span', { class: 'site ' + extra }); e.insertAdjacentHTML('afterbegin', s.svg); return e; }
+function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.className = 'show'; clearTimeout(t._t); t._t = setTimeout(() => (t.className = ''), 2400); }
+const ago = (t) => { const d = Math.round((Date.now() - t) / day); return d <= 0 ? '今天' : d + ' 天前'; };
+const domMatch = (key, dom) => { const s = siteOf(key); const base = s.dom.split('.').slice(-2).join('.'); return dom === base || dom.endsWith('.' + base) || base.endsWith(dom); };
+
+// ====================================================================================
+// 悬浮信息卡
+// ====================================================================================
+const tip = document.getElementById('tip');
+function showTip(anchor, content) {
+  tip.replaceChildren(content); tip.classList.add('show');
+  const r = anchor.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = Math.min(window.innerWidth - tw - 8, Math.max(8, r.left + r.width / 2 - tw / 2)), y = r.bottom + 8;
+  if (y + th > window.innerHeight - 8) y = r.top - th - 8;
+  tip.style.left = x + 'px'; tip.style.top = y + 'px';
+}
+function hideTip() { tip.classList.remove('show'); }
+function hoverTip(el, make) { el.addEventListener('pointerenter', () => !drag && showTip(el, make())); el.addEventListener('pointerleave', hideTip); }
+function exitTip(e) {
+  return h('div', {}, h('div', { class: 'hd' }, flagImg(e.cc), e.city, h('span', { class: 'ty ' + (e.type === '住宅' ? 'r' : 'd') }, e.type)),
+    h('div', { class: 'r' }, h('b', {}, '出口 IP'), h('span', { class: 'mono' }, e.ip), h('b', {}, '运营商'), h('span', {}, e.org), h('b', {}, '时区'), h('span', {}, e.tz),
+      h('b', {}, '纯净度'), h('span', { class: e.pure >= 85 ? 'good' : e.pure >= 70 ? 'mid' : 'bad' }, e.pure + ' / 100'), h('b', {}, '延迟'), h('span', { class: e.lat < 200 ? 'good' : 'mid' }, e.lat + ' ms')));
+}
+function acctTip(a) {
+  const s = siteOf(a.site);
+  return h('div', {}, h('div', { class: 'hd' }, siteIcon(a.site), s.name),
+    h('div', { class: 'r' }, h('b', {}, '账号'), h('span', {}, a.user), h('b', {}, '密码'), h('span', {}, a.pw ? (a.pw === state.defaultPw ? '已记住（默认密码）' : '已记住') : '未保存（只有登录状态）'),
+      h('b', {}, '自动填写'), h('span', {}, a.auto ? '掉线后自动填' : '关'), h('b', {}, '最近登录'), h('span', {}, ago(a.at))));
+}
+
+// ====================================================================================
+// 实例卡片
+// ====================================================================================
+const grid = document.getElementById('grid');
+function card(i) {
+  const e = i.exit != null ? EXITS[i.exit] : null;
+  const shown = i.accounts.slice(0, 7), rest = i.accounts.length - shown.length;
+  const el = h('div', { class: 'card', 'data-id': i.id, style: { '--c': i.color }, onclick: () => !justDragged && openDrawer(i.id) },
+    h('div', { class: 'top' },
+      h('span', { class: 'st' + (i.running ? ' run' : ''), title: i.running ? '运行中' : '休眠' }),
+      h('span', { class: 'no' }, '#' + i.no),
+      h('span', { class: 'nm', title: i.name }, i.name || (i.no === 0 ? '普通窗口' : '未命名')),
+      e ? (() => { const f = h('span', { class: 'flagwrap' }, flagImg(e.cc)); hoverTip(f, () => exitTip(e)); return f; })() : h('span', { class: 'sub', title: '直连（普通窗口）' }, '直连')),
+    h('div', { class: 'sites' }, shown.length ? shown.map((a) => { const s = siteIcon(a.site, a.pw ? '' : 'cookie'); s.append(h('span', { class: 'k' }, icon(a.pw ? 'key' : 'cookie', 8, 3))); hoverTip(s, () => acctTip(a)); return s; })
+      : h('span', { class: 'none' }, i.no === 0 ? '普通窗口不记录账号' : '还没有记住的账号'), rest > 0 && h('span', { class: 'site more' }, '+' + rest)),
+    h('div', { class: 'bot' },
+      h('span', { class: 'sub' }, `${i.accounts.filter((a) => a.pw).length} 个密码 · ${i.cookies.reduce((s, c) => s + c.n, 0)} 个 Cookie`),
+      i.running ? [ibtn('refresh', '重启', () => toast(`#${i.no} 正在重启…`)), ibtn('stop', '关闭', () => { i.running = false; save(); render(); })]
+        : ibtn('play', '打开', () => { i.running = true; save(); render(); toast(`#${i.no} 已打开`); }, 'on'),
+      i.no !== 0 && ibtn('trash', '删除实例', () => { if (confirm(`删除 #${i.no} 及其全部数据？`)) { state.instances = state.instances.filter((x) => x !== i); save(); render(); } }, 'danger')));
+  attachDrag(el);
+  return el;
+}
+function render() { grid.replaceChildren(...state.instances.map(card)); }
+
+// ====================================================================================
+// 长按拖动排序（鼠标、触屏都用 Pointer 事件；长按 350ms 才进入拖动，短按仍是点击）
+// ====================================================================================
+let drag = null, justDragged = false;
+function attachDrag(el) {
+  el.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0 || ev.target.closest('button,.flagwrap')) return;
+    const sx = ev.clientX, sy = ev.clientY;
+    el.classList.add('pressing');
+    const timer = setTimeout(() => startDrag(el, ev.pointerId, sx, sy), 350);
+    const cancel = (e2) => { if (e2.type === 'pointermove' && Math.hypot(e2.clientX - sx, e2.clientY - sy) < 6) return; clearTimeout(timer); el.classList.remove('pressing'); off(); };
+    const off = () => { removeEventListener('pointermove', cancel); removeEventListener('pointerup', cancel); };
+    addEventListener('pointermove', cancel); addEventListener('pointerup', cancel);
+  });
+}
+function startDrag(el, pid, sx, sy) {
+  hideTip();
+  const r = el.getBoundingClientRect();
+  const ph = h('div', { class: 'ph', style: { height: r.height + 'px' } });
+  el.after(ph);
+  el.classList.remove('pressing'); el.classList.add('lifted');
+  Object.assign(el.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', margin: 0 });
+  document.body.append(el);
+  drag = { el, ph, dx: sx - r.left, dy: sy - r.top };
+  if (navigator.vibrate) navigator.vibrate(15);
+  const move = (e) => {
+    el.style.left = e.clientX - drag.dx + 'px'; el.style.top = e.clientY - drag.dy + 'px';
+    const cards = [...grid.querySelectorAll('.card')];
+    // 找离指针最近的卡片，按左右半边决定插到它前面还是后面（FLIP 动画让其它卡片平滑让位）
+    let best = null, bd = 1e9;
+    for (const c of cards) { const b = c.getBoundingClientRect(); const d = Math.hypot(e.clientX - (b.left + b.width / 2), e.clientY - (b.top + b.height / 2)); if (d < bd) { bd = d; best = c; } }
+    if (!best) return;
+    const b = best.getBoundingClientRect();
+    const before = e.clientX < b.left + b.width / 2;
+    const target = before ? best : best.nextSibling;
+    if (target === ph || (before ? best.previousSibling === ph : best.nextSibling === ph)) return;
+    const first = new Map(cards.map((c) => [c, c.getBoundingClientRect()]));
+    grid.insertBefore(ph, target);
+    for (const c of cards) { const a = first.get(c), z = c.getBoundingClientRect(); const dx = a.left - z.left, dy = a.top - z.top; if (dx || dy) { c.style.transition = 'none'; c.style.transform = `translate(${dx}px,${dy}px)`; requestAnimationFrame(() => { c.style.transition = ''; c.style.transform = ''; }); } }
+  };
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+    const pr = ph.getBoundingClientRect();
+    el.style.transition = 'left .18s, top .18s, transform .18s, box-shadow .18s';
+    el.style.left = pr.left + 'px'; el.style.top = pr.top + 'px'; el.classList.remove('lifted');
+    setTimeout(() => {
+      ph.replaceWith(el); el.removeAttribute('style'); el.style.setProperty('--c', state.instances.find((x) => x.id === el.dataset.id).color);
+      const ids = [...grid.querySelectorAll('.card')].map((c) => c.dataset.id);
+      state.instances.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); save();
+      drag = null; justDragged = true; setTimeout(() => (justDragged = false), 50);
+      toast('顺序已保存');
+    }, 190);
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
+}
+
+// ====================================================================================
+// 详情抽屉：记住的账号（密码 / 自动填写）、Cookie 按站点
+// ====================================================================================
+const drawer = document.getElementById('drawer'), mask = document.getElementById('mask');
+mask.onclick = () => closeDrawer();
+function closeDrawer() { drawer.classList.remove('show'); mask.classList.remove('show'); }
+function openDrawer(id) {
+  const i = state.instances.find((x) => x.id === id); if (!i) return;
+  const e = i.exit != null ? EXITS[i.exit] : null;
+  const acct = (a) => {
+    let shown = false;
+    const pwSpan = h('span', { class: 'mono' }, a.pw ? '••••••••' : '—');
+    return h('div', { class: 'acct' }, siteIcon(a.site),
+      h('div', { class: 'grow' }, h('div', { class: 'u' }, a.user), h('div', { class: 'sub pw' }, siteOf(a.site).name, ' · ', pwSpan, a.pw === state.defaultPw && h('span', { class: 'tag' }, '默认密码'))),
+      a.pw && ibtn('eye', '显示 / 隐藏密码（正式版需先验证 Windows 账户）', () => { shown = !shown; pwSpan.textContent = shown ? a.pw : '••••••••'; }),
+      a.pw && ibtn('copy', '复制密码', () => { navigator.clipboard?.writeText(a.pw); toast('密码已复制，30 秒后清空剪贴板'); }),
+      h('button', { class: 'tg' + (a.auto ? ' on' : ''), title: '掉线 / 退出登录后，打开登录页自动填入并提交', onclick: (ev) => { a.auto = !a.auto; ev.currentTarget.classList.toggle('on', a.auto); save(); render(); } }, h('i'), '自动'),
+      ibtn('trash', '删除这条记录', () => { i.accounts = i.accounts.filter((x) => x !== a); save(); render(); openDrawer(i.id); }, 'danger'));
+  };
+  drawer.replaceChildren(
+    h('header', {}, h('span', { class: 'bar', style: { background: i.color } }),
+      h('div', { class: 'grow' }, h('div', { style: { fontWeight: 600, fontSize: '15px' } }, `#${i.no} `, i.name || '未命名'),
+        h('div', { class: 'sub' }, e ? `${e.city} · ${e.ip}` : '直连', ' · ', i.running ? '运行中' : '休眠')),
+      ibtn('open', '打开一个模拟网站，看自动填写 / 注册提醒', () => openSite(i)), ibtn('x', '关闭', closeDrawer)),
+    h('div', { class: 'body' },
+      h('div', { class: 'sec' }, h('h4', {}, icon('key', 14), `记住的账号（${i.accounts.length}）`),
+        i.accounts.length ? i.accounts.map(acct) : h('div', { class: 'sub' }, '还没有。在这个实例里登录任何网站时，MaskTab 会问要不要记住。')),
+      h('div', { class: 'sec' }, h('h4', {}, icon('cookie', 14), `Cookie（按站点，${i.cookies.length} 个站点）`),
+        i.cookies.length ? i.cookies.map((c) => { const key = Object.keys(SITES).find((k) => domMatch(k, c.dom)) || c.dom;
+          return h('div', { class: 'ck' }, siteIcon(key), h('span', { class: 'grow' }, c.dom), h('span', { class: 'sub' }, c.n + ' 个'),
+            ibtn('copy', '导出这个站点的 Cookie（JSON）', () => toast(`已复制 ${c.dom} 的 ${c.n} 个 Cookie`)),
+            ibtn('trash', '清除这个站点的 Cookie（相当于退出登录）', () => { i.cookies = i.cookies.filter((x) => x !== c); save(); render(); openDrawer(i.id); }, 'danger')); })
+          : h('div', { class: 'sub' }, '没有 Cookie。')),
+      h('div', { class: 'sec' }, h('h4', {}, icon('info', 14), '说明'),
+        h('div', { class: 'sub' }, '密码只存在本机，按实例分开加密（Windows 用 DPAPI）；实例之间互相看不到。图标右下角：钥匙 = 记住了账号密码，饼干 = 只有登录状态（Cookie）。'))));
+  drawer.classList.add('show'); mask.classList.add('show');
+}
+
+// ====================================================================================
+// 批量导入邮箱 → 每个邮箱一个实例
+// ====================================================================================
+const mImport = document.getElementById('mImport');
+function parseEmails(text, def) {
+  const seen = new Set(state.instances.map((i) => i.name.toLowerCase()));
+  const out = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim(); if (!line || line.startsWith('#')) continue;
+    // 支持：邮箱 / 邮箱----密码 / 邮箱:密码 / 邮箱|密码 / 邮箱,密码 / 邮箱<空格或Tab>密码
+    const m = /^([^\s,|:;]+@[^\s,|:;]+\.[a-z]{2,})(?:\s*(?:-{2,}|[,|:;\t ])\s*(.+))?$/i.exec(line);
+    if (!m) { out.push({ raw: line, err: '不是邮箱' }); continue; }
+    const email = m[1].toLowerCase(), pw = (m[2] || '').trim();
+    if (seen.has(email)) { out.push({ raw: line, email, err: '已存在' }); continue; }
+    seen.add(email);
+    out.push({ email, pw: pw || def, own: !!pw });
+  }
+  return out;
+}
+function openImport() {
+  const pwIn = h('input', { type: 'password', value: state.defaultPw, style: { flex: 1 }, placeholder: '所有邮箱共用的默认密码' });
+  const ta = h('textarea', { id: 'emails', placeholder: '每行一个邮箱，可以带密码；没带密码的用上面的默认密码：\nalice@gmail.com\nbob@outlook.com----Abc123!\ncarol@gmail.com:Pass#9\ndave@proton.me' });
+  const pv = h('div', { class: 'pv', style: { display: 'none' } });
+  const cnt = h('span', { class: 'sub grow' });
+  const go = h('button', { class: 'btn' }, icon('plus', 16), '创建实例');
+  const upd = () => {
+    const rows = parseEmails(ta.value, pwIn.value);
+    const ok = rows.filter((r) => !r.err);
+    pv.style.display = rows.length ? '' : 'none';
+    pv.replaceChildren(...rows.map((r, k) => h('div', { class: 'row' },
+      r.err ? icon('warn', 15) : h('span', { class: 'dot', style: { width: '10px', height: '10px', borderRadius: '50%', background: PALETTE[(state.instances.length + k) % PALETTE.length], flex: 'none' } }),
+      h('span', { class: 'e' }, r.email || r.raw),
+      r.err ? h('span', { class: 'bad sub' }, r.err) : [siteIcon(MAIL_SITE[r.email.split('@')[1]] || r.email.split('@')[1]), h('span', { class: 'tag' + (r.own ? '' : ' on') }, r.own ? '自带密码' : '默认密码')])));
+    cnt.textContent = rows.length ? `将创建 ${ok.length} 个实例${rows.length - ok.length ? `，跳过 ${rows.length - ok.length} 行` : ''}` : '';
+    go.disabled = !ok.length; go.style.opacity = ok.length ? 1 : .5;
+  };
+  ta.oninput = upd; pwIn.oninput = upd;
+  go.onclick = () => {
+    const rows = parseEmails(ta.value, pwIn.value).filter((r) => !r.err); if (!rows.length) return;
+    state.defaultPw = pwIn.value;
+    let k = 0;
+    for (const r of rows) {
+      const no = ++state.seq, site = MAIL_SITE[r.email.split('@')[1]] || r.email.split('@')[1];
+      state.instances.push({ id: 'i' + no + '-' + Date.now(), no, name: r.email, color: PALETTE[(state.instances.length) % PALETTE.length], exit: (no + k++) % EXITS.length, running: false,
+        accounts: [{ site, user: r.email, pw: r.pw, auto: true, at: Date.now() }], cookies: [], mail: r.email });
+    }
+    save(); render(); close(mImport); toast(`已创建 ${rows.length} 个实例，每个都记住了自己的邮箱和密码`);
+    // 新卡片依次弹入
+    [...grid.querySelectorAll('.card')].slice(-rows.length).forEach((c, n) => { c.animate([{ opacity: 0, transform: 'translateY(12px) scale(.96)' }, { opacity: 1, transform: 'none' }], { duration: 320, delay: n * 60, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' }); });
+  };
+  mImport.replaceChildren(h('div', { class: 'box' },
+    h('h3', {}, icon('mail'), '导入邮箱，一个邮箱一个实例'),
+    h('div', { class: 'sub' }, '实例用邮箱命名；登录时自动填这个邮箱和密码；在这个实例里注册新网站时，提醒你用同一个默认密码。'),
+    h('div', { class: 'field' }, h('label', {}, '默认密码'), pwIn, ibtn('eye', '显示 / 隐藏', () => (pwIn.type = pwIn.type === 'password' ? 'text' : 'password'))),
+    ta, pv,
+    h('div', { class: 'foot' }, cnt, h('button', { class: 'btn ghost', onclick: () => close(mImport) }, '取消'), go)));
+  upd(); show(mImport); setTimeout(() => ta.focus(), 50);
+}
+function show(m) { m.classList.add('show'); m.onclick = (e) => e.target === m && close(m); }
+function close(m) { m.classList.remove('show'); }
+
+// ====================================================================================
+// 模拟网站：演示“掉线后自动填写”和“注册时提醒默认密码”
+// ====================================================================================
+const mSite = document.getElementById('mSite');
+function openSite(i, mode = 'login') {
+  const mainAcct = i.accounts[0];
+  const domain = mode === 'login' ? (mainAcct ? siteOf(mainAcct.site).dom : 'example.com') : 'newsite.io';
+  const user = h('input', { placeholder: mode === 'login' ? '邮箱或用户名' : '邮箱', autocomplete: 'off' });
+  const pass = h('input', { type: 'password', placeholder: '密码', autocomplete: 'off' });
+  const page = h('div', { class: 'page' });
+  const fill = (a) => { user.value = a.user; pass.value = a.pw; user.classList.add('filled'); pass.classList.add('filled'); page.querySelector('.af')?.remove(); toast('已自动填写，正式版会接着点“登录”'); };
+  if (mode === 'login') {
+    const cands = i.accounts.filter((a) => a.pw && a.site === mainAcct.site);
+    page.append(h('h1', {}, mainAcct ? siteOf(mainAcct.site).name + ' 登录' : '登录'), user, pass, h('button', { class: 'btn', style: { width: '100%', justifyContent: 'center' } }, '登录'));
+    if (cands.length) {
+      const af = h('div', { class: 'af', style: { top: '102px' } },
+        cands.slice(0, 3).map((a) => h('div', { class: 'it', onclick: () => fill(a) }, siteIcon(a.site), h('div', { class: 'grow' }, h('div', {}, a.user), h('div', { class: 'sub' }, '••••••••', a.pw === state.defaultPw ? ' · 默认密码' : '')))),
+        h('div', { class: 'ft' }, icon('lock', 13), `MaskTab · #${i.no} 记住的账号，只在这个实例里出现`));
+      page.append(af);
+      if (mainAcct?.auto) setTimeout(() => mSite.classList.contains('show') && !user.value && fill(cands[0]), 1600);
+    }
+  } else {
+    const def = state.defaultPw;
+    page.append(h('h1', {}, '注册 newsite.io'), user, pass,
+      h('div', { class: 'remind' }, icon('key', 16), h('div', { class: 'grow' }, `这个实例是 ${i.name || '#' + i.no}。建议用同一个邮箱和默认密码注册，以后登录自动填。`,
+        h('div', { style: { marginTop: '6px' } }, h('button', { class: 'btn', style: { padding: '4px 10px', fontSize: '12px' }, onclick: () => { user.value = i.mail || i.name || ''; pass.value = def; user.classList.add('filled'); pass.classList.add('filled');
+          i.accounts.push({ site: 'newsite.io', user: user.value, pw: def, auto: true, at: Date.now() }); save(); render(); toast('已填入并记住：newsite.io'); } }, '填入邮箱和默认密码')))),
+      h('button', { class: 'btn', style: { width: '100%', justifyContent: 'center', marginTop: '10px' } }, '注册'));
+  }
+  mSite.replaceChildren(h('div', { class: 'browser', style: { '--c': i.color } },
+    h('div', { class: 'chrome' }, h('b', {}, '#' + i.no), h('span', { class: 'addr' }, icon('lock', 12), 'https://' + domain + (mode === 'login' ? '/login' : '/signup')),
+      h('button', { class: 'ib', style: { color: '#fff' }, title: mode === 'login' ? '换成注册页' : '换成登录页', onclick: () => openSite(i, mode === 'login' ? 'signup' : 'login') }, icon('refresh')),
+      h('button', { class: 'ib', style: { color: '#fff' }, title: '关闭', onclick: () => close(mSite) }, icon('x'))), page));
+  show(mSite);
+}
+
+// ====================================================================================
+// 启动进度：组件 → 代理内核 → 网卡隔离（绕过 TUN / 系统代理）→ 网络连通 → 订阅 → 测速 → 恢复实例
+// ====================================================================================
+function netViz() { return h('div', { class: 'net' }, h('span', { class: 'nd' }, icon('pc', 12)), h('span', { class: 'ln' }), h('span', { class: 'nd' }, icon('nic', 12)), h('span', { class: 'ln l2' }), h('span', { class: 'nd' }, icon('globe', 12))); }
+function barsViz() { return h('div', { class: 'bars' }, h('i'), h('i'), h('i'), h('i'), h('i')); }
+const STEPS = [
+  { t: '检查浏览器内核与代理内核', ok: 'fingerprint-chromium 148 · mihomo 1.19', ms: 600 },
+  { t: '启动代理内核', ok: '本地 127.0.0.1 · 控制端口已就绪', ms: 700 },
+  { t: '锁定物理网卡，隔离 TUN 与系统代理', run: '发现 TUN 网卡“Meta”，已排除', ok: '绑定“以太网”· 系统代理、TUN 均不经过', ms: 1100, viz: netViz },
+  { t: '网络连通检测', run: '直连 Cloudflare trace…', ok: '连通 · 37 ms · 公网 IP 归属 CN', ms: 1300, viz: netViz },
+  { t: '刷新订阅', ok: '2 个订阅 · 46 个节点', ms: 900 },
+  { t: '节点测速', run: '已测 18 / 46…', ok: '最快 39 ms（HK）', ms: 1500, viz: barsViz },
+  { t: '恢复上次的实例', ok: '#1、#4 已打开', ms: 700 },
+];
+function runBoot() {
+  const boot = document.getElementById('boot');
+  const bar = h('i');
+  const rows = STEPS.map((s) => { const sub = h('div', { class: 'sub' }); const el = h('div', { class: 'step' }, h('span', { class: 'ind' }, h('span', { class: 'sp' }), h('span', { class: 'okm' }, icon('check', 13, 3))), h('div', { class: 'tx' }, h('div', {}, s.t), sub), h('div', { class: 'viz' }, s.viz ? s.viz() : null)); return { el, sub, s }; });
+  let cancelled = false;
+  const finish = () => { cancelled = true; boot.classList.add('done'); };
+  boot.className = '';
+  boot.replaceChildren(h('div', { class: 'wrap' },
+    h('div', { class: 'logo' }, h('span', { class: 'm' }, icon('mask', 26)), h('div', {}, h('b', {}, 'MaskTab'), h('div', { class: 'sub' }, '正在准备…'))),
+    rows.map((r) => r.el), h('div', { class: 'prog' }, bar), h('div', { class: 'skip' }, h('button', { onclick: finish }, '跳过动画'))));
+  (async () => {
+    for (let k = 0; k < rows.length; k++) {
+      if (cancelled) return;
+      const { el, sub, s } = rows[k];
+      el.classList.add('act'); sub.textContent = s.run || '…';
+      await new Promise((r) => setTimeout(r, s.ms));
+      el.classList.remove('act'); el.classList.add('ok'); sub.textContent = s.ok;
+      bar.style.width = ((k + 1) / rows.length * 100) + '%';
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    finish();
+  })();
+}
+
+// ====================================================================================
+// 初始化
+// ====================================================================================
+document.getElementById('nav').append(...[['layers', '实例', true], ['list', '订阅与出口'], ['puzzle', '全局扩展'], ['gear', '设置']].map(([n, t, on]) => h('button', { class: 'ib' + (on ? ' on' : ''), title: t }, icon(n, 22))));
+document.getElementById('hIcon').append(icon('layers'));
+document.getElementById('shield').append(icon('shield', 13), '网络已隔离');
+document.getElementById('bNew').append(icon('mask', 16), '新建实例');
+document.getElementById('bNew').onclick = () => { const no = ++state.seq; state.instances.push({ id: 'i' + no + '-' + Date.now(), no, name: '', color: PALETTE[state.instances.length % PALETTE.length], exit: no % EXITS.length, running: true, accounts: [], cookies: [] }); save(); render(); toast(`#${no} 已创建`); };
+document.getElementById('bImport').append(icon('mail', 16), '导入邮箱');
+document.getElementById('bImport').onclick = openImport;
+document.getElementById('bReboot').append(icon('refresh', 16), '启动动画');
+document.getElementById('bReboot').onclick = runBoot;
+addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDrawer(); close(mImport); close(mSite); } });
+addEventListener('scroll', hideTip, true);
+render();
+runBoot();
+</script>
+</body></html>
