@@ -27,6 +27,7 @@ type Launch struct {
 	Lang                string
 	AcceptLang          string
 	StartURL            string
+	NewTabURL           string // 新标签页地址（伴随扩展的页面）；内核支持 --custom-ntp 时使用
 }
 
 type Caps struct {
@@ -113,6 +114,7 @@ func (fpChromium) PrefsPath(p string) string         { return filepath.Join(p, "
 func (fpChromium) ExtDataDirs(p, id string) []string { return extDataDirs(p, id) }
 func (fpChromium) Args(l Launch) []string {
 	a := commonArgs(l)
+	a = append(a, customNTP(l)...)
 	if !l.Normal {
 		a = append(a,
 			fmt.Sprintf("--fingerprint=%d", l.Seed),
@@ -154,6 +156,7 @@ func (ungoogled) Env(l Launch) []string {
 }
 func (ungoogled) Args(l Launch) []string {
 	a := commonArgs(l)
+	a = append(a, customNTP(l)...)
 	if l.StartURL != "" {
 		a = append(a, l.StartURL)
 	}
@@ -202,4 +205,14 @@ func Find(kernelDir, override string) string {
 	}
 	sort.Strings(found)
 	return found[len(found)-1]
+}
+
+// customNTP 用 ungoogled-chromium 系内核自带的 --custom-ntp 把新标签页指到伴随扩展的页面。
+// 不用扩展清单里的 chrome_url_overrides：那样内核会弹“Did you mean to change this page?”，
+// 用户点了默认的“Change it back”伴随扩展就被停用了；这个确认状态存在受保护的偏好里，没法预先写入（docs/decisions.md U-1）。
+func customNTP(l Launch) []string {
+	if l.NewTabURL == "" {
+		return nil
+	}
+	return []string{"--custom-ntp=" + l.NewTabURL}
 }

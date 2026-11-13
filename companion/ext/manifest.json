@@ -21,9 +21,6 @@
     "default_popup": "popup.html",
     "default_title": "MaskTab"
   },
-  "chrome_url_overrides": {
-    "newtab": "newtab.html"
-  },
   "icons": {
     "48": "assets/icon48.png",
     "128": "assets/icon128.png"

@@ -181,6 +181,7 @@ try {
   // 3. 两个伪装实例
   const a = await api('POST', '/api/instances', {}); const ia = await waitRunning(a.id);
   check(!!ia, `新建伪装实例 #${a.no} 并自动启动`);
+  await sleep(1500); await desktopShot('0-first-window.png'); // 刚启动、还没动过的窗口：看内核有没有弹提示条
   const b = await api('POST', '/api/instances', {}); const ib = await waitRunning(b.id);
   check(!!ib, `新建伪装实例 #${b.no} 并自动启动`);
   check(ia && ib && ia.color !== ib.color, '两个实例颜色不同', `${ia?.color} / ${ib?.color}`);
@@ -208,8 +209,8 @@ try {
   const sw = await evalTarget(prof(a.id), `${COMPANION}/background.js`, `(async()=>({t:await chrome.action.getTitle({}),b:await chrome.action.getBadgeText({})}))()`);
   check(!!sw.value && sw.value.t.startsWith('#' + a.no), '伴随扩展后台在运行并画出了工具栏状态', sw.missing ? '找不到 Service Worker' : sw.hang ? '卡死' : JSON.stringify(sw.value || sw).slice(0, 160));
   check(!!(await inst(a.id))?.rt?.companionSeen, '核心服务收到了该实例伴随扩展的请求');
-  const nt = await evalPage(prof(a.id), `chrome-extension://${COMPANION}/newtab.html`, `document.title+'|'+document.body.innerText.length`, 8000, 2000);
-  check(!!nt.value, '新标签页可以打开', JSON.stringify(nt).slice(0, 120));
+  const nt = await evalPage(prof(a.id), 'chrome://newtab/', `document.title+'|'+location.href`, 8000, 2000);
+  check(!!nt.value && nt.value.includes('新标签页') && nt.value.includes(COMPANION), '新标签页是 MaskTab 自己的页面', JSON.stringify(nt).slice(0, 160));
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/newtab.html`, '1-newtab.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/popup.html`, '2-popup.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#instances`, '3-instances.png');

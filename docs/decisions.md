@@ -61,6 +61,33 @@
 - 后台对 `/api/events?since=<序号>` 做长轮询，每次返回后刷新图标、角标、悬停文字；另有 30 秒闹钟兜底把后台叫醒；
   任何扩展页面打开时也会发一条 `wake` 消息。
 
+## 界面（Windows 上看到的）
+
+### U-1 新标签页用 `--custom-ntp`，不用扩展清单的 `chrome_url_overrides`
+
+- 用 `chrome_url_overrides` 接管新标签页时，内核第一次打开新标签页会弹“Did you mean to change this page?”，默认按钮是“Change it back”，
+  点了它伴随扩展就被停用，整个实例的面板、状态、快捷键全没了。页面底部还会多一条扩展署名栏。（Windows CI 截图里看到的。）
+- 这个“已确认”状态存在 `extensions.settings.<扩展ID>.ack_ntp_bubble`，属于受保护偏好，不能从外部预先写入（见 U-2）。
+- **做法**：清单里不声明 `chrome_url_overrides`；启动内核时加 `--custom-ntp=chrome-extension://<伴随扩展ID>/newtab.html`
+  （ungoogled-chromium 系内核自带的参数，fingerprint-chromium 148 实测支持扩展地址）。
+- 代价：换成不支持 `--custom-ntp` 的内核时，新标签页会是内核自带的那个。
+
+### U-2 不要从外部改内核的“受保护偏好”
+
+- Windows 上内核对一批偏好做完整性校验，从外部改了会被判为篡改并**整项重置**，重置记录在偏好文件的 `prefs.tracked_preferences_reset` 里。
+  CI 导出的文件显示被重置过的有：`extensions.settings`、`extensions.ui.developer_mode`、`session.restore_on_startup`。
+  `extensions.settings` 被重置意味着所有扩展的设置和授权都会丢，所以这条必须遵守。
+- 同一类的还有主页、启动页、默认搜索引擎、固定标签页等。Linux 上不校验，所以这个问题只会在 Windows 上出现。
+- **做法**：`prepareProfile` 只写普通偏好（实例名、关闭内置密码管理、退出状态、工具栏固定的扩展、WebRTC 策略、语言）。
+  恢复标签页靠 `--restore-last-session`；默认搜索靠一个单独的小扩展；解包扩展不需要开发者模式也能加载（Windows CI 实测）。
+- 想知道内核把某个设置存在哪：冒烟测试的 `dumpPrefs()` 会把实例的 `Preferences` 和 `Secure Preferences` 拷进截图目录；
+  `--click x,y` 可以在截图后点一下屏幕上的按钮，再对比前后两份文件。`ack_ntp_bubble` 这个键名就是这样确认的。
+
+### U-3 还没解决的界面问题
+
+- 内核启动的第一个标签页上有一条“You are using an unsupported command-line flag”提示条。还没确认是哪个参数引起的（猜是 `--host-resolver-rules`）。
+  看 CI 产物里的 `0-first-window.png`。这个参数是防 DNS 泄漏的，去掉之前必须先做 V4 泄漏测试。
+
 ## 代理
 
 ### P-1 mihomo 的编排方式

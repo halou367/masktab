@@ -71,14 +71,15 @@
 3. **首次下载没有界面**：`masktab.exe` 是无控制台程序，下载约 200 MB 期间什么都看不到。暂时的办法是第一次用 `masktab-console.exe`。
    下载源是 GitHub，可以在设置里填镜像前缀（`mirror`），但设置界面要等内核下载完才打得开——所以还需要一个不依赖内核的进度 / 设置入口，
    或者支持手动把内核解压到 `data/kernel/` 下（现在已经支持：放进去就会被找到）。
-4. **内核启动时有一条“unsupported command-line flag”提示条**（Windows 截图里看到），多半是 `--host-resolver-rules` 引起的。还没确认是哪个参数，也没决定怎么处理（这个参数是防 DNS 泄漏用的，不能随手去掉）。
-5. **新标签页接管提示**：内核第一次打开新标签页会弹“Did you mean to change this page?”。已经尝试预先写入确认标记，是否生效看最近一次 CI 的 `6-desktop.png`。
+4. **内核启动时第一个标签页上有一条“unsupported command-line flag”提示条**（Windows 截图里看到）。还没确认是哪个参数，看 CI 产物 `0-first-window.png`；
+   如果是 `--host-resolver-rules`（防 DNS 泄漏用），去掉之前必须先做 V4。见 decisions U-3。
+5. （已处理）新标签页接管提示：改用 `--custom-ntp`，不再弹窗，见 decisions U-1。同时发现并停止了对“受保护偏好”的写入，见 U-2。
 6. `subscriptions[].template.basePath` 在接口返回里曾经是空的，生成的路径是对的，没有再查。
 7. `internal/core` 和 `internal/probe` 没有单元测试。
 
 ## 下一步（按顺序）
 
-1. 看最近一次 CI 的 Windows 截图，处理“已知问题 4、5”。
+1. 看最近一次 CI 的 Windows 截图 `0-first-window.png`，处理“已知问题 4”。
 2. 把代理链路放进冒烟测试：脚本里用下载好的 mihomo 再起一个假节点服务端（做法见 decisions 的“测试办法”），这样 Windows 上也能自动验证选节点、切断、时区。
 3. 首次运行的进度界面（已知问题 3）和托盘图标。
 4. 修“已知问题 1、2”。
@@ -97,3 +98,4 @@
   - 加了冒烟测试脚本和 CI（Windows 有界面 + Linux 无头），Windows 上 23 项全过。
   - 停止实例改为先让伴随扩展关窗口；伴随扩展版本号跟随内容；后台起不来时的自愈。
   - 写了 README、AGENTS、decisions、PROGRESS。
+  - 根据 Windows 截图：新标签页改用 `--custom-ntp`；不再写受保护偏好。

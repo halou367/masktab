@@ -230,6 +230,7 @@ func (a *App) Launch(id string) error {
 		ProfileDir: a.p("profiles", in.ID), No: in.No, Normal: !masked, Color: hexColor(in.Color),
 		Seed: seed32(in.FP.Seed), HardwareConcurrency: cores(in), PlatformVersion: in.FP.PlatformVersion,
 		DisableSpoofing: in.FP.DisableSpoofing, Timezone: tz, Lang: lang,
+		NewTabURL: "chrome-extension://" + companion.ID + "/newtab.html",
 	}
 	if lang != "" {
 		l.AcceptLang = lang
@@ -539,16 +540,12 @@ func (a *App) prepareProfile(in *model.Instance, l kernel.Launch) error {
 	set(false, "profile", "password_manager_enabled")
 	set("Normal", "profile", "exit_type") // 异常退出后不弹恢复气泡；标签由 --restore-last-session 恢复
 	set(true, "profile", "exited_cleanly")
-	set(1, "session", "restore_on_startup")
-	set(true, "extensions", "ui", "developer_mode")
+	// 注意：session.restore_on_startup、extensions.ui.developer_mode、extensions.settings 这些是内核的“受保护偏好”，
+	// Windows 上从外部改它们会被内核判为篡改并重置（CI 导出的偏好文件里 prefs.tracked_preferences_reset 记录了这一点）。
+	// 所以这里一律不写；恢复标签页靠 --restore-last-session 参数。
 	set([]string{companion.ID}, "extensions", "pinned_extensions") // 把伴随扩展按钮固定在工具栏
 	set("disable_non_proxied_udp", "webrtc", "ip_handling_policy")
 	set(true, "browser", "has_seen_welcome_page")
-	// 新标签页被伴随扩展接管后，内核会弹“Did you mean to change this page?”并在页脚显示扩展署名（Windows CI 截图里看到的）。
-	// 预先写入“已确认”，并关掉页脚。键名来自内核源码的记忆，是否生效以 CI 截图为准（docs/decisions.md U-1）。
-	set(true, "extensions", "settings", companion.ID, "ack_ntp_bubble")
-	set(false, "ntp", "footer_visible")
-	set(false, "ntp", "footer", "extension_attribution_enabled")
 	if l.AcceptLang != "" {
 		set(l.AcceptLang, "intl", "accept_languages")
 	}
@@ -559,25 +556,6 @@ func (a *App) prepareProfile(in *model.Instance, l kernel.Launch) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return err
-	}
-	// Windows 上扩展的设置在首次运行后会被内核挪到同目录的 Secure Preferences 里；那边已经有伴随扩展的条目时，确认标记要写在那边。
-	sp := filepath.Join(filepath.Dir(path), "Secure Preferences")
-	if sb, err := os.ReadFile(sp); err == nil {
-		var sec map[string]any
-		if json.Unmarshal(sb, &sec) == nil {
-			if ext, ok := sec["extensions"].(map[string]any); ok {
-				if st, ok := ext["settings"].(map[string]any); ok {
-					if me, ok := st[companion.ID].(map[string]any); ok && me["ack_ntp_bubble"] != true {
-						me["ack_ntp_bubble"] = true
-						if nb, err := json.Marshal(sec); err == nil {
-							if os.WriteFile(sp+".masktab.tmp", nb, 0o600) == nil {
-								_ = os.Rename(sp+".masktab.tmp", sp)
-							}
-						}
-					}
-				}
-			}
-		}
 	}
 	return nil
 }
