@@ -160,12 +160,19 @@ if (chrome.cookies) chrome.cookies.onChanged.addListener(() => { clearTimeout(co
 function siteOfSender(s) {
   try { const u = new URL(s.url || s.tab?.url || ''); return /^https?:$/.test(u.protocol) ? u.origin : ''; } catch { return ''; }
 }
+// 两步登录暂存：chrome.storage.session 只在扩展自己的页面里可读（网页内容脚本默认读不到），后台休眠重启也不丢，浏览器关掉即清空。
+const pendingKey = (k) => 'pend:' + k;
+chrome.tabs?.onRemoved?.addListener(async (id) => { const all = await chrome.storage.session.get(null); const ks = Object.keys(all).filter((k) => k.startsWith(`pend:${id}|`)); if (ks.length) chrome.storage.session.remove(ks); });
 async function vaultMsg(m, s) {
   const site = siteOfSender(s);
   if (!site) throw new Error('不支持的页面');
   if (s.frameId && s.frameId !== 0) throw new Error('不向内嵌框架填充（F-PWD-5）');
   if (m.t === 'vault:match') return api('GET', `/api/vault/match?site=${encodeURIComponent(site)}`);
   if (m.t === 'vault:save') return api('POST', '/api/vault', { site, user: String(m.user || ''), pass: String(m.pass || ''), src: 'saved' });
+  // 两步登录：第一步填的用户名暂存在后台（按标签页 + 主域名，10 分钟），第二步密码页取回；不放进网页能读到的存储。
+  const pk = `${s.tab?.id}|${baseDomain(new URL(site).hostname)}`;
+  if (m.t === 'vault:pending-set') { const u = String(m.user || '').trim().slice(0, 256); if (u) await chrome.storage.session.set({ [pendingKey(pk)]: { u, at: Date.now() } }); return true; }
+  if (m.t === 'vault:pending-get') { const x = (await chrome.storage.session.get(pendingKey(pk)))[pendingKey(pk)]; return x && Date.now() - x.at < 600_000 ? x.u : ''; }
   if (m.t === 'vault:undo') return api('DELETE', `/api/vault/${encodeURIComponent(m.id)}`);
   throw new Error('未知请求');
 }
