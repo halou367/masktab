@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/kernel"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/proxy"
@@ -83,6 +84,7 @@ type App struct {
 	rt        map[string]*Runtime
 	scan      map[string]*model.NodeScan // 测速用出站名 → 最近一次延迟 / 出口 / 失败原因（落盘在 state/scan.json）
 	scanning  map[string]bool            // 正在测速的订阅
+	pipVia    map[string]string          // 订阅 id → 测反代时借用的入口（地址:端口）
 	setup     Setup
 	events    []Event
 	seq       int64
@@ -185,7 +187,7 @@ type fileWrap[T any] struct {
 
 // Open 载入数据目录；首次运行创建普通实例 #0。
 func Open(dir, exeDir, version string) (*App, error) {
-	a := &App{Dir: dir, ExeDir: exeDir, Version: version, rt: map[string]*Runtime{}, scan: map[string]*model.NodeScan{}, scanning: map[string]bool{},
+	a := &App{Dir: dir, ExeDir: exeDir, Version: version, rt: map[string]*Runtime{}, scan: map[string]*model.NodeScan{}, scanning: map[string]bool{}, pipVia: map[string]string{},
 		kernelUp: make(chan struct{}), waiters: map[chan struct{}]bool{}, connSeen: map[string][2]int64{}, token: randToken(24)}
 	for _, d := range []string{"config", "kernel", "profiles", "extensions", "ext-master", "runtime", "core", "state"} {
 		if err := os.MkdirAll(a.p(d), 0o755); err != nil {
@@ -215,6 +217,17 @@ func Open(dir, exeDir, version string) (*App, error) {
 		a.scan = map[string]*model.NodeScan{}
 	}
 	a.adapter = kernel.Get(a.Settings.Kernel)
+	// 旧版的"入口用 ProxyIP"：改成直接选中反代列表里的那个地址当入口，效果相同。
+	for _, in := range a.Instances {
+		if in.Proxy.AddressMode != "same-as-exit" {
+			continue
+		}
+		in.Proxy.AddressMode = "custom"
+		if typ, val := a.pipValueLocked(in); typ == "proxyip" {
+			h, port := exits.SplitHostPort(val)
+			in.Proxy.AddressID, in.Proxy.Auto = "x:"+hostPort(h, port), false
+		}
+	}
 	if a.inst0() == nil {
 		a.mu.Lock()
 		a.newInstanceLocked("normal")
@@ -361,7 +374,7 @@ func (a *App) newInstanceLocked(kind string) *model.Instance {
 		FP:     model.FP{Seed: base64.StdEncoding.EncodeToString(seed), DisableSpoofing: []string{}},
 		TZ:     model.TZ{Mode: "auto", Source: a.Settings.TZSourceDefault},
 		Locale: model.Locale{Mode: "follow-exit"},
-		Proxy:  model.InstProxy{State: "off", Auto: true, AddressMode: a.Settings.AddressModeDefault},
+		Proxy:  model.InstProxy{State: "off", Auto: true, AddressMode: "custom"},
 	}
 	if kind == "normal" {
 		in.Color = "#5F6368"

@@ -41,7 +41,6 @@ const maxNodesPerSub = 500
 func nodeName(sub *model.Subscription, key string) string {
 	return "s-" + short(sub.ID) + "-" + short(key)
 }
-func addrName(ad *model.Address) string { return "a-" + short(ad.ID) }
 
 // exitValue 返回出口条目在该实例上的实际取值（展开的域名取选中的 IP，并保留条目自带的端口）。
 func exitValue(e *model.ExitEntry, ip string) string {
@@ -91,15 +90,11 @@ func (a *App) resolveLocked(in *model.Instance) resolved {
 		}
 		return r
 	}
-	var typ, val string
-	e := a.exitLocked(in.Proxy.ExitID)
-	if e != nil {
-		typ, val = e.Type, exitValue(e, in.Proxy.ExitIP)
-	}
+	typ, val := a.pipValueLocked(in)
 	var server string
 	var port int
-	if in.Proxy.AddressMode == "same-as-exit" {
-		if e == nil || e.Type != "proxyip" {
+	if in.Proxy.AddressMode == "same-as-exit" { // 旧数据：入口直接用所选反代的地址
+		if typ != "proxyip" {
 			return resolved{want: "REJECT", err: "\"同出口\"需要先选一个 proxyip 类型的出口"}
 		}
 		server, port = exits.SplitHostPort(val)
@@ -107,11 +102,11 @@ func (a *App) resolveLocked(in *model.Instance) resolved {
 			port = 443
 		}
 	} else {
-		ad := a.addrLocked(in.Proxy.AddressID)
-		if ad == nil {
-			return resolved{want: "REJECT", err: "未选择优选 IP"}
+		n, ok := a.entryLocked(sub, in.Proxy.AddressID)
+		if !ok {
+			return resolved{want: "REJECT", err: "未选择入口地址"}
 		}
-		server, port = ad.Server, ad.Port
+		server, port = n.Server, n.Port
 	}
 	host := in.Proxy.Host
 	if host == "" && len(sub.Hosts) > 0 {
@@ -176,20 +171,27 @@ func (a *App) applyConfig() error {
 			in.ScanMembers = append(in.ScanMembers, nodeName(sub, n.Key))
 		}
 	}
-	for _, ad := range a.Addresses {
-		sub := a.subLocked(ad.SubscriptionID)
-		if sub == nil {
-			sub = a.firstETLocked()
-		}
-		if sub == nil || sub.Template == nil {
+	// edgetunnel：每个入口一条不带反代参数的出站；每个反代一条"借用的入口 + 该反代"的出站。
+	for _, sub := range a.Subs {
+		if sub.Kind != "edgetunnel" || sub.Template == nil {
 			continue
 		}
 		host := ""
 		if len(sub.Hosts) > 0 {
 			host = sub.Hosts[0]
 		}
-		in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(addrName(ad), *sub.Template, ad.Server, ad.Port, host, sub.Template.BasePath))...)
-		in.ScanMembers = append(in.ScanMembers, addrName(ad))
+		nodes := a.nodesLocked(sub)
+		for _, n := range nodes {
+			in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(n.Name, *sub.Template, n.Server, n.Port, host, sub.Template.BasePath))...)
+			in.ScanMembers = append(in.ScanMembers, n.Name)
+		}
+		if via, ok := a.viaLocked(sub, nodes); ok {
+			for _, p := range a.pipsLocked(sub) {
+				path := exits.Rewrite(sub.Template.BasePath, p.Type, p.Value, a.Settings.PathTemplate)
+				in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(p.Name, *sub.Template, via.Server, via.Port, host, path))...)
+				in.ScanMembers = append(in.ScanMembers, p.Name)
+			}
+		}
 	}
 	in.ScanPorts = a.scanPorts
 	a.mu.Unlock()
@@ -433,7 +435,7 @@ func (a *App) fillProxyLocked(in *model.Instance, sub *model.Subscription) {
 		}
 		return
 	}
-	if in.Proxy.ExitID == "" && a.Settings.ExitPick == "unused" {
+	if in.Proxy.ExitID == "" && a.Settings.ExitPick == "unused" && !in.Proxy.Auto { // 开着"自动"时反代由 autoPick 按出口地区来配
 		used := map[string]bool{}
 		for _, o := range a.Instances {
 			if o.ID != in.ID && o.Proxy.ExitID != "" {
@@ -461,7 +463,7 @@ func (a *App) fillProxyLocked(in *model.Instance, sub *model.Subscription) {
 			in.Proxy.ExitID, in.Proxy.ExitIP = fbID, fbIP // 都被占用时也要有出口，取第一个
 		}
 	}
-	if a.addrLocked(in.Proxy.AddressID) == nil {
+	if _, ok := a.entryLocked(sub, in.Proxy.AddressID); !ok {
 		in.Proxy.AddressID = a.bestAddrLocked(sub.ID)
 	}
 	if in.Proxy.Host == "" || !contains(sub.Hosts, in.Proxy.Host) {

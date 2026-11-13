@@ -6,34 +6,59 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/probe"
 	"github.com/halou367/masktab/internal/proxy"
 )
 
 const (
-	scanChannels = 4              // 并行的测速通道数
+	scanChannels = 8              // 并行的测速通道数
 	exitFresh    = 12 * time.Hour // 出口信息多久内不重复探测
+	goneKeep     = 6              // 已不在订阅里的地址，每个出口国家最多留用几个
+	traceURL     = "https://www.cloudflare.com/cdn-cgi/trace"
 )
 
-// nodeRef 是界面上"节点列表"里的一行：edgetunnel 订阅的一个优选 IP，或通用订阅的一个节点。
+// nodeRef 是"入口"列表里的一行：edgetunnel 订阅的一个入口地址（优选 IP），或通用订阅的一个节点。
+// 入口地址有三个来源，地位相同：订阅里的、自己加的、反代列表里的（反代本身也是一台转发到 Cloudflare 的机器，可以当入口）。
 type nodeRef struct {
-	ID     string // 优选 IP 的 id，或节点的 key
+	ID     string // 地址的 id；来自反代列表的是 "x:地址:端口"；通用订阅是节点的 key
 	Name   string // 对应的测速用出站名
 	Server string
 	Port   int
 	Label  string
 	Host   string
 	Type   string
-	Custom bool
+	From   string // sub | custom | pip
+	Gone   bool   // 已不在最新一次拉取的订阅里（留用）
 }
 
-// nodesLocked 列出一个订阅的全部节点（edgetunnel：订阅里的优选 IP + 自定义的优选 IP）。
+func (n nodeRef) key() string { return hostPort(n.Server, n.Port) }
+
+// pipRef 是"反代"列表里的一行。来源也有两个：反代列表里的，和入口地址里能当反代的（不是 Cloudflare 自己的 IP）。
+type pipRef struct {
+	ID      string // 出口条目的 id（展开的域名是 "id|IP"）；来自入口地址的是 "a:地址:端口"
+	Name    string
+	Type    string // proxyip | socks5 | http
+	Value   string
+	Label   string
+	Derived bool // 来自入口地址
+}
+
+// key 是用来和入口地址比较"是不是同一台机器"的 地址:端口。
+func (p pipRef) key() string {
+	if p.Type != "proxyip" {
+		return p.Type + "|" + p.Value
+	}
+	h, port := exits.SplitHostPort(p.Value)
+	return hostPort(h, port)
+}
+
+// nodesLocked 列出一个订阅的全部入口。
 func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 	var out []nodeRef
 	if sub == nil {
@@ -45,11 +70,44 @@ func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 		if len(sub.Hosts) == 1 {
 			host = sub.Hosts[0]
 		}
+		seen := map[string]bool{}
+		add := func(n nodeRef) {
+			k := n.key()
+			if n.Server == "" || seen[k] {
+				return
+			}
+			seen[k] = true
+			n.Name, n.Host, n.Type = hname("a-", sub.ID, k), host, typ
+			out = append(out, n)
+		}
 		for _, ad := range a.Addresses {
-			if ad.SubscriptionID != sub.ID && ad.Source != "custom" {
+			if ad.SubscriptionID == sub.ID && ad.Source != "custom" {
+				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "sub", Gone: ad.Gone})
+			}
+		}
+		for _, ad := range a.Addresses {
+			if ad.Source == "custom" {
+				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "custom"})
+			}
+		}
+		for _, e := range a.Exits {
+			if e.Type != "proxyip" {
 				continue
 			}
-			out = append(out, nodeRef{ID: ad.ID, Name: addrName(ad), Server: ad.Server, Port: ad.Port, Label: ad.Label, Host: host, Type: typ, Custom: ad.Source == "custom"})
+			vals := []string{e.Value}
+			if e.Expand {
+				vals = vals[:0]
+				for _, ip := range e.Resolved {
+					vals = append(vals, exitValue(e, ip))
+				}
+			}
+			for _, v := range vals {
+				h, port := exits.SplitHostPort(v)
+				if port == 0 {
+					port = 443
+				}
+				add(nodeRef{ID: "x:" + hostPort(h, port), Server: h, Port: port, Label: e.Label, From: "pip"})
+			}
 		}
 		return out
 	}
@@ -63,9 +121,106 @@ func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 		}
 		server, _ := n.Raw["server"].(string)
 		typ, _ := n.Raw["type"].(string)
-		out = append(out, nodeRef{ID: n.Key, Name: nodeName(sub, n.Key), Server: server, Port: port, Label: n.Name, Host: hostOfRaw(n.Raw, server), Type: typ})
+		out = append(out, nodeRef{ID: n.Key, Name: nodeName(sub, n.Key), Server: server, Port: port, Label: n.Name, Host: hostOfRaw(n.Raw, server), Type: typ, From: "sub"})
 	}
 	return out
+}
+
+// entryLocked 按 id 找入口。
+func (a *App) entryLocked(sub *model.Subscription, id string) (nodeRef, bool) {
+	if id == "" {
+		return nodeRef{}, false
+	}
+	for _, n := range a.nodesLocked(sub) {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return nodeRef{}, false
+}
+
+// pipsLocked 列出一个 edgetunnel 订阅可用的全部反代候选。
+func (a *App) pipsLocked(sub *model.Subscription) []pipRef {
+	var out []pipRef
+	if sub == nil || sub.Kind != "edgetunnel" || sub.Template == nil {
+		return out
+	}
+	seen := map[string]bool{}
+	add := func(p pipRef) {
+		k := p.key()
+		if p.Value == "" || seen[k] {
+			return
+		}
+		seen[k] = true
+		p.Name = hname("p-", sub.ID, k)
+		out = append(out, p)
+	}
+	for _, e := range a.Exits {
+		if e.Type == "proxyip" && e.Expand {
+			for _, ip := range e.Resolved {
+				add(pipRef{ID: e.ID + "|" + ip, Type: e.Type, Value: exitValue(e, ip), Label: e.Label})
+			}
+			continue
+		}
+		add(pipRef{ID: e.ID, Type: e.Type, Value: e.Value, Label: e.Label})
+	}
+	for _, n := range a.nodesLocked(sub) {
+		if n.From != "pip" && usableAsPip(n.Server) {
+			add(pipRef{ID: "a:" + n.key(), Type: "proxyip", Value: n.key(), Label: n.Label, Derived: true})
+		}
+	}
+	return out
+}
+
+// pipID 返回实例当前选的反代在候选列表里的 id；空 = 不指定。
+func pipID(in *model.Instance) string {
+	if in.Proxy.ExitID != "" && in.Proxy.ExitIP != "" {
+		return in.Proxy.ExitID + "|" + in.Proxy.ExitIP
+	}
+	return in.Proxy.ExitID
+}
+
+// setPip 把候选 id 写回实例。
+func setPip(in *model.Instance, id string) {
+	in.Proxy.ExitID, in.Proxy.ExitIP = id, ""
+	if i := strings.LastIndex(id, "|"); i > 0 && !strings.HasPrefix(id, "a:") {
+		in.Proxy.ExitID, in.Proxy.ExitIP = id[:i], id[i+1:]
+	}
+}
+
+// pipValueLocked 返回实例所选反代的类型与取值；不指定时两者为空。
+func (a *App) pipValueLocked(in *model.Instance) (typ, val string) {
+	if v, ok := strings.CutPrefix(in.Proxy.ExitID, "a:"); ok {
+		return "proxyip", v
+	}
+	if e := a.exitLocked(in.Proxy.ExitID); e != nil {
+		return e.Type, exitValue(e, in.Proxy.ExitIP)
+	}
+	return "", ""
+}
+
+// viaLocked 返回测反代时借用的入口：反代的出口和用哪个入口无关，所以全部反代都经同一个入口来测。
+// 选定之后不随便换（换了要重载配置），只有它不在列表里或者不通了才重选最快的。
+func (a *App) viaLocked(sub *model.Subscription, nodes []nodeRef) (nodeRef, bool) {
+	if len(nodes) == 0 {
+		return nodeRef{}, false
+	}
+	if k := a.pipVia[sub.ID]; k != "" {
+		for _, n := range nodes {
+			if n.key() == k && a.scanLocked(n.Name).Delay >= 0 {
+				return n, true
+			}
+		}
+	}
+	best := nodes[0]
+	for _, n := range nodes {
+		d, bd := a.scanLocked(n.Name).Delay, a.scanLocked(best.Name).Delay
+		if d > 0 && (bd <= 0 || d < bd) {
+			best = n
+		}
+	}
+	a.pipVia[sub.ID] = best.key()
+	return best, true
 }
 
 // hostOfRaw 取节点伪装用的 Host / SNI；与 server 相同时不重复展示。
@@ -97,8 +252,8 @@ func (a *App) scanLocked(name string) model.NodeScan {
 
 func (a *App) saveScanLocked() { _ = writeJSON(a.p("state", "scan.json"), a.scan) }
 
-// Scan 测一个订阅全部节点的延迟，并探测每个可用节点的出口 IP；结果随测随发到界面。
-// 同一个订阅同时只跑一轮。
+// Scan 测一个订阅：全部入口的延迟和两路出口，全部反代的出口和延迟；结果随测随发到界面。
+// 同一个订阅同时只跑一轮。测完后，开着"自动"的实例按新结果重新确认一次线路。
 func (a *App) Scan(subID string) {
 	if !a.coreOK {
 		return
@@ -110,22 +265,52 @@ func (a *App) Scan(subID string) {
 		return
 	}
 	a.scanning[subID] = true
-	nodes := a.nodesLocked(sub)
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
 		delete(a.scanning, subID)
+		a.pruneGoneLocked(sub)
 		a.saveScanLocked()
 		a.bumpLocked("state", "")
+		var auto []string
+		for _, in := range a.Instances {
+			if r := a.rt[in.ID]; r != nil && r.active && in.Proxy.Auto && in.Proxy.State == "on" && in.Proxy.SubscriptionID == subID {
+				auto = append(auto, in.ID)
+			}
+		}
 		a.mu.Unlock()
+		_ = a.applyConfig()
+		for _, id := range auto {
+			if a.autoPick(id, nil) {
+				go a.refresh(id)
+			}
+		}
 	}()
-	if err := a.applyConfig(); err != nil {
-		return
+	round := func() []nodeRef {
+		a.mu.Lock()
+		nodes := a.nodesLocked(sub)
+		isET := sub.Kind == "edgetunnel"
+		a.mu.Unlock()
+		if err := a.applyConfig(); err != nil {
+			return nodes
+		}
+		a.testDelays(nodes)
+		a.testExits(nodes, isET)
+		if isET {
+			// 借用的入口不通了就换一个（viaLocked 会重选最快的），配置随之更新
+			a.mu.Lock()
+			a.viaLocked(sub, nodes)
+			pips := a.pipsLocked(sub)
+			a.mu.Unlock()
+			if a.applyConfig() == nil {
+				a.testPips(pips)
+			}
+		}
+		return nodes
 	}
-	a.testDelays(nodes)
-	a.testExits(nodes)
-	// 全部节点都不通、且原因是 ECH：这个网络拿不到或用不了 ECH 配置。关掉 ECH 再测一遍
+	nodes := round()
+	// 全部入口都不通、且原因是 ECH：这个网络拿不到或用不了 ECH 配置。关掉 ECH 再测一遍
 	//（Cloudflare 上的服务端同时接受不带 ECH 的连接）。
 	a.mu.Lock()
 	alive, ech := 0, 0
@@ -145,13 +330,22 @@ func (a *App) Scan(subID string) {
 		log.Printf("订阅 %s：全部节点都因 ECH 连不上，已自动关闭 ECH 重测", sub.Name)
 	}
 	a.mu.Unlock()
-	if retry && a.applyConfig() == nil {
-		a.testDelays(nodes)
-		a.testExits(nodes)
+	if retry {
+		round()
 	}
 }
 
-// testDelays 并发测延迟（不占测速通道，直接用 mihomo 的延迟接口）。
+// slot 取出（没有就新建）一条测速结果，调用方须持锁。
+func (a *App) slotLocked(name string) *model.NodeScan {
+	s := a.scan[name]
+	if s == nil {
+		s = &model.NodeScan{}
+		a.scan[name] = s
+	}
+	return s
+}
+
+// testDelays 并发测往返延迟（不占测速通道，直接用 mihomo 的延迟接口；配置里开了 unified-delay，握手不计入）。
 func (a *App) testDelays(nodes []nodeRef) {
 	a.mu.Lock()
 	url := a.Settings.DelayURL
@@ -166,12 +360,8 @@ func (a *App) testDelays(nodes []nodeRef) {
 			defer func() { <-sem }()
 			d := a.delayOnce(n.Name, url, 5000)
 			a.mu.Lock()
-			s := a.scan[n.Name]
-			if s == nil {
-				s = &model.NodeScan{}
-				a.scan[n.Name] = s
-			}
-			s.Delay, s.At = d, now()
+			s := a.slotLocked(n.Name)
+			s.Delay = d
 			if d > 0 {
 				s.Err = ""
 			}
@@ -218,14 +408,17 @@ func (a *App) viaScan(name string, fn func(port int, group string) error) error 
 	return err
 }
 
-// testExits 经测速通道逐个探测出口 IP；不通的节点也走一次真实请求，以便从 mihomo 的日志里拿到失败原因。
-func (a *App) testExits(nodes []nodeRef) {
+// testExits 经测速通道逐个探测入口的两路出口：普通网站看到的 IP，和（edgetunnel）不指定反代时 Cloudflare 站点看到的 IP。
+// 不通的入口也走一次真实请求，以便从 mihomo 的日志里拿到失败原因。
+func (a *App) testExits(nodes []nodeRef, withCF bool) {
 	a.mu.Lock()
 	eps := a.Settings.IPInfoEndpoints
 	var todo []nodeRef
+	dead := map[string]bool{} // 延迟已经测出不通的：只再试一次，为的是拿到失败原因
 	for _, n := range nodes {
 		s := a.scanLocked(n.Name)
-		if s.Delay < 0 || s.Exit == nil || time.Since(time.UnixMilli(s.At)) > exitFresh || s.Exit.Country == "" {
+		dead[n.Name] = s.Delay < 0
+		if s.Delay < 0 || s.Exit == nil || s.Exit.Country == "" || (withCF && s.CF == nil) || time.Since(time.UnixMilli(s.At)) > exitFresh {
 			todo = append(todo, n)
 		}
 	}
@@ -235,12 +428,14 @@ func (a *App) testExits(nodes []nodeRef) {
 		wg.Add(1)
 		go func(n nodeRef) {
 			defer wg.Done()
-			var info *model.IPInfo
+			var info, cf *model.IPInfo
 			var reason string
-			start := time.Now()
+			cold := 0
 			err := a.viaScan(n.Name, func(port int, group string) error {
+				start := time.Now()
 				hc := probe.Client(port, 8*time.Second)
-				ip, err := exitIP(hc)
+				ip, err := exitIP(hc, dead[n.Name])
+				cold = int(time.Since(start).Milliseconds())
 				if err != nil {
 					time.Sleep(150 * time.Millisecond) // 等 mihomo 把这次失败写进日志
 					reason = a.core.LastError(group, start)
@@ -248,26 +443,27 @@ func (a *App) testExits(nodes []nodeRef) {
 				}
 				i := probe.Lookup(hc, ip, "", eps)
 				info = &i
+				if withCF {
+					if cip, loc, err := cfTrace(hc); err == nil {
+						j := probe.Lookup(hc, cip, loc, eps)
+						cf = &j
+					}
+				}
 				return nil
 			})
 			a.mu.Lock()
-			s := a.scan[n.Name]
-			if s == nil {
-				s = &model.NodeScan{}
-				a.scan[n.Name] = s
-			}
+			s := a.slotLocked(n.Name)
 			if err == nil {
-				s.Exit, s.Err = info, ""
-				if s.Delay < 0 { // 延迟接口失败但真实请求通了：以真实请求为准
-					s.Delay = int(time.Since(start).Milliseconds())
+				s.Exit, s.CF, s.Err, s.At = info, cf, "", now()
+				if s.Delay < 0 { // 延迟接口失败但真实请求通了：以真实请求为准（含握手，偏大）
+					s.Delay = cold
 				}
 			} else {
 				if s.Delay <= 0 {
-					s.Delay, s.Exit = -1, nil
+					s.Delay, s.Exit, s.CF = -1, nil, nil
 				}
 				s.Err = friendlyErr(reason, err)
 			}
-			s.At = now()
 			a.bumpLocked("state", "")
 			a.mu.Unlock()
 		}(n)
@@ -275,11 +471,94 @@ func (a *App) testExits(nodes []nodeRef) {
 	wg.Wait()
 }
 
-// exitIP 返回经该通道访问非 Cloudflare 站点时对方看到的 IP。
-func exitIP(hc *http.Client) (string, error) {
+// testPips 逐个测反代：经借用的入口访问 Cloudflare 的 trace，得到用这个反代时 Cloudflare 站点看到的 IP，再测往返延迟。
+// socks5 / http 是全局出口（所有网站都从它出去），顺带测普通网站看到的 IP。
+func (a *App) testPips(pips []pipRef) {
+	a.mu.Lock()
+	eps := a.Settings.IPInfoEndpoints
+	a.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, p := range pips {
+		wg.Add(1)
+		go func(p pipRef) {
+			defer wg.Done()
+			var cf, ex *model.IPInfo
+			var reason string
+			var cold int
+			err := a.viaScan(p.Name, func(port int, group string) error {
+				start := time.Now()
+				hc := probe.Client(port, 10*time.Second)
+				ip, loc, err := cfTrace(hc)
+				if err != nil {
+					time.Sleep(150 * time.Millisecond)
+					reason = a.core.LastError(group, start)
+					return err
+				}
+				cold = int(time.Since(start).Milliseconds())
+				i := probe.Lookup(hc, ip, loc, eps)
+				cf = &i
+				if p.Type != "proxyip" {
+					if ip2, err := exitIP(hc, false); err == nil {
+						j := probe.Lookup(hc, ip2, "", eps)
+						ex = &j
+					}
+				}
+				return nil
+			})
+			d := -1
+			if err == nil {
+				if d = a.delayOnce(p.Name, traceURL, 6000); d < 0 {
+					d = cold
+				}
+			}
+			a.mu.Lock()
+			s := a.slotLocked(p.Name)
+			s.Delay, s.CF, s.Exit, s.At, s.Err = d, cf, ex, now(), ""
+			if err != nil {
+				s.Err = friendlyErr(reason, err)
+			}
+			a.bumpLocked("state", "")
+			a.mu.Unlock()
+		}(p)
+	}
+	wg.Wait()
+}
+
+// cfTrace 返回经该通道访问 Cloudflare 站点时对方看到的 IP 和国家。
+func cfTrace(hc *http.Client) (ip, loc string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", traceURL, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	for _, ln := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(ln, "ip="); ok {
+			ip = strings.TrimSpace(v)
+		}
+		if v, ok := strings.CutPrefix(ln, "loc="); ok {
+			loc = strings.TrimSpace(v)
+		}
+	}
+	if net.ParseIP(ip) == nil {
+		return "", "", io.ErrUnexpectedEOF
+	}
+	return ip, loc, nil
+}
+
+// exitIP 返回经该通道访问非 Cloudflare 站点时对方看到的 IP。quick = 只试一个地址、短超时。
+func exitIP(hc *http.Client, quick bool) (string, error) {
 	var last error
-	for _, u := range []string{"https://checkip.amazonaws.com", "https://api.ipify.org", "http://ip-api.com/line/?fields=query"} {
-		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+	urls, wait := []string{"https://checkip.amazonaws.com", "http://ip-api.com/line/?fields=query", "https://ifconfig.me/ip"}, 7*time.Second
+	if quick {
+		urls, wait = urls[:1], 4*time.Second
+	}
+	for _, u := range urls {
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
 		req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
 		req.Header.Set("User-Agent", "Mozilla/5.0")
 		resp, err := hc.Do(req)
@@ -330,22 +609,45 @@ func friendlyErr(reason string, err error) string {
 	return reason
 }
 
-// bestNodeLocked 返回订阅里延迟最低的可用节点；exclude 里的不选。没有可用的返回空。
+// bestNodeLocked 返回订阅里延迟最低的可用入口；exclude 里的不选。没有可用的返回空。
 func (a *App) bestNodeLocked(sub *model.Subscription, exclude map[string]bool) string {
-	nodes := a.nodesLocked(sub)
-	sort.SliceStable(nodes, func(i, j int) bool {
-		di, dj := a.scanLocked(nodes[i].Name).Delay, a.scanLocked(nodes[j].Name).Delay
-		if (di > 0) != (dj > 0) {
-			return di > 0
-		}
-		return di > 0 && di < dj
-	})
+	id, _ := pickEntry(a.entryCandsLocked(a.nodesLocked(sub)), "", "", exclude)
+	return id
+}
+
+func (a *App) entryCandsLocked(nodes []nodeRef) []cand {
+	out := make([]cand, 0, len(nodes))
 	for _, n := range nodes {
-		if !exclude[n.ID] && a.scanLocked(n.Name).Delay > 0 {
-			return n.ID
+		sc := a.scanLocked(n.Name)
+		c := cand{ID: n.ID, Key: n.key(), Delay: sc.Delay}
+		if sc.Exit != nil {
+			c.Country = sc.Exit.Country
+		}
+		if sc.CF != nil {
+			c.CFCountry = sc.CF.Country
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func (a *App) pipCandsLocked(sub *model.Subscription, me *model.Instance) []cand {
+	used := map[string]bool{}
+	for _, o := range a.Instances {
+		if o.ID != me.ID && o.Proxy.ExitID != "" {
+			used[pipID(o)] = true
 		}
 	}
-	return ""
+	var out []cand
+	for _, p := range a.pipsLocked(sub) {
+		sc := a.scanLocked(p.Name)
+		c := cand{ID: p.ID, Key: p.key(), Delay: sc.Delay, Derived: p.Derived, Used: used[p.ID]}
+		if sc.CF != nil {
+			c.Country = sc.CF.Country
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func currentNode(in *model.Instance, sub *model.Subscription) string {
@@ -357,14 +659,54 @@ func currentNode(in *model.Instance, sub *model.Subscription) string {
 
 func setNode(in *model.Instance, sub *model.Subscription, id string) {
 	if sub != nil && sub.Kind == "edgetunnel" {
-		in.Proxy.AddressID = id
+		in.Proxy.AddressID, in.Proxy.AddressMode = id, "custom"
 	} else {
 		in.Proxy.NodeKey = id
 	}
 }
 
-// autoPick 给开了"自动"的实例确认一个可用节点：当前节点可用就不动（出口稳定比快更重要）；
-// 不可用或还没选时，测一遍全部节点的延迟，换成最快的。返回是否换了节点。
+// pruneGoneLocked 清掉已不在订阅里、又不值得留的地址（不通的，或同一出口国家里排在后面的）。
+func (a *App) pruneGoneLocked(sub *model.Subscription) {
+	if sub == nil || sub.Kind != "edgetunnel" {
+		return
+	}
+	inUse := map[string]bool{}
+	for _, in := range a.Instances {
+		inUse[in.Proxy.AddressID] = true
+	}
+	var gone []cand
+	for _, n := range a.nodesLocked(sub) {
+		if n.Gone {
+			sc := a.scanLocked(n.Name)
+			c := cand{ID: n.ID, Delay: sc.Delay}
+			if sc.Exit != nil {
+				c.Country = sc.Exit.Country
+			}
+			gone = append(gone, c)
+		}
+	}
+	if len(gone) == 0 {
+		return
+	}
+	keep := keepGone(gone, inUse, goneKeep)
+	var out []*model.Address
+	for _, ad := range a.Addresses {
+		if ad.SubscriptionID == sub.ID && ad.Gone && !keep[ad.ID] {
+			continue
+		}
+		out = append(out, ad)
+	}
+	if len(out) != len(a.Addresses) {
+		a.Addresses = out
+		a.saveLocked("addresses")
+	}
+}
+
+// autoPick 给开了"自动"的实例确认线路。返回是否换了。
+//
+//	入口：出口在所选地区（不限则全部）的可用入口里延迟最低的。当前入口仍然符合就不动——出口稳定比快更重要。
+//	      所选地区一个可用的都没有时保持原样并提示，绝不悄悄换到别的地区。
+//	反代：让两路出口同在一个国家（规则见 pickPip）。
 func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	if !a.coreOK {
 		return false
@@ -381,14 +723,7 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 		return false
 	}
 	nodes := a.nodesLocked(sub)
-	cur := currentNode(in, sub)
-	var curRef *nodeRef
-	for i := range nodes {
-		if nodes[i].ID == cur {
-			curRef = &nodes[i]
-		}
-	}
-	url := a.Settings.DelayURL
+	cur, region, url := currentNode(in, sub), in.Proxy.Region, a.Settings.DelayURL
 	a.mu.Unlock()
 	if len(nodes) == 0 {
 		return false
@@ -396,30 +731,79 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	if err := a.applyConfig(); err != nil {
 		return false
 	}
-	if curRef != nil && !exclude[cur] {
-		if d := a.delayOnce(curRef.Name, url, 5000); d > 0 {
-			a.mu.Lock()
-			s := a.scan[curRef.Name]
-			if s == nil {
-				s = &model.NodeScan{}
-				a.scan[curRef.Name] = s
-			}
-			s.Delay, s.Err, s.At = d, "", now()
-			a.mu.Unlock()
-			return false
+	nameOf := map[string]string{}
+	for _, n := range nodes {
+		nameOf[n.ID] = n.Name
+	}
+	verify := func(nid string) bool { // 现测一次，结果记回去
+		d := a.delayOnce(nameOf[nid], url, 5000)
+		a.mu.Lock()
+		s := a.slotLocked(nameOf[nid])
+		s.Delay = d
+		if d > 0 {
+			s.Err = ""
+		}
+		a.mu.Unlock()
+		return d > 0
+	}
+	pick := func() (string, bool) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return pickEntry(a.entryCandsLocked(nodes), region, cur, exclude)
+	}
+	chosen, ok := "", false
+	if nameOf[cur] != "" && !exclude[cur] {
+		verify(cur)
+	}
+	for i := 0; i < 5 && !ok; i++ { // 按上次的结果从快到慢逐个现测，通了就用
+		c, found := pick()
+		if !found {
+			break
+		}
+		if c == cur || verify(c) {
+			chosen, ok = c, true
 		}
 	}
-	a.testDelays(nodes)
+	if !ok { // 记录都过期了：把这个地区的入口重测一遍再挑（出口未知的入口测了也归不进地区，不测）
+		a.mu.Lock()
+		var again []nodeRef
+		for i, c := range a.entryCandsLocked(nodes) {
+			if !exclude[c.ID] && (region == "" || strings.EqualFold(c.Country, region)) {
+				again = append(again, nodes[i])
+			}
+		}
+		a.mu.Unlock()
+		if len(again) > 0 {
+			a.testDelays(again)
+			chosen, ok = pick()
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	best := a.bestNodeLocked(sub, exclude)
-	if best == "" || best == cur {
+	if in = a.instLocked(id); in == nil {
 		return false
 	}
-	setNode(in, sub, best)
-	in.UpdatedAt = now()
-	a.saveLocked("instances")
-	a.saveScanLocked()
-	a.bumpLocked("state", id)
-	return true
+	changed := false
+	r := a.rtLocked(id)
+	if ok && chosen != cur {
+		setNode(in, sub, chosen)
+		changed = true
+	}
+	if !ok && region != "" {
+		r.Notice = "所选出口地区（" + region + "）暂时没有可用的线路，线路保持不变。可以点测速重试，或换一个地区。"
+	}
+	if sub.Kind == "edgetunnel" {
+		entry, _ := findCand(a.entryCandsLocked(nodes), currentNode(in, sub))
+		if np, old := pickPip(a.pipCandsLocked(sub, in), entry, pipID(in)), pipID(in); np != old {
+			setPip(in, np)
+			changed = true
+		}
+	}
+	if changed {
+		in.UpdatedAt = now()
+		a.saveLocked("instances")
+		a.saveScanLocked()
+		a.bumpLocked("state", id)
+	}
+	return changed
 }

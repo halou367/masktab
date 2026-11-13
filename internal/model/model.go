@@ -23,8 +23,9 @@ type InstProxy struct {
 	SubscriptionID string `json:"subscriptionId,omitempty"`
 	ExitID         string `json:"exitId,omitempty"`
 	ExitIP         string `json:"exitIp,omitempty"`
-	Auto           bool   `json:"auto"`        // 自动选节点：启动时或当前节点不通时，换成延迟最低的可用节点
-	AddressMode    string `json:"addressMode"` // same-as-exit | custom
+	Auto           bool   `json:"auto"`             // 自动：按出口地区选最快的入口，并配一个同地区的反代；当前线路不通时自动换
+	Region         string `json:"region,omitempty"` // 自动时限定的出口地区（国家代码，如 KR）；空 = 不限
+	AddressMode    string `json:"addressMode"`      // same-as-exit | custom
 	AddressID      string `json:"addressId,omitempty"`
 	Host           string `json:"host,omitempty"`
 	NodeKey        string `json:"nodeKey,omitempty"`
@@ -90,6 +91,8 @@ type Address struct {
 	Label          string `json:"label,omitempty"`
 	Source         string `json:"source"` // subscription | custom
 	SubscriptionID string `json:"subscriptionId,omitempty"`
+	// Gone：已不在最新一次拉取的订阅里。有的订阅每次拉取都随机给一批地址，测过可用的会留下来继续用。
+	Gone bool `json:"gone,omitempty"`
 }
 
 type ExitEntry struct {
@@ -116,10 +119,11 @@ type IPInfo struct {
 	Approx   bool   `json:"approx,omitempty"` // 时区来自"国家→默认时区"兜底表
 }
 
-// NodeScan 是一个节点（优选 IP）最近一次测速 / 出口探测的结果。
+// NodeScan 是一条候选线路（入口地址、反代或通用节点）最近一次测速 / 出口探测的结果。
 type NodeScan struct {
-	Delay int     `json:"delay"`          // 毫秒；0 未测；-1 不通
-	Exit  *IPInfo `json:"exit,omitempty"` // 经该节点访问非 Cloudflare 站点时对方看到的 IP
+	Delay int     `json:"delay"`          // 往返延迟，毫秒（隧道建好之后一次请求的来回，不含握手）；0 未测；-1 不通
+	Exit  *IPInfo `json:"exit,omitempty"` // 经它访问非 Cloudflare 站点时对方看到的 IP
+	CF    *IPInfo `json:"cf,omitempty"`   // 经它访问托管在 Cloudflare 上的站点时对方看到的 IP（入口：不指定反代时；反代：用它时）
 	Err   string  `json:"err,omitempty"`  // 不通的原因
 	At    int64   `json:"at,omitempty"`
 }

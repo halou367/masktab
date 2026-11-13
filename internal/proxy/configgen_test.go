@@ -60,3 +60,10 @@ func TestScanChannelsAndECH(t *testing.T) {
 		t.Error("没有 ECH 时不应写 dns 段")
 	}
 }
+
+// 延迟必须是"连接建好之后的往返时间"：不开 unified-delay 时 mihomo 给的是含三次握手的首次请求耗时。
+func TestGenerateUnifiedDelay(t *testing.T) {
+	if !strings.Contains(string(Generate(Input{ControlPort: 1, Secret: "s"})), `"unified-delay": true`) {
+		t.Fatal("配置里应当开启 unified-delay")
+	}
+}

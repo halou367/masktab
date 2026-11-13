@@ -107,7 +107,7 @@ type fpInfo struct {
 	Lang     string `json:"lang"` // 空 = 系统语言
 }
 
-// nodeView 是节点列表里的一行：地址（优选 IP）、备注 / Host、延迟、出口。
+// nodeView 是入口列表里的一行：地址、备注、往返延迟、两路出口。
 type nodeView struct {
 	ID     string        `json:"id"`
 	Server string        `json:"server"`
@@ -115,15 +115,32 @@ type nodeView struct {
 	Label  string        `json:"label"`
 	Host   string        `json:"host,omitempty"`
 	Type   string        `json:"type,omitempty"`
-	Custom bool          `json:"custom,omitempty"`
+	From   string        `json:"from"`           // sub | custom | pip
+	Gone   bool          `json:"gone,omitempty"` // 已不在最新的订阅里（留用）
 	Delay  int           `json:"delay"`
-	Exit   *model.IPInfo `json:"exit,omitempty"`
+	Exit   *model.IPInfo `json:"exit,omitempty"` // 普通网站看到的出口
+	CF     *model.IPInfo `json:"cf,omitempty"`   // 不指定反代时 Cloudflare 站点看到的出口
 	Err    string        `json:"err,omitempty"`
+}
+
+// pipView 是反代列表里的一行。
+type pipView struct {
+	ID      string        `json:"id"`
+	Type    string        `json:"type"`
+	Value   string        `json:"value"`
+	Label   string        `json:"label"`
+	Key     string        `json:"key"`               // 地址:端口，和入口的 key 相同表示是同一台机器
+	Derived bool          `json:"derived,omitempty"` // 来自入口地址
+	Delay   int           `json:"delay"`
+	CF      *model.IPInfo `json:"cf,omitempty"`   // 用它时 Cloudflare 站点看到的出口
+	Exit    *model.IPInfo `json:"exit,omitempty"` // 全局出口（socks5 / http）时普通网站看到的出口
+	Err     string        `json:"err,omitempty"`
 }
 
 type subView struct {
 	*model.Subscription
 	Nodes     []nodeView `json:"nodes"`
+	Pips      []pipView  `json:"pips"`
 	NodeCount int        `json:"nodeCount"`
 	Scanning  bool       `json:"scanning"`
 	Template  any        `json:"template,omitempty"`
@@ -160,10 +177,14 @@ func (a *App) State(me string) map[string]any {
 	}
 	subs := []subView{}
 	for _, s := range a.Subs {
-		v := subView{Subscription: s, Nodes: []nodeView{}, Scanning: a.scanning[s.ID]}
+		v := subView{Subscription: s, Nodes: []nodeView{}, Pips: []pipView{}, Scanning: a.scanning[s.ID]}
 		for _, n := range a.nodesLocked(s) {
 			sc := a.scanLocked(n.Name)
-			v.Nodes = append(v.Nodes, nodeView{ID: n.ID, Server: n.Server, Port: n.Port, Label: n.Label, Host: n.Host, Type: n.Type, Custom: n.Custom, Delay: sc.Delay, Exit: sc.Exit, Err: sc.Err})
+			v.Nodes = append(v.Nodes, nodeView{ID: n.ID, Server: n.Server, Port: n.Port, Label: n.Label, Host: n.Host, Type: n.Type, From: n.From, Gone: n.Gone, Delay: sc.Delay, Exit: sc.Exit, CF: sc.CF, Err: sc.Err})
+		}
+		for _, p := range a.pipsLocked(s) {
+			sc := a.scanLocked(p.Name)
+			v.Pips = append(v.Pips, pipView{ID: p.ID, Type: p.Type, Value: p.Value, Label: p.Label, Key: p.key(), Derived: p.Derived, Delay: sc.Delay, CF: sc.CF, Exit: sc.Exit, Err: sc.Err})
 		}
 		v.NodeCount = len(v.Nodes)
 		subs = append(subs, v)
@@ -190,7 +211,9 @@ func (a *App) State(me string) map[string]any {
 
 type proxyPatch struct {
 	State, SubscriptionID, ExitID, ExitIP, AddressMode, AddressID, Host, NodeKey *string
-	NodeID                                                                       *string // 节点列表里的一行（优选 IP 的 id 或节点的 key）：手动选中即关闭"自动"
+	NodeID                                                                       *string // 手动选入口（入口列表里一行的 id）：关闭"自动"
+	PipID                                                                        *string // 手动选反代（反代列表里一行的 id；空 = 不指定）：关闭"自动"
+	Region                                                                       *string // 选出口地区（国家代码；空 = 不限）：打开"自动"
 	Auto                                                                         *bool
 }
 
@@ -293,6 +316,9 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 		setIf(&in.Proxy.SubscriptionID, pp.SubscriptionID)
 		if in.Proxy.SubscriptionID != oldSub { // 换订阅：清空旧选择，按默认规则重新补全
 			in.Proxy.AddressID, in.Proxy.Host, in.Proxy.NodeKey = "", "", ""
+			if strings.HasPrefix(in.Proxy.ExitID, "a:") { // 取自旧订阅入口地址的反代，跟着一起清掉
+				in.Proxy.ExitID, in.Proxy.ExitIP = "", ""
+			}
 		}
 		setIf(&in.Proxy.ExitID, pp.ExitID)
 		if pp.ExitID != nil && pp.ExitIP == nil {
@@ -309,6 +335,13 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 		if pp.NodeID != nil {
 			setNode(in, a.subLocked(in.Proxy.SubscriptionID), *pp.NodeID)
 			in.Proxy.Auto = false
+		}
+		if pp.PipID != nil {
+			setPip(in, *pp.PipID)
+			in.Proxy.Auto = false
+		}
+		if pp.Region != nil {
+			in.Proxy.Region, in.Proxy.Auto = strings.ToUpper(strings.TrimSpace(*pp.Region)), true
 			if in.Proxy.AddressMode == "same-as-exit" {
 				in.Proxy.AddressMode = "custom"
 			}
@@ -326,7 +359,7 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 			}
 			keepExit := in.Proxy.ExitID
 			a.fillProxyLocked(in, sub)
-			if pp.ExitID != nil && *pp.ExitID == "" { // 用户明确选了"不指定"
+			if (pp.ExitID != nil && *pp.ExitID == "") || (pp.PipID != nil && *pp.PipID == "") { // 用户明确选了"不指定"
 				in.Proxy.ExitID, in.Proxy.ExitIP = keepExit, ""
 			}
 		}

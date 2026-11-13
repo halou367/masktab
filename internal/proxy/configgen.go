@@ -89,6 +89,9 @@ func Generate(in Input) []byte {
 	}
 	cfg := map[string]any{
 		"allow-lan": false, "bind-address": "127.0.0.1", "mode": "rule", "log-level": "warning", "ipv6": false,
+		// 延迟 = 隧道建好之后一次请求的往返时间。不开这一项时测到的是"第一次请求"的耗时，
+		// 里面有三次握手（到入口的 TCP、TLS、WebSocket）加目标站点的 TLS，是往返时间的五六倍，不同线路之间也没法比。
+		"unified-delay":       true,
 		"external-controller": "127.0.0.1:" + itoa(in.ControlPort), "secret": in.Secret,
 		"profile":      map[string]any{"store-selected": false, "store-fake-ip": false}, // 重载后必须落回第一项 REJECT
 		"proxies":      proxies,

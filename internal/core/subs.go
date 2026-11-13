@@ -135,24 +135,35 @@ func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, has
 		isET = isET && s.Kind == "edgetunnel"
 	}
 	old := map[string]*model.Address{}
-	var keep []*model.Address
+	var keep, mine []*model.Address
 	for _, ad := range a.Addresses {
 		if ad.SubscriptionID == s.ID && ad.Source == "subscription" {
 			old[fmt.Sprintf("%s:%d", ad.Server, ad.Port)] = ad
+			mine = append(mine, ad)
 		} else {
 			keep = append(keep, ad)
 		}
 	}
 	if isET {
 		s.Kind, s.Template, s.Hosts = "edgetunnel", &info.Template, info.Hosts
+		fresh := map[string]bool{}
 		for _, ad := range info.Addresses {
 			k := fmt.Sprintf("%s:%d", ad.Server, ad.Port)
-			if o := old[k]; o != nil { // 仍在的优选 IP 保留原 id，实例的选择不丢
-				o.Label = ad.Label
+			fresh[k] = true
+			if o := old[k]; o != nil { // 仍在的地址保留原 id，实例的选择不丢
+				o.Label, o.Gone = ad.Label, false
 				keep = append(keep, o)
 				continue
 			}
 			keep = append(keep, &model.Address{ID: newID(), UpdatedAt: now(), Server: ad.Server, Port: ad.Port, Label: ad.Label, Source: "subscription", SubscriptionID: s.ID})
+		}
+		// 有的订阅每次拉取都随机换一批地址。这次没出现的旧地址先留着（标记 gone），
+		// 测速后只留还能用的（见 pruneGoneLocked），正在用的线路不会因为刷新订阅被换掉。
+		for _, o := range mine {
+			if !fresh[fmt.Sprintf("%s:%d", o.Server, o.Port)] {
+				o.Gone = true
+				keep = append(keep, o)
+			}
 		}
 	} else {
 		if !s.KindLocked {
@@ -167,9 +178,9 @@ func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, has
 		}
 		r := a.rtLocked(in.ID)
 		if s.Kind == "edgetunnel" {
-			if in.Proxy.AddressMode != "same-as-exit" && a.addrLocked(in.Proxy.AddressID) == nil {
+			if _, ok := a.entryLocked(s, in.Proxy.AddressID); !ok && in.Proxy.AddressMode != "same-as-exit" {
 				in.Proxy.AddressID = a.bestAddrLocked(s.ID)
-				r.Notice = "原优选 IP 已不在订阅里，已换成延迟最低的"
+				r.Notice = "原来的入口地址已经没有了，已换成延迟最低的"
 			}
 			if !contains(s.Hosts, in.Proxy.Host) {
 				in.Proxy.Host = ""

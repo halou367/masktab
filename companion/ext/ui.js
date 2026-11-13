@@ -77,3 +77,10 @@ export function toggle(label, on, title, onchange, disabled) {
   return h('button', { class: 'tg' + (on ? ' on' : ''), title, disabled, role: 'switch', 'aria-checked': on ? 'true' : 'false', onclick: () => onchange(!on) }, h('i'), label);
 }
 export const delayCls = (d) => (d > 0 ? (d < 200 ? 'good' : d < 500 ? 'mid' : 'bad') : d < 0 ? 'bad' : 'na');
+// 国家代码 → 中文名（界面上按出口所在国家分组用）；没列到的直接显示代码。
+const CN = { US: '美国', CA: '加拿大', MX: '墨西哥', BR: '巴西', AR: '阿根廷', CL: '智利', CO: '哥伦比亚', PE: '秘鲁', GB: '英国', IE: '爱尔兰', FR: '法国', DE: '德国', NL: '荷兰', BE: '比利时', LU: '卢森堡', CH: '瑞士', AT: '奥地利',
+  IT: '意大利', ES: '西班牙', PT: '葡萄牙', SE: '瑞典', NO: '挪威', DK: '丹麦', FI: '芬兰', PL: '波兰', CZ: '捷克', HU: '匈牙利', RO: '罗马尼亚', BG: '保加利亚', GR: '希腊', TR: '土耳其', UA: '乌克兰', RU: '俄罗斯',
+  LT: '立陶宛', LV: '拉脱维亚', EE: '爱沙尼亚', RS: '塞尔维亚', HR: '克罗地亚', SK: '斯洛伐克', SI: '斯洛文尼亚', IS: '冰岛', MD: '摩尔多瓦', CN: '中国', HK: '香港', MO: '澳门', TW: '台湾', JP: '日本', KR: '韩国',
+  SG: '新加坡', MY: '马来西亚', TH: '泰国', VN: '越南', PH: '菲律宾', ID: '印度尼西亚', IN: '印度', PK: '巴基斯坦', BD: '孟加拉国', KZ: '哈萨克斯坦', AE: '阿联酋', SA: '沙特', IL: '以色列', IR: '伊朗', IQ: '伊拉克', QA: '卡塔尔',
+  KH: '柬埔寨', AU: '澳大利亚', NZ: '新西兰', ZA: '南非', EG: '埃及', NG: '尼日利亚', KE: '肯尼亚', MA: '摩洛哥' };
+export const cname = (c) => (c ? CN[c.toUpperCase()] || c.toUpperCase() : '未知');
