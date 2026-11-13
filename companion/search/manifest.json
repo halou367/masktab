@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "MaskTab 默认搜索",
+  "version": "0.1.0",
+  "description": "把地址栏默认搜索设为 Bing（仅 Windows / macOS 生效；单独成一个扩展，失败不影响伴随扩展）。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk5OnE8bxjzzeFwPqg5Mpg51TB2E1SwW9bBLwr9+rgRQa6FARBinm2/t4oy67ou7t6VfLcX1M1JgHXqxvHyZcrzqcFgYJIPxgCGXw0NQtSGnOJanuY/nFawGqonB6lk/7OnAq6JSHLio4dnfJ/0iUGTmnWgOoBZbEH3tB40t3B9P9IIKTzWclI7A2F9vxP/wp/Q0NBa6tNtNpkfecIKAND8eLB/9qVUu+j+I5GKQAFRg+Vnnzcss+L9IQhyysAdMYC5JnORUXQpzZPyxdsDZ5VZgHF/4sJW6xLBdiVYJLiYkeOxVoGAxaMqWltRknRs/W5aqZhP6vsVEOzumqhVIn5QIDAQAB",
+  "chrome_settings_overrides": {
+    "search_provider": {
+      "name": "Bing",
+      "keyword": "bing.com",
+      "search_url": "https://www.bing.com/search?q={searchTerms}",
+      "favicon_url": "https://www.bing.com/favicon.ico",
+      "suggest_url": "https://www.bing.com/osjson.aspx?query={searchTerms}",
+      "encoding": "UTF-8",
+      "is_default": true
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "MaskTab",
+  "version": "0.1.0",
+  "description": "MaskTab 伴随扩展：节点面板、实例管理、新标签页。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwu/1uFYwxfBqBnLDCkJRa7bUBYZqNQg2Rf+5cBl/IrlpjtZXaqMPq7fdXlM9fN1jKEFDp1SPdUi4PTRwjPVbWDoXkrS7mx1yNUW+QOfY0cPHjDb+1IghT/u/YoaGeJLHq+1STxzL1uKuTKVPjYXxW+PQLuFnk85uAw2JaWGtLhB/qhRdBIbU0n87RzMnTHVswl3d2lKv+nnc2hLGliNi2HMTSiTTUUOLysjQKKQrWfm14OT2M2UDBoBvW8losFSYJNPxMAnh5tJ9ZNpgK0oREFYyNcS1D3bpCCcbkbXknQJSeiu9JAPnHurYHbSBlyhb4bGdNsjZIElfKr4RIUAJ9wIDAQAB",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "alarms", "tabs"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "MaskTab" },
+  "chrome_url_overrides": { "newtab": "newtab.html" },
+  "icons": { "48": "assets/icon48.png", "128": "assets/icon128.png" },
+  "commands": {
+    "new-instance": { "suggested_key": { "default": "Ctrl+M", "mac": "Command+M" }, "description": "新建伪装实例" },
+    "open-manager": { "suggested_key": { "default": "Ctrl+Shift+M", "mac": "Command+Shift+M" }, "description": "实例管理" },
+    "_execute_action": { "suggested_key": { "default": "Alt+P" }, "description": "打开节点面板" }
+  }
+}
