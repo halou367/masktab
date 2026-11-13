@@ -85,8 +85,13 @@
 
 ### U-3 还没解决的界面问题
 
-- 内核启动的第一个标签页上有一条“You are using an unsupported command-line flag”提示条。还没确认是哪个参数引起的（猜是 `--host-resolver-rules`）。
-  看 CI 产物里的 `0-first-window.png`。这个参数是防 DNS 泄漏的，去掉之前必须先做 V4 泄漏测试。
+- **提示条**：每次启动，第一个标签页上有一条
+  “You are using an unsupported command-line flag: --host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1. Stability and security will suffer.”
+  （Windows CI 截图 `0-first-window.png` 确认就是这个参数。）它可以点叉关掉，只是难看。
+  这个参数的作用是让内核自己一条 DNS 都不发，防 DNS 泄漏。**没做 V4 泄漏测试之前不要去掉。**
+  做了 V4 之后的备选：去掉它，改为确认“走 SOCKS5 代理时内核本来就不做本地解析”，并在偏好里关掉 DNS 预取。
+- **新标签页底部的署名栏**（“MaskTab”链接和“Customize Chromium”按钮）：改用 `--custom-ntp` 后仍然在。
+  试过在偏好里写 `ntp.footer_visible=false` 和 `ntp.footer.extension_attribution_enabled=false`，没有效果，已经删掉。用户可以在“Customize Chromium”里手动关。
 
 ## 代理
 
