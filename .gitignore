@@ -3,3 +3,5 @@
 *.exe
 /masktab
 .DS_Store
+/smoke-data/
+/shots/

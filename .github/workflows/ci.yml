@@ -1,0 +1,97 @@
+# 每次推送：单元测试、交叉编译 Windows 可执行文件、在真实的 Windows 与 Linux 机器上跑冒烟测试。
+# 产物（Actions 页面 → 本次运行 → Artifacts）：
+#   masktab-windows-amd64   可直接双击运行的 masktab.exe
+#   smoke-windows / smoke-linux   冒烟测试结果、日志、界面截图
+name: CI
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 测试与构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: 构建 Windows 可执行文件
+        run: |
+          VER="0.1.${{ github.run_number }}-${GITHUB_SHA::7}"
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$VER" -o dist/masktab.exe ./cmd/masktab
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$VER" -o dist/masktab-console.exe ./cmd/masktab
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: masktab-windows-amd64
+          path: dist/
+
+  smoke-windows:
+    name: 冒烟测试（Windows，有界面）
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: go build -o masktab.exe ./cmd/masktab
+      - name: 缓存内核与 mihomo
+        uses: actions/cache@v4
+        with:
+          path: |
+            smoke-data/kernel
+            smoke-data/core/mihomo.exe
+          key: tools-windows-${{ hashFiles('internal/kernel/fetch.go') }}
+      - name: 冒烟测试
+        run: node scripts/smoke.mjs --bin masktab.exe --data smoke-data --shots shots --visible
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-windows
+          path: |
+            shots/
+            smoke-data/smoke-result.md
+            smoke-data/smoke-core.log
+            smoke-data/state/masktab.log
+
+  smoke-linux:
+    name: 冒烟测试（Linux，无头）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: go build -o masktab ./cmd/masktab
+      - name: 缓存内核与 mihomo
+        uses: actions/cache@v4
+        with:
+          path: |
+            smoke-data/kernel
+            smoke-data/core/mihomo
+          key: tools-linux-${{ hashFiles('internal/kernel/fetch.go') }}
+      - name: 冒烟测试
+        run: node scripts/smoke.mjs --bin ./masktab --data smoke-data --shots shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-linux
+          path: |
+            shots/
+            smoke-data/smoke-result.md
+            smoke-data/smoke-core.log
+            smoke-data/state/masktab.log

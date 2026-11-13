@@ -188,6 +188,11 @@ func Find(kernelDir, override string) string {
 			return nil
 		}
 		if d.Name() == ExeName() {
+			// 自动下载目录里只认当前固定的版本：换了固定版本后，旧版本目录不再被选中，会触发重新下载。
+			auto := filepath.Join(root, "fingerprint-chromium") + string(filepath.Separator)
+			if strings.HasPrefix(p, auto) && !strings.HasPrefix(p, auto+KernelVersion+string(filepath.Separator)) {
+				return nil
+			}
 			found = append(found, p)
 		}
 		return nil

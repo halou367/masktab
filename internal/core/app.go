@@ -46,6 +46,7 @@ type Runtime struct {
 	extSetHash string
 	pulled     map[string]string // 共享扩展：启动时拉入后的内容哈希
 	done       chan struct{}
+	startedAt  int64 // 本次启动时刻（毫秒），用来判断伴随扩展后台是否一直没起来
 }
 
 type Setup struct {

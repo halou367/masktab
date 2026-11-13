@@ -15,9 +15,12 @@ import (
 	"time"
 )
 
-// 固定版本：升级内核是有意识的动作（升级后要重跑 V3、V7、V8），所以不自动追最新版。
+// 固定版本：升级内核是有意识的动作（升级后要重跑 V3、V7、V8 和 scripts/smoke.mjs），所以不自动追最新版。
+// 不用 150.0.7871.186：它开启 --fingerprint 后画布读回（getImageData / toDataURL / readPixels）会让渲染进程崩溃，
+// 本项目在 Linux 上稳定复现，上游 issue #94 #95 #104 报告 Windows 同样如此；148.0.7778.215 实测 300 次读回无问题。
+// 详见 docs/decisions.md 的 K-1。
 const (
-	KernelVersion = "150.0.7871.186"
+	KernelVersion = "148.0.7778.215"
 	MihomoVersion = "v1.19.34"
 )
 

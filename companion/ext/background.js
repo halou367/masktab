@@ -3,9 +3,8 @@ import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY } from './api.j
 let seq = 0;
 let looping = false;
 
-// 工具栏图标：读取打包好的 32×32 原始 RGBA 数据（gzip），直接构造 ImageData 交给 setIcon，全程不经过画布。
-// 原因：默认内核开启指纹后，画布读回（getImageData）在部分实例里会卡死所在线程（Linux 实测），
-// 而 setIcon 的 path 形式在内部正是用画布读回，会把整个 Service Worker 卡死。
+// 工具栏图标：读取打包好的 32×32 原始 RGBA 数据（gzip），直接构造 ImageData 交给 setIcon，全程不经过画布读回。
+// 原因：指纹内核会给画布读回加噪声（图标会花），150 版内核读回还会让进程崩溃；setIcon 的 path 形式内部也是画布读回。
 async function rgba(name) {
   const r = await fetch(chrome.runtime.getURL(`assets/rgba/${name}.gz`));
   if (!r.ok) throw new Error('no icon');
@@ -58,6 +57,10 @@ async function refresh() {
 }
 
 async function handle(e, c) {
+  if (e.type === 'close' && e.inst === c.instanceId) { // 核心服务要求本实例正常退出：关掉全部窗口
+    for (const w of await chrome.windows.getAll()) await chrome.windows.remove(w.id).catch(() => {});
+    return;
+  }
   if (e.type === 'focus' && e.inst === c.instanceId) {
     const w = await chrome.windows.getLastFocused().catch(() => null);
     if (w) await chrome.windows.update(w.id, { focused: true, drawAttention: true });
@@ -70,7 +73,8 @@ async function loop() {
   looping = true;
   try {
     const c = await config();
-    await refresh();
+    const first = await refresh();
+    if (!seq) seq = first.seq; // 后台刚被唤醒：从当前序号开始听，不重放旧事件（否则旧的“关闭”事件会把刚启动的实例关掉）
     for (;;) {
       const r = await api('GET', `/api/events?since=${seq}`);
       seq = r.seq;
@@ -95,6 +99,10 @@ chrome.commands.onCommand.addListener(async (cmd) => {
 chrome.alarms.onAlarm.addListener(() => loop());
 chrome.runtime.onInstalled.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); loop(); });
 chrome.runtime.onStartup.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); loop(); });
-chrome.runtime.onMessage.addListener((m, _s, send) => { if (m === 'repaint') refresh().then(() => send(true), () => send(false)); return true; });
+chrome.runtime.onMessage.addListener((m, _s, send) => {
+  if (m === 'wake') { loop(); send(true); return false; } // 扩展页面打开时叫醒后台
+  if (m === 'repaint') { loop(); refresh().then(() => send(true), () => send(false)); return true; }
+  return false;
+});
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 loop();

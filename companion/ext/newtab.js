@@ -1,4 +1,5 @@
 import { api, config, shownExit } from './api.js';
+try { chrome.runtime.sendMessage('wake').catch(() => {}); } catch { /* 忽略 */ } // 新标签页打开时叫醒后台
 const c = await config();
 document.getElementById('dot').style.background = c.color;
 document.getElementById('no').textContent = '#' + c.no;

@@ -1,3 +1,4 @@
+try { chrome.runtime.sendMessage('wake').catch(() => {}); } catch { /* 忽略 */ } // 任何扩展页面打开时都叫醒后台
 // 极小的界面工具：h() 只用 textContent 写入数据，订阅里的节点名等外来字符串不会被当成 HTML。
 export function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);

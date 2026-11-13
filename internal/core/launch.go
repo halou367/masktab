@@ -273,10 +273,18 @@ func (a *App) Launch(id string) error {
 	cmd.Env = append(os.Environ(), a.adapter.Env(l)...)
 	logf, _ := os.OpenFile(a.p("runtime", in.ID, "kernel.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	cmd.Stdout, cmd.Stderr = logf, logf
+	// 自愈：上次运行时伴随扩展后台一直没起来（资料目录里的 Service Worker 注册卡死，实测强杀后会出现），
+	// 这次启动前把该实例的 Service Worker 注册库整个重置。网站自己的 Service Worker 会在下次访问时重新注册。
+	if _, e := os.Stat(a.p("profiles", id, repairMark)); e == nil {
+		_ = os.RemoveAll(a.p("profiles", id, "Default", "Service Worker"))
+		_ = os.Remove(a.p("profiles", id, repairMark))
+		log.Printf("实例 #%d 上次运行时伴随扩展后台没有启动，已重置它的 Service Worker 注册", in.No)
+	}
 	if err := cmd.Start(); err != nil {
 		return fail("启动内核失败：" + err.Error())
 	}
 	a.mu.Lock()
+	r.Seen, r.startedAt = 0, now()
 	r.cmd, r.Running, r.Starting, r.Pid, r.LaunchedTZ, r.Cut = cmd, true, false, cmd.Process.Pid, tz, ""
 	r.extSetHash, r.pulled, r.done = extHash, pulled, make(chan struct{})
 	a.saveLocked("runtime")
@@ -327,6 +335,12 @@ func (a *App) watch(id string, cmd *exec.Cmd, logf *os.File) {
 		a.mu.Unlock()
 	}
 	a.mu.Lock()
+	if r.Seen == 0 && r.startedAt > 0 && now()-r.startedAt > 45_000 { // 30 秒闹钟也没能把后台叫起来
+		if f, e := os.Create(a.p("profiles", id, repairMark)); e == nil {
+			f.Close()
+		}
+		log.Printf("实例 #%d 运行期间伴随扩展后台一直没有连接，下次启动时会重置它的 Service Worker 注册", no)
+	}
 	r.Running, r.Pid, r.cmd, r.active, r.Cut, r.NeedRestart = false, 0, nil, false, "", nil
 	done := r.done
 	if !a.quitting {
@@ -350,6 +364,17 @@ func (a *App) Stop(id string) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
+	// 第一步：让该实例的伴随扩展自己关掉全部窗口。这是和用户点关闭完全一样的正常退出，
+	// Cookie、会话都会落盘；直接结束进程会丢掉最近 30 秒内写入的 Cookie（实测）。
+	a.mu.Lock()
+	a.bumpLocked("close", id)
+	a.mu.Unlock()
+	select {
+	case <-done:
+		return
+	case <-time.After(4 * time.Second):
+		log.Printf("实例 %s 没有在 4 秒内自行关闭，改为结束进程", id[:8])
+	}
 	terminate(cmd.Process.Pid, false)
 	select {
 	case <-done:
@@ -361,6 +386,9 @@ func (a *App) Stop(id string) {
 		}
 	}
 }
+
+// repairMark 是放在实例资料目录里的标记文件：存在表示下次启动前要重置 Service Worker 注册。
+const repairMark = ".repair-sw"
 
 func terminate(pid int, force bool) {
 	if runtime.GOOS == "windows" {
@@ -408,11 +436,13 @@ func (a *App) Delete(id string) error {
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
 	var err error
-	for i := 0; i < 5; i++ { // Windows 上进程刚退出时文件可能仍被占用
-		if err = os.RemoveAll(a.p("profiles", id)); err == nil {
+	// 主进程退出后子进程还会再写几个文件（Linux 实测），Windows 上文件也可能仍被占用：删到确实不存在为止。
+	for i := 0; i < 12; i++ {
+		err = os.RemoveAll(a.p("profiles", id))
+		time.Sleep(400 * time.Millisecond)
+		if _, e := os.Stat(a.p("profiles", id)); os.IsNotExist(e) && err == nil {
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
 	_ = os.RemoveAll(a.p("runtime", id))
 	return err
@@ -530,6 +560,19 @@ func (a *App) writeCompanion(in *model.Instance) ([]string, error) {
 	dst := a.p("runtime", in.ID, "companion")
 	_ = os.RemoveAll(dst)
 	if err := copyFS(companion.FS, "ext", dst); err != nil {
+		return nil, err
+	}
+	// 版本号跟着扩展文件内容走，原因见 companion.Version。
+	mp := filepath.Join(dst, "manifest.json")
+	mb, err := os.ReadFile(mp)
+	if err != nil {
+		return nil, err
+	}
+	stamped := strings.Replace(string(mb), `"version": "0.1.0"`, `"version": "`+companion.Version()+`"`, 1)
+	if stamped == string(mb) {
+		return nil, errors.New("伴随扩展 manifest.json 里找不到版本号占位 0.1.0")
+	}
+	if err := os.WriteFile(mp, []byte(stamped), 0o644); err != nil {
 		return nil, err
 	}
 	cfg := map[string]any{"instanceId": in.ID, "no": in.No, "kind": in.Kind, "color": in.Color, "port": a.apiPort, "token": a.token, "version": a.Version, "searchUrl": a.Settings.SearchURL}
