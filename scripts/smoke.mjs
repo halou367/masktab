@@ -200,6 +200,7 @@ try {
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#subscriptions`, '4-subscriptions.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#settings`, '5-settings.png');
 
+  { const c0 = await cdp(prof(a.id)); await c0.send('Target.createTarget', { url: 'chrome://newtab/' }); c0.close(); await sleep(3000); }
   await desktopShot('6-desktop.png');
 
   // 6. 重启后恢复标签页与登录态
@@ -211,6 +212,7 @@ try {
   if (ia2) {
     await sleep(2000);
     const c2 = await cdp(prof(a.id)); const ts = (await c2.send('Target.getTargets')).targetInfos.map((x) => x.url); c2.close();
+    await desktopShot('7-desktop-after-restart.png');
     check(ts.some((u) => u.includes('restore-me')), '重启后恢复了上次的标签页', ts.filter((u) => u.startsWith('http')).join(' , ').slice(0, 160));
     const again = (await evalPage(prof(a.id), PAGE, `document.cookie+'|'+localStorage.getItem('who')`)).value;
     // 无头模式下关掉全部窗口后内核不会自己退出，只能结束进程，刚写入不到 30 秒的 Cookie 会丢，所以无头时只记警告。

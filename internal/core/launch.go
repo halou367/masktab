@@ -544,6 +544,11 @@ func (a *App) prepareProfile(in *model.Instance, l kernel.Launch) error {
 	set([]string{companion.ID}, "extensions", "pinned_extensions") // 把伴随扩展按钮固定在工具栏
 	set("disable_non_proxied_udp", "webrtc", "ip_handling_policy")
 	set(true, "browser", "has_seen_welcome_page")
+	// 新标签页被伴随扩展接管后，内核会弹“Did you mean to change this page?”并在页脚显示扩展署名（Windows CI 截图里看到的）。
+	// 预先写入“已确认”，并关掉页脚。键名来自内核源码的记忆，是否生效以 CI 截图为准（docs/decisions.md U-1）。
+	set(true, "extensions", "settings", companion.ID, "ack_ntp_bubble")
+	set(false, "ntp", "footer_visible")
+	set(false, "ntp", "footer", "extension_attribution_enabled")
 	if l.AcceptLang != "" {
 		set(l.AcceptLang, "intl", "accept_languages")
 	}
@@ -552,7 +557,29 @@ func (a *App) prepareProfile(in *model.Instance, l kernel.Launch) error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// Windows 上扩展的设置在首次运行后会被内核挪到同目录的 Secure Preferences 里；那边已经有伴随扩展的条目时，确认标记要写在那边。
+	sp := filepath.Join(filepath.Dir(path), "Secure Preferences")
+	if sb, err := os.ReadFile(sp); err == nil {
+		var sec map[string]any
+		if json.Unmarshal(sb, &sec) == nil {
+			if ext, ok := sec["extensions"].(map[string]any); ok {
+				if st, ok := ext["settings"].(map[string]any); ok {
+					if me, ok := st[companion.ID].(map[string]any); ok && me["ack_ntp_bubble"] != true {
+						me["ack_ntp_bubble"] = true
+						if nb, err := json.Marshal(sec); err == nil {
+							if os.WriteFile(sp+".masktab.tmp", nb, 0o600) == nil {
+								_ = os.Rename(sp+".masktab.tmp", sp)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // writeCompanion 生成本实例的伴随扩展副本并写入 config.json（8.9 第 6 步）。返回要加载的扩展目录。
