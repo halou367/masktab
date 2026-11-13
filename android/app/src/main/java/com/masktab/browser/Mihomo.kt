@@ -98,7 +98,7 @@ class Mihomo(ctx: Context) {
                 if (proc?.isAlive != true) break
             }
             if (!ok) {
-                lastError = if (proc?.isAlive == true) "mihomo 没有响应" else "mihomo 退出了：" + tailLog()
+                lastError = if (proc?.isAlive == true) "mihomo 没有响应：$pingErr" else "mihomo 退出了：" + tailLog()
                 false
             } else true
         } catch (e: Exception) {
@@ -115,11 +115,13 @@ class Mihomo(ctx: Context) {
     private fun ctl(method: String, path: String, body: String? = null, timeoutMs: Int = 5000): HttpResult =
         http(method, "http://127.0.0.1:$ctlPort$path", body, mapOf("Authorization" to "Bearer $secret"), timeoutMs = timeoutMs)
 
+    @Volatile private var pingErr = ""
     fun ping(): Boolean = try {
         val r = ctl("GET", "/version", timeoutMs = 1000)
         if (r.code == 200) version = JSONObject(r.body).str("version")
+        pingErr = if (r.code == 200) "" else "HTTP ${r.code}"
         r.code == 200
-    } catch (e: Exception) { false }
+    } catch (e: Exception) { pingErr = e.message ?: e.javaClass.simpleName; false }
 
     private fun reload(): Boolean = try {
         val r = ctl("PUT", "/configs?force=true", jsonOf("path" to cfgFile.path).toString(), 15000)

@@ -70,6 +70,8 @@ android/
 - 配置文件是 JSON（YAML 的子集）。安卓自带的 org.json 会把 `/` 写成 `\/`，mihomo 的 YAML 解析器不认这个转义（CI 里报 `found unknown escape character`，mihomo 起不来），
   所以输出后用 `yamlSafeJson` 把 `\/` 换回 `/`（逐字符扫描，字面的反斜杠不受影响）。org.json 的其余转义（`\"` `\\` `\b` `\f` `\n` `\r` `\t` `\uXXXX`）YAML 都认，
   沙箱里用同版本 mihomo `-t` 试过含引号、反斜杠、制表符、中文、U+2028、控制字符的订阅地址。
+- app 自己的 HTTP 请求（控制接口、出口检测）受安卓“默认禁止明文 HTTP”限制：`res/xml/network_security_config.xml` 只放行 `127.0.0.1`、`localhost`（mihomo 控制接口）和 `ip-api.com`（出口检测备用源，只有 HTTP）。
+  没放行之前 CI 里 mihomo 实际已经起来，但 app 连不上控制接口，判成“mihomo 没有响应”、不选节点，实例全部被拒。
 - 每次加载配置后策略组落回 `REJECT`，app 再按实例设置选回节点（`auto` = 健康检查延迟最低的可用节点）。选不上就保持 `REJECT`。
 - 没填订阅时不启动 mihomo，所有实例直连（界面写“直连”）。填了订阅后，原来直连的实例改为“自动”。
 - 出口检测：app 经实例端口（HTTP 代理方式）请求 `ipinfo.io/json`，失败再试 `ip-api.com`，得到 IP、国家、城市、运营商、时区。

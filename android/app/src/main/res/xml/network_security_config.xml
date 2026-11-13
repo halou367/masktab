@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- app 自己（HttpURLConnection）的明文 HTTP 白名单；网页走 GeckoView 自己的网络栈，不受这里影响。
+     127.0.0.1 / localhost：mihomo 的 external-controller（只监听本机，CI 里因为被拦明文导致“mihomo 没有响应”）。
+     ip-api.com：出口检测的备用源，免费接口只有 HTTP。其余一律只许 HTTPS。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">ip-api.com</domain>
+    </domain-config>
+</network-security-config>
