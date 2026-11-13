@@ -65,9 +65,19 @@ func (a *App) EnsureTools() error {
 			bin = ""
 		}
 	}
+	pidFile := a.p("core", "mihomo.pid")
+	if b, err := os.ReadFile(pidFile); err == nil { // 上次异常退出遗留的 mihomo
+		if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); isOurProcess(pid, kernel.MihomoName(), a.p("core")) {
+			log.Printf("清理上次遗留的 mihomo 进程 %d", pid)
+			terminate(pid, true)
+		}
+	}
 	if bin != "" {
 		c := &proxy.Core{Bin: bin, Dir: a.p("core"), Port: freePort(), Secret: randToken(16)}
-		c.OnRestart = func() { go func() { _ = a.applyConfig() }() }
+		c.OnRestart = func() {
+			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)
+			go func() { _ = a.applyConfig() }()
+		}
 		if _, err := c.WriteConfig(proxy.Generate(proxy.Input{ControlPort: c.Port, Secret: c.Secret})); err != nil {
 			return err
 		}
@@ -76,6 +86,7 @@ func (a *App) EnsureTools() error {
 			log.Printf("mihomo 启动失败：%v", err)
 		} else {
 			a.core, a.coreOK = c, true
+			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)
 			go a.statsLoop()
 		}
 	}
@@ -100,8 +111,18 @@ func (a *App) EnsureTools() error {
 
 // Start 打开普通窗口 #0，并恢复上次未正常关闭的实例（F-INST-1、F-SESSION）。
 func (a *App) Start() {
-	var st struct{ Running []string }
+	var st struct {
+		Running []string
+		Pids    map[string]int
+	}
 	readJSON(a.p("state", "runtime.json"), &st)
+	for id, pid := range st.Pids { // 上次核心服务异常退出时留下的内核进程：先清掉，否则新进程会把窗口交给旧进程后立即退出
+		if isKernelProcess(pid, a.p("profiles", id)) {
+			log.Printf("清理上次遗留的内核进程 %d", pid)
+			terminate(pid, true)
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
 	a.mu.Lock()
 	ids := []string{a.inst0().ID}
 	if a.Settings.RestoreOnStart {
@@ -565,4 +586,26 @@ func (a *App) WaitIdle() {
 			return
 		}
 	}
+}
+
+// isKernelProcess 判断 pid 是否仍是我们启动的内核进程（防止 pid 被系统复用后误杀别的程序）。
+func isKernelProcess(pid int, profileDir string) bool {
+	return isOurProcess(pid, kernel.ExeName(), profileDir)
+}
+
+// isOurProcess：Windows 上按映像名判断，其他系统按命令行里是否含 marker 判断。
+func isOurProcess(pid int, exeName, marker string) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		out, err := exec.Command("tasklist", "/FI", "PID eq "+strconv.Itoa(pid), "/FO", "CSV", "/NH").Output()
+		return err == nil && strings.Contains(strings.ToLower(string(out)), strings.ToLower(exeName))
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil { // macOS 没有 /proc
+		out, err2 := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+		return err2 == nil && strings.Contains(string(out), marker)
+	}
+	return strings.Contains(string(b), marker)
 }

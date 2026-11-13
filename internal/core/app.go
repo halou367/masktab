@@ -224,13 +224,16 @@ func (a *App) saveLocked(what ...string) {
 		case "extensions":
 			err = writeJSON(a.p("config", "extensions.json"), fileWrap[[]*model.GlobalExtension]{1, a.Exts})
 		case "runtime":
-			var running []string
+			running, pids := []string{}, map[string]int{}
 			for _, in := range a.Instances {
 				if r := a.rt[in.ID]; r != nil && (r.Running || r.Starting) {
 					running = append(running, in.ID)
+					if r.Pid > 0 {
+						pids[in.ID] = r.Pid
+					}
 				}
 			}
-			err = writeJSON(a.p("state", "runtime.json"), map[string]any{"running": running})
+			err = writeJSON(a.p("state", "runtime.json"), map[string]any{"running": running, "pids": pids})
 		}
 		if err != nil {
 			log.Printf("保存 %s 失败：%v", w, err)

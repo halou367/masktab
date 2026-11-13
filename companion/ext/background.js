@@ -3,40 +3,22 @@ import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY } from './api.j
 let seq = 0;
 let looping = false;
 
-async function flagBitmap(cc) {
-  try {
-    const r = await fetch(chrome.runtime.getURL(`assets/flags/${cc.toLowerCase()}.png`));
-    if (!r.ok) return null;
-    return await createImageBitmap(await r.blob());
-  } catch { return null; }
+// 工具栏图标：读取打包好的 32×32 原始 RGBA 数据（gzip），直接构造 ImageData 交给 setIcon，全程不经过画布。
+// 原因：默认内核开启指纹后，画布读回（getImageData）在部分实例里会卡死所在线程（Linux 实测），
+// 而 setIcon 的 path 形式在内部正是用画布读回，会把整个 Service Worker 卡死。
+async function rgba(name) {
+  const r = await fetch(chrome.runtime.getURL(`assets/rgba/${name}.gz`));
+  if (!r.ok) throw new Error('no icon');
+  const buf = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  return new Uint8ClampedArray(buf);
 }
-
-// 图标：国旗 + 底部一条实例色。状态不只靠颜色区分：直连 = 断开的盾牌，断流 = 禁止，异常 = 感叹号。
-async function drawIcon(kind, color, cc) {
-  const S = 32, c = new OffscreenCanvas(S, S), g = c.getContext('2d');
-  g.lineWidth = 3; g.lineCap = 'round';
-  const bmp = kind === 'flag' && cc ? await flagBitmap(cc) : null;
-  if (bmp) {
-    g.drawImage(bmp, 0, 2, S, 21);
-    g.strokeStyle = 'rgba(0,0,0,.25)'; g.lineWidth = 1; g.strokeRect(0.5, 2.5, S - 1, 20);
-  } else if (kind === 'direct') {
-    g.strokeStyle = '#80868b';
-    g.beginPath(); g.moveTo(16, 3); g.lineTo(27, 7); g.lineTo(27, 14); g.moveTo(5, 12); g.lineTo(5, 7); g.lineTo(16, 3);
-    g.moveTo(6, 17); g.quadraticCurveTo(9, 23, 16, 25); g.quadraticCurveTo(22, 23, 25, 18); g.stroke();
-    g.beginPath(); g.moveTo(4, 4); g.lineTo(28, 24); g.stroke();
-  } else if (kind === 'cut') {
-    g.strokeStyle = '#d93025';
-    g.beginPath(); g.arc(16, 13, 10, 0, Math.PI * 2); g.moveTo(9, 6); g.lineTo(23, 20); g.stroke();
-  } else if (kind === 'error') {
-    g.fillStyle = '#f9ab00'; g.beginPath(); g.moveTo(16, 2); g.lineTo(30, 24); g.lineTo(2, 24); g.closePath(); g.fill();
-    g.fillStyle = '#000'; g.fillRect(14.5, 9, 3, 8); g.fillRect(14.5, 19, 3, 3);
-  } else {
-    g.strokeStyle = '#80868b';
-    g.beginPath(); g.arc(16, 13, 10, 0, Math.PI * 2); g.moveTo(6, 13); g.lineTo(26, 13); g.moveTo(16, 3); g.bezierCurveTo(10, 8, 10, 18, 16, 23); g.moveTo(16, 3); g.bezierCurveTo(22, 8, 22, 18, 16, 23); g.stroke();
-  }
-  g.fillStyle = color || '#5f6368';
-  g.fillRect(0, 27, S, 5);
-  return g.getImageData(0, 0, S, S);
+function hexRgb(c) { const m = /^#?([0-9a-f]{6})$/i.exec(c || ''); const n = m ? parseInt(m[1], 16) : 0x5f6368; return [n >> 16, (n >> 8) & 255, n & 255]; }
+async function setIcon(kind, cc, color) {
+  let px;
+  try { px = await rgba(kind === 'flag' && cc ? cc.toLowerCase() : '_' + (kind === 'flag' ? 'globe' : kind)); } catch { px = await rgba('_globe'); }
+  const [r, g, b] = hexRgb(color);
+  for (let y = 28; y < 32; y++) for (let x = 0; x < 32; x++) { const i = (y * 32 + x) * 4; px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255; } // 底部一条实例色
+  await chrome.action.setIcon({ imageData: { 32: new ImageData(px, 32, 32) } });
 }
 
 async function paint(st) {
@@ -62,8 +44,7 @@ async function paint(st) {
   if (rt.running) lines.push(`↑ ${fmtBytes(rt.upRate)}/s  ↓ ${fmtBytes(rt.downRate)}/s`, `已用 ↑ ${fmtBytes(rt.up)}  ↓ ${fmtBytes(rt.down)}`);
   if (rt.needRestart?.length) { badge = '↻'; bcolor = '#1a73e8'; lines.push('需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、')); }
   if (rt.notice) lines.push(rt.notice);
-  const img = await drawIcon(kind, me.color, ex?.country);
-  await chrome.action.setIcon({ imageData: { 32: img } });
+  await setIcon(kind, ex?.country, me.color);
   await chrome.action.setBadgeText({ text: badge });
   await chrome.action.setBadgeBackgroundColor({ color: bcolor });
   if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: '#ffffff' });
@@ -97,8 +78,7 @@ async function loop() {
       await refresh();
     }
   } catch (err) {
-    const img = await drawIcon('error', '#5f6368');
-    await chrome.action.setIcon({ imageData: { 32: img } });
+    await setIcon('error', null, '#5f6368').catch(() => {});
     await chrome.action.setBadgeText({ text: '!' });
     await chrome.action.setTitle({ title: 'MaskTab 核心服务未连接：' + err.message });
   } finally {
