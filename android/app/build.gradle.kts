@@ -20,6 +20,16 @@ android {
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
     }
+    // 固定的调试签名（仓库里的 app/debug.keystore，口令是安卓调试证书的惯例值）：
+    // 不固定的话每次 CI 都用新生成的调试证书签名，新包装不到旧包上（“签名不一致”），只能卸载重装、数据全丢。
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false

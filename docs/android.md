@@ -99,6 +99,12 @@ android/
 
 - 实例菜单、实例管理、节点与出口、指纹、设置、扩展都是内置扩展页面 `app.html#<路由>`，在 app 的弹出层里用一个默认容器的 GeckoSession 打开；页面通过 `runtime.sendNativeMessage` 调 `Bridge`。
 - 测试用启动参数：`--es mt_open menu|instances|node|fp|settings|addons` 直接打开对应页面，`--ez mt_hold true` 让启动页停在最后一步（CI 截图用）。
+- **页面不许白着等**（2026-11-14 第二版，决策 A-6）：
+  - `app.html` 自带一段“正在加载…”，`boot.js` 最先加载：脚本报错会显示在页面上并写进 app 日志；8 秒还没画出内容就给“重试 / 关闭”。
+  - `api()` 每次调用 20 秒超时；页面拿不到状态时显示错误页（带重试），不再空白。
+  - 耗时的事（拉订阅、全部测速、重启 mihomo）一律进 `Core.syncProxy` 的后台队列，接口立刻返回；页面轮询 `job`（阶段、进度、错误）显示进度条，期间列表照常可点。
+  - 整页之间跳转（设置 → 节点等）在同一个窗口里换路由；扩展页面崩溃或被系统回收时自动重开，最多两次。
+  - 设置页“诊断信息”：一键复制 app 版本、系统版本、mihomo 状态和日志尾部、最近的页面报错，反馈问题时贴这段。
 
 ## 取舍与限制（如实告知用户）
 
@@ -110,17 +116,20 @@ android/
 6. **网页弹出窗口（window.open）**：在同一实例里开新标签、保留 opener；它的第一个请求要靠 cookieStoreId 认实例，认不出时会被拒绝（安全，但这个弹窗打不开）。真机上要重点看 Google 登录这类弹窗。
 7. **mihomo 安卓二进制按 API 34 构建**（ELF 里写着 for Android 34），安卓 14 以下可能跑不起来；那时代理实例会全部断流（不会直连）。CI 的模拟器是 API 35。
 8. **APK 很大**：GeckoView 两个架构 + mihomo 两个架构。只给真机用可以去掉 x86_64。
-9. 没做：双端同步、下载文件、打印、全屏视频的横屏处理、地址栏联想、书签与历史页、edgetunnel 专用的优选 / 反代 / ECH（安卓版只把订阅交给 mihomo 解析）。
+9. **调试签名固定**（`android/app/debug.keystore`）：从这一版起新包能直接覆盖安装。之前的包每次 CI 签名都不同，第一次换到这一版要先卸载旧的（数据会清空）。这是调试证书，不能用来上架。
+10. 没做：双端同步、下载文件、打印、全屏视频的横屏处理、地址栏联想、书签与历史页、edgetunnel 专用的优选 / 反代 / ECH（安卓版只把订阅交给 mihomo 解析）。
 
 ## 验证情况
 
 | 项 | 证据 |
 |---|---|
-| Kotlin 代码对 GeckoView 160 的 API 能编译 | 沙箱里用 kotlinc 2.4.21 + android.jar（37.2）+ GeckoView classes.jar 编译通过；CI 构建见 PROGRESS |
+| Kotlin 代码对 GeckoView 160 的 API 能编译 | 沙箱里用 kotlinc（第二版用的是 2.2.21）+ android.jar（37.2）+ GeckoView classes.jar 编译通过；CI 构建见 PROGRESS |
 | APK 构建、模拟器里启动不崩、各页面截图 | CI（`.github/workflows/android.yml`），结果见 `docs/PROGRESS.md` |
 | 扩展页面（菜单、管理、节点、指纹、设置、扩展、新标签页）布局 | 沙箱 Chromium 预览（假数据），`android/scripts/preview-pages.mjs` |
 | mihomo 配置与选节点、失败不直连 | 沙箱 Linux arm64 同版本 mihomo；CI 模拟器第二轮（见下） |
-| fp.js 逻辑 | 沙箱 Chromium 普通页面环境 |
+| fp.js 逻辑 | 沙箱里真火狐 160 以内容脚本方式加载，开 `android/scripts/fpcheck.html` 逐项检查；CI 模拟器里实例 #3 打开同一页（日志 `MTFPCHECK pass`） |
+| 从菜单真点进“节点与出口 / 指纹与时区 / 管理实例”、整页之间换路由、点“全部测速” | CI 模拟器（`adb shell input tap`） |
+| 订阅 404、151 个节点（150 个不通）、接口卡 10 秒、接口报错时页面的表现 | 沙箱真火狐 160 + 假 app（原生消息）+ 真 mihomo；没有在模拟器 / 真机上做 |
 | 真机：代理分流、指纹在 GeckoView 里的实际效果、自动填写、AMO 安装、拖动排序手感、Google 登录 | **没有验证** |
 
 ### CI 冒烟第二轮（代理）怎么验证

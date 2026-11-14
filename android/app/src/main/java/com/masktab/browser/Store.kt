@@ -27,6 +27,8 @@ class Inst(
     /** 语言：空 = 按出口国家。 */
     var lang: String = "",
     var createdAt: Long = System.currentTimeMillis(),
+    /** node = auto 时上次实际选中的节点：下次启动优先接着用它，出口 IP 不乱跳。 */
+    var last: String = "",
 ) {
     val contextId get() = "mt-$id"
     val port get() = PORT_BASE + no
@@ -34,14 +36,14 @@ class Inst(
 
     fun toJson(): JSONObject = jsonOf(
         "id" to id, "no" to no, "name" to name, "color" to color, "order" to order, "node" to node,
-        "seed" to seed, "tz" to tz, "lang" to lang, "createdAt" to createdAt,
+        "seed" to seed, "tz" to tz, "lang" to lang, "createdAt" to createdAt, "last" to last,
     )
 
     companion object {
         fun from(j: JSONObject) = Inst(
             id = j.str("id"), no = j.optInt("no"), name = j.str("name"), color = j.str("color", PALETTE[0]),
             order = j.optInt("order"), node = j.str("node", "DIRECT"), seed = j.optLong("seed"),
-            tz = j.str("tz"), lang = j.str("lang"), createdAt = j.optLong("createdAt"),
+            tz = j.str("tz"), lang = j.str("lang"), createdAt = j.optLong("createdAt"), last = j.str("last"),
         )
     }
 }
@@ -57,6 +59,8 @@ class Rt {
     var latency: Int = 0
     var probing = false
     var error = ""
+    /** 这个实例在 mihomo 里实际选中的节点（换了节点时旧的出口信息作废）。 */
+    var node = ""
     var cookies: JSONArray = JSONArray()
     var cookieN = 0
 }

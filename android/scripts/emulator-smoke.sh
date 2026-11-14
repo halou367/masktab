@@ -59,6 +59,41 @@ A shell am start -n $ACT --es mt_open node
 sleep 6; shot 6-node
 A shell input keyevent KEYCODE_BACK; sleep 1
 
+# 5b. 真点击：点工具栏头像 → 在菜单里点某一项，整页要真的打开并就绪（以前只用测试参数直接开页面，没走过“从菜单点进去”这条路）。
+#     坐标按 pixel_6（1080x2400）量的：头像 (904,202)；菜单里 节点与出口 (283,890)、指纹与时区 (283,1010)、管理实例 (263,1591)。
+ready() { A logcat -d | grep -c "MaskTab 页面就绪 $1"; }
+# 按无障碍标签（content-desc / text）找到控件并点它的中心；找不到返回 1
+tap_desc() {
+  local b
+  A shell uiautomator dump /sdcard/mt-ui.xml > /dev/null 2>&1 || return 1
+  A shell cat /sdcard/mt-ui.xml > "$OUT/ui-dump.xml" 2>/dev/null || return 1
+  b=$(grep -o "<node[^>]*\(content-desc\|text\)=\"$1\"[^>]*>" "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1)
+  [ -n "$b" ] || return 1
+  # shellcheck disable=SC2046
+  set -- $(echo "$b" | grep -o '[0-9]\+')
+  A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
+}
+tapflow() { # 名字 x y 路由
+  local n0 n1
+  A shell am start -n $ACT; sleep 2
+  A shell input tap 904 202; sleep 6; shot "t-$1-1menu"
+  n0=$(ready "$4")
+  A shell input tap "$2" "$3"; sleep 9; shot "t-$1-2page"
+  n1=$(ready "$4")
+  if [ "$n1" -gt "$n0" ]; then echo "通过：从菜单点开 $1（页面就绪 $n0 -> $n1）"; else echo "失败：从菜单点开 $1 后页面没有就绪（$n0 -> $n1）"; fail=1; fi
+  A shell input keyevent KEYCODE_BACK; sleep 2
+}
+tapflow node 283 890 node
+tapflow fp 283 1010 fp
+tapflow manage 263 1591 instances
+# 5c. 整页之间直接换（设置 → 节点 → 指纹）：同一个窗口里换路由，不关了重开
+n0=$(ready fp)
+A shell am start -n $ACT --es mt_open settings; sleep 6; shot t-nav-1settings
+A shell am start -n $ACT --es mt_open node; sleep 4
+A shell am start -n $ACT --es mt_open fp; sleep 5; shot t-nav-2fp
+if [ "$(ready fp)" -gt "$n0" ]; then echo "通过：整页之间换路由"; else echo "失败：整页之间换路由后指纹页没有就绪"; fail=1; fi
+A shell input keyevent KEYCODE_BACK; sleep 2
+
 # 6. 打开一个网页（外部链接进当前实例）
 A shell am start -a android.intent.action.VIEW -d https://example.com -n $ACT
 sleep 12; shot 7-web
@@ -75,6 +110,9 @@ need "MaskTab 新标签页就绪" "新标签页"
 need "MaskTab 页面就绪 menu 有状态" "头像菜单"
 need "MaskTab 页面就绪 instances 有状态" "实例管理页"
 need "MaskTab 页面就绪 node 有状态" "节点与出口页"
+need "MaskTab 页面就绪 fp 有状态" "指纹与时区页"
+need "MaskTab 页面就绪 settings 有状态" "设置页"
+if grep -q "MaskTab 页面报错\|页面报错：" "$OUT/logcat.txt"; then echo "失败：内置页面有报错："; grep "MaskTab 页面报错\|页面报错：" "$OUT/logcat.txt" | cut -c1-240 | head -5; fail=1; fi
 need "MaskTab 标签页登记" "标签页登记到实例"
 need "MaskTab 指纹参数 example.com" "网页里拿到实例指纹参数"
 if grep -q "Invalid event data for callback" "$OUT/logcat.txt"; then echo "失败：原生消息回传失败（Invalid event data）"; fail=1; fi
@@ -108,6 +146,7 @@ Y
 proxies:
   - {name: "测试节点-runner", type: ss, server: 10.0.2.2, port: 18388, cipher: aes-128-gcm, password: masktab-test, udp: false}
 Y
+  cp "$(dirname "$0")/fpcheck.html" $W/fpcheck.html
   setsid nohup python3 -m http.server 18080 --bind 0.0.0.0 --directory $W > $W/http.log 2>&1 < /dev/null & BGPIDS+=($!)
   sleep 2
   curl -fs -m 5 http://127.0.0.1:18080/sub.yaml | head -2 || { echo "订阅 HTTP 服务没起来"; return 1; }
@@ -115,8 +154,9 @@ Y
   cat > $W/state.json <<'Y'
 {"instances":[
  {"id":"p1","no":1,"name":"经代理","color":"#1A73E8","order":1,"node":"auto","seed":1234567,"tz":"","lang":"","createdAt":1},
- {"id":"p2","no":2,"name":"坏节点","color":"#D93025","order":2,"node":"不存在的节点","seed":7654321,"tz":"","lang":"","createdAt":2}],
- "subUrl":"http://10.0.2.2:18080/sub.yaml","searchUrl":"https://www.bing.com/search?q=%s","current":"p1","nextNo":3}
+ {"id":"p2","no":2,"name":"坏节点","color":"#D93025","order":2,"node":"不存在的节点","seed":7654321,"tz":"","lang":"","createdAt":2},
+ {"id":"p3","no":3,"name":"指纹自检","color":"#188038","order":3,"node":"DIRECT","seed":111,"tz":"Asia/Tokyo","lang":"ja-JP","createdAt":3}],
+ "subUrl":"http://10.0.2.2:18080/sub.yaml","searchUrl":"https://www.bing.com/search?q=%s","current":"p1","nextNo":4}
 Y
   A shell am force-stop $PKG; A shell am force-stop com.google.android.apps.nexuslauncher || true; sleep 1
   # 状态文件：先 adb push 到 /data/local/tmp，再 run-as cp 进 app 目录（不用 stdin 管道，那种写法可能一直等输入）
@@ -157,6 +197,19 @@ Y
   A shell am start -a android.intent.action.VIEW -d https://example.com -n $ACT
   sleep 12; shot 10-bad-node-blocked
   A shell am start -n $ACT --es mt_open node; sleep 6; shot 11-proxy-node-page
+  # 节点页里点“全部测速”：发出去就返回、后台测，页面不能卡住。按钮位置靠无障碍信息找（找不到就跳过这一项，不算失败）
+  if tap_desc "全部测速"; then
+    sleep 7; shot 12-proxy-node-tested
+    if A logcat -d -s MaskTab:I | grep -q "代理任务完成（含测速）"; then echo "通过：点“全部测速”后后台任务跑完"; else echo "失败：点了“全部测速”但后台任务没有跑完"; fail=1; fi
+  else echo "跳过：没找到“全部测速”按钮的位置（无障碍信息里没有）"; fi
+  A shell input keyevent KEYCODE_BACK; sleep 2
+  # 指纹自检：实例 #3（直连，时区 Asia/Tokyo、语言 ja-JP）里打开自检页，逐项调用被改过的接口（画布、音频、时间、Intl…），有一项抛错或值不对就失败。
+  # 以前 fp.js 在真内核里会让 toDataURL / getImageData / Intl…resolvedOptions() 抛 Permission denied，用到这些接口的网站直接白屏，example.com 这种静态页测不出来。
+  A shell am start -n $ACT --es mt_inst p3; sleep 4
+  A shell am start -a android.intent.action.VIEW -d "http://10.0.2.2:18080/fpcheck.html?tz=Asia/Tokyo\&off=-540\&lang=ja-JP" -n $ACT
+  for k in $(seq 1 12); do sleep 2; A logcat -d | grep -q "MTFPCHECK" && break; done
+  sleep 1; shot 13-fpcheck
+  A shell am start -n $ACT --es mt_inst p1; sleep 3
   A logcat -d > "$OUT/logcat-proxy.txt"
   A logcat -d -s MaskTab:V GeckoConsole:V > "$OUT/logcat-proxy-masktab.txt" || true
   cp $W/server.log "$OUT/node-server.log" 2>/dev/null || true
@@ -166,6 +219,10 @@ Y
   chk "加载订阅：2 1 个节点" "订阅加载到 1 个节点"
   chk "网络检测：2 #1 出口" "实例 #1 经节点探到出口"
   chk "MaskTab 指纹参数 example.com #1" "实例 #1 打开网页"
+  chk "MTFPCHECK pass" "指纹自检页全部通过（画布 / 音频 / 时区 / 语言 / 函数外观）"
+  grep "MTFPCHECK" "$L" | sed 's/.*MTFPCHECK/MTFPCHECK/' | cut -c1-600 | head -3
+  if grep -q "页面报错：" "$L"; then echo "失败：内置页面有报错："; grep "页面报错：" "$L" | cut -c1-240 | head -5; fail=1; fi
+  if grep -q "代理任务出错" "$L"; then echo "失败：代理后台任务出错"; fail=1; fi
   chk "加载失败 https://example.com/\? 实例 p2\|加载失败 https://example.com 实例 p2" "实例 #2（节点不存在）打不开网页，没有直连"
   if grep -q "MaskTab 指纹参数 example.com #2" "$L"; then echo "失败：实例 #2 的网页加载成功了（应当断流）"; fail=1; else echo "通过：实例 #2 的网页没有加载成功"; fi
   grep -E "启动步骤|加载失败|MaskTab (后台|指纹|标签页)" "$L" | cut -c1-200 | head -30

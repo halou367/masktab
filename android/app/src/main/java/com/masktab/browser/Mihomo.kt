@@ -5,6 +5,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.URLEncoder
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 // mihomo 子进程（docs/android.md “代理”）：
 // - 二进制随 APK 以 jniLibs/<abi>/libmihomo.so 分发，安装时解压到 nativeLibraryDir，从那里执行（安卓 10+ 不允许执行数据目录里的文件）。
@@ -13,9 +16,13 @@ import java.net.URLEncoder
 // - 策略组第一项是 REJECT（与桌面硬规则 R-2 相同）：选节点失败、订阅拉不到时，这个实例的流量被拒绝，绝不回落直连。
 // - external-controller 只监听 127.0.0.1，带随机 secret，用来列节点、测延迟、切换节点。
 
-class Node(val name: String, val type: String, val alive: Boolean, val delay: Int) {
-    fun toJson(): JSONObject = jsonOf("name" to name, "type" to type, "alive" to alive, "delay" to delay)
+class Node(val name: String, val type: String, val alive: Boolean, val delay: Int, val tested: Boolean = delay > 0) {
+    /** 测过并且通。 */
+    val good get() = alive && delay > 0
+    fun toJson(): JSONObject = jsonOf("name" to name, "type" to type, "alive" to alive, "delay" to delay, "tested" to tested)
 }
+
+const val TEST_URL = "https://www.gstatic.com/generate_204"
 
 class Mihomo(ctx: Context) {
     private val bin = File(ctx.applicationInfo.nativeLibraryDir, "libmihomo.so")
@@ -72,7 +79,9 @@ class Mihomo(ctx: Context) {
                 // proxy: DIRECT 必须写：不写时拉订阅也走规则匹配，会被兜底的 MATCH,REJECT 拒掉（沙箱里实测）
                 "type" to "http", "url" to store.subUrl, "interval" to 21600, "proxy" to "DIRECT", "path" to "./providers/sub.yaml",
                 "header" to jsonOf("User-Agent" to JSONArray(listOf("clash.meta"))),
-                "health-check" to jsonOf("enable" to true, "url" to "https://www.gstatic.com/generate_204", "interval" to 600, "timeout" to 5000, "lazy" to false),
+                // lazy：只在节点正被使用时才定时复测。手机上每 10 分钟把上百个节点全测一遍既费电，
+                // 也容易让系统把 mihomo 当成“后台占 CPU 的子进程”杀掉；整表测速由 app 自己限量做（见 testAll）。
+                "health-check" to jsonOf("enable" to true, "url" to TEST_URL, "interval" to 600, "timeout" to 5000, "lazy" to true),
             )))
         }
         return yamlSafeJson(cfg.toString(2))
@@ -84,6 +93,7 @@ class Mihomo(ctx: Context) {
         lastError = ""
         if (!installed) { lastError = "安装包里没有 mihomo"; return false }
         writeAtomic(cfgFile, config(store).toByteArray())
+        if (seenUrl != store.subUrl) { seen.clear(); seenUrl = store.subUrl }
         if (running && ping()) return reload()
         proc?.destroy()
         return try {
@@ -110,7 +120,7 @@ class Mihomo(ctx: Context) {
     @Synchronized
     fun stop() { proc?.destroy(); proc = null }
 
-    private fun tailLog(): String = try { File(home, "mihomo.log").readText().takeLast(300) } catch (e: Exception) { "" }
+    private fun tailLog(): String = logTail(300)
 
     private fun ctl(method: String, path: String, body: String? = null, timeoutMs: Int = 5000): HttpResult =
         http(method, "http://127.0.0.1:$ctlPort$path", body, mapOf("Authorization" to "Bearer $secret"), timeoutMs = timeoutMs)
@@ -131,15 +141,36 @@ class Mihomo(ctx: Context) {
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
-    /** 订阅里的节点（含 mihomo 健康检查记下的延迟）。订阅没拉到时为空。 */
+    /** 订阅里的节点（含测速记下的延迟）。订阅没拉到时为空。 */
     fun nodes(): List<Node> = try {
         val r = ctl("GET", "/providers/proxies/sub")
         if (r.code != 200) emptyList() else JSONObject(r.body).optJSONArray("proxies")?.objects()?.map { p ->
             val hist = p.optJSONArray("history")
-            val d = if (hist != null && hist.length() > 0) hist.getJSONObject(hist.length() - 1).optInt("delay") else 0
-            Node(p.str("name"), p.str("type"), p.optBoolean("alive", d > 0), d)
+            val n = hist?.length() ?: 0
+            val d = if (n > 0) hist!!.getJSONObject(n - 1).optInt("delay") else 0
+            val name = p.str("name")
+            if (n > 0) {
+                val node = Node(name, p.str("type"), p.optBoolean("alive", d > 0), d, true)
+                seen[name] = node
+                node
+            } else {
+                // 重新加载配置（新建 / 删除实例、直连与代理互换）后 mihomo 把测速记录清空了：用上次测到的结果顶上，列表不至于又全变回“—”
+                val old = seen[name]
+                if (old != null) Node(name, p.str("type"), old.alive, old.delay, true) else Node(name, p.str("type"), p.optBoolean("alive", true), 0, false)
+            }
         } ?: emptyList()
     } catch (e: Exception) { emptyList() }
+
+    /** 上次测到的结果（节点名 → 结果），换订阅地址时清空。 */
+    private val seen = java.util.concurrent.ConcurrentHashMap<String, Node>()
+    private var seenUrl = ""
+
+    /** 让 mihomo 立刻重新拉一次订阅。返回 null = 成功，否则是原因（mihomo 给的，如 “404 Not Found”、超时）。 */
+    fun updateProvider(): String? = try {
+        val r = ctl("PUT", "/providers/proxies/sub", "{}", 40000)
+        if (r.code in 200..299) null
+        else (try { JSONObject(r.body).str("message") } catch (e: Exception) { "" }).ifEmpty { "HTTP ${r.code}" }
+    } catch (e: Exception) { "拉取超时或失败：" + (e.message ?: e.javaClass.simpleName) }
 
     /** 订阅加载情况：null = 还没加载。 */
     fun providerInfo(): JSONObject? = try {
@@ -147,13 +178,33 @@ class Mihomo(ctx: Context) {
         if (r.code == 200) JSONObject(r.body) else null
     } catch (e: Exception) { null }
 
-    /** 对订阅全部节点测一次延迟（mihomo 并发做，最多等 30 秒）。 */
-    fun healthcheck() { try { ctl("GET", "/providers/proxies/sub/healthcheck", timeoutMs = 30000) } catch (e: Exception) { logw("测速失败", e) } }
+    /**
+     * 逐个节点测延迟：并发 [par] 个、每个最多 [timeoutMs]，总时长不超过 [budgetMs]（到点还没轮到的不测了）。
+     * 每测完一个调一次 [progress]（已测数, 总数）；[stop] 返回 true 时提前收工。结果记在 mihomo 里，用 [nodes] 读。
+     * 不用 mihomo 的“整表健康检查”接口：一百多个节点、大半不通时它要一分钟以上才返回，期间界面只能干等（沙箱里实测）。
+     */
+    fun testAll(par: Int = 12, timeoutMs: Int = 3000, budgetMs: Long = 45000, stop: () -> Boolean = { false }, progress: (Int, Int) -> Unit = { _, _ -> }) {
+        val names = nodes().map { it.name }
+        val total = names.size
+        progress(0, total)
+        if (total == 0) return
+        val end = System.currentTimeMillis() + budgetMs
+        val done = AtomicInteger(0)
+        val pool = Executors.newFixedThreadPool(minOf(par, total))
+        try {
+            for (n in names) pool.execute {
+                try { if (running && System.currentTimeMillis() < end && !stop()) delay(n, timeoutMs) } catch (e: Throwable) { }
+                progress(done.incrementAndGet(), total)
+            }
+            pool.shutdown()
+            pool.awaitTermination(budgetMs + timeoutMs + 5000, TimeUnit.MILLISECONDS)
+        } catch (e: Exception) { logw("测速被打断", e) } finally { pool.shutdownNow() }
+    }
 
     /** 单个节点测延迟（毫秒，失败返回 -1）。 */
-    fun delay(name: String): Int = try {
+    fun delay(name: String, timeoutMs: Int = 5000): Int = try {
         // 订阅（provider）里的节点不在 /proxies 下，要走 /providers/proxies/<订阅>/<节点>/healthcheck
-        val r = ctl("GET", "/providers/proxies/sub/${enc(name)}/healthcheck?timeout=5000&url=${enc("https://www.gstatic.com/generate_204")}", timeoutMs = 7000)
+        val r = ctl("GET", "/providers/proxies/sub/${enc(name)}/healthcheck?timeout=$timeoutMs&url=${enc(TEST_URL)}", timeoutMs = timeoutMs + 2000)
         if (r.code == 200) JSONObject(r.body).optInt("delay", -1).let { if (it <= 0) -1 else it } else -1
     } catch (e: Exception) { -1 }
 
@@ -161,22 +212,43 @@ class Mihomo(ctx: Context) {
         ctl("PUT", "/proxies/${enc("g-${inst.id}")}", jsonOf("name" to name).toString()).code in 200..299
     } catch (e: Exception) { false }
 
-    /** 每次加载配置后各实例的策略组都落回 REJECT，这里按实例的设置选回节点。auto = 延迟最低的可用节点。 */
+    /**
+     * 每次加载配置后各实例的策略组都落回 REJECT，这里按实例的设置选回节点。
+     * auto（自动）：尽量不换——正在用的节点还通就接着用；否则用上次选的（[Inst.last]，没测出不通就算可用）；
+     * 都不行才换成测出来延迟最低的。出口 IP 频繁变动本身就是风控信号，所以不是每次测速都跳到“当前最快”的那个。
+     */
+    @Synchronized
     fun applySelections(store: Store) {
         if (!running || store.subUrl.isEmpty()) return
         val ns = nodes()
-        val best = ns.filter { it.alive && it.delay > 0 }.minByOrNull { it.delay } ?: ns.firstOrNull()
+        val by = ns.associateBy { it.name }
+        val best = ns.filter { it.good }.minByOrNull { it.delay } ?: ns.firstOrNull { it.alive } ?: ns.firstOrNull()
+        var changed = false
         for (i in store.sorted()) {
             if (i.direct) continue
-            val want = if (i.node == "auto") best?.name else ns.firstOrNull { it.name == i.node }?.name
             val rt = store.rtOf(i.id)
+            val want = if (i.node == "auto") {
+                val cur = by[selected(i)]
+                val last = by[i.last]
+                when {
+                    cur != null && cur.alive -> cur.name
+                    last != null && last.alive -> last.name
+                    else -> best?.name
+                }
+            } else by[i.node]?.name
             if (want == null) {
                 rt.error = if (ns.isEmpty()) "订阅还没有可用节点" else "节点“${i.node}”已不在订阅里"
                 continue
             }
             rt.error = if (select(i, want)) "" else "切换节点失败"
+            if (rt.node != want) { if (rt.node.isNotEmpty()) { rt.exit = null; rt.latency = 0 }; rt.node = want }
+            if (i.node == "auto" && i.last != want) { i.last = want; changed = true }
         }
+        if (changed) store.save()
     }
+
+    /** mihomo 日志的最后一段（诊断信息用）。 */
+    fun logTail(max: Int = 1500): String = try { File(home, "mihomo.log").readText().takeLast(max) } catch (e: Exception) { "" }
 
     /** 实例当前实际在用的节点名。 */
     fun selected(inst: Inst): String = try {

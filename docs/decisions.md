@@ -375,6 +375,18 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - 指纹脚本按容器 `contentScripts.register({cookieStoreId})` 同步注入。CI 里实测这个调用被接受（日志“指纹脚本已按容器注册 firefox-container-mt-…”）；失败时自动改异步注入（`fp-boot.js`）。
 - GeckoView 的坑：会话里打开的扩展页面（以及内容脚本）发的原生消息只交给**这个会话**的 MessageDelegate，没设就一直挂着不回；回复不能是 JSONObject（报 “Invalid event data for callback”），一律回 JSON 字符串。
 
+### A-6 安卓内置页面：耗时操作全部后台化，页面永远有内容（2026-11-14）
+
+- **起因**：用户真机（安卓 15+，edgetunnel 订阅）反馈点“节点与出口”“指纹与时区”后白屏、无响应或一直转圈。
+- **查到并修掉的问题**：
+  1. `fp.js` 在真 Gecko 里把画布、音频、`Intl…resolvedOptions()` 改坏了：内容脚本里包出来的函数读页面传来的 `arguments` 会被拒绝（`Permission denied to access property "length"`），用到这些接口的网站直接白屏。以前只在 Chromium 普通页面里测过，测不出来。现在用 `exportFunction` + 显式参数重写，并加了自检页 `fpcheck.html`。
+  2. `PUT /api/sub`、`POST /api/nodes/test` 同步等 mihomo 拉订阅 / 测完所有节点，节点多、多数不通时要几十秒，期间页面没有任何反馈。
+  3. 节点页在渲染过程中发起 `GET /api/nodes`，失败时又触发重画，形成循环。
+  4. 页面脚本出错或接口不回时没有任何兜底，表现就是白屏。
+- **做法**：见 `docs/android.md`“界面”一节。节点“自动”改成有粘性：当前节点还通就不换，避免每次测速都换出口 IP。
+- **没有确认的**：模拟器里旧版从菜单点进这两页是能打开的（没有复现用户的白屏），所以无法证明上面几条就是用户手机上的全部原因；真机 edgetunnel 订阅对 `clash.meta` UA 返回什么也没验证。为此加了“诊断信息”。
+- **顺带**：固定调试签名，后续版本可以覆盖安装。
+
 ### A-5 安卓版的构建方式
 
 - AGP 9.5.1（自带 Kotlin 编译），根项目声明 Kotlin 插件 2.4.21 是为了能读 GeckoView 160 依赖的 kotlin-stdlib 2.4；compileSdk 37.2 是 GeckoView 的 AAR 元数据要求的。

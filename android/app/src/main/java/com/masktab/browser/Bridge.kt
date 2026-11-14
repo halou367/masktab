@@ -43,7 +43,7 @@ object Bridge {
     private fun route(m: String, seg: List<String>, uri: Uri, b: JSONObject, req: JSONObject, ok: (Any?) -> Unit, fail: (String) -> Unit) {
         val k = "$m /" + seg.joinToString("/")
         when {
-            k == "GET /api/state" -> ok(state(uri.getQueryParameter("inst")))
+            k == "GET /api/state" -> { Core.ensureProxy(); ok(state(uri.getQueryParameter("inst") ?: req.str("inst").ifEmpty { null })) }
             k == "GET /ext/state" -> ok(Core.extState())
 
             k == "POST /api/instances" -> {
@@ -57,8 +57,17 @@ object Bridge {
                 val i = store.get(seg[2]) ?: return fail("实例不存在")
                 if (b.has("name")) i.name = b.str("name").trim()
                 if (b.has("color")) i.color = b.str("color")
-                if (b.has("tz")) i.tz = b.str("tz").trim()
-                if (b.has("lang")) i.lang = b.str("lang").trim()
+                // 时区、语言先校验：写错的时区名（例如中文“东京”）网页里的伪装会整段失效，露出手机真实时区
+                if (b.has("tz")) {
+                    val tz = b.str("tz").trim()
+                    if (tz.isNotEmpty() && !validTz(tz)) return fail("时区名不对：要写 IANA 名称，例如 Asia/Tokyo、America/New_York；留空 = 跟随出口")
+                    i.tz = tz
+                }
+                if (b.has("lang")) {
+                    val lang = b.str("lang").trim()
+                    if (lang.isNotEmpty() && !Regex("^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$").matches(lang)) return fail("语言写法不对：例如 en-US、ja-JP；留空 = 按出口国家")
+                    i.lang = lang
+                }
                 store.save()
                 Core.pushState()
                 Core.ui?.onTabsChanged()
@@ -84,10 +93,14 @@ object Bridge {
                 i.node = b.str("node", "auto")
                 store.save()
                 Core.pushState()
+                if (i.node != "auto") i.last = ""
+                store.save()
                 slow(ok, fail) {
                     // 直连 ↔ 代理要改入站，必须重写配置；只是换节点直接切换
-                    if (wasDirect != i.direct || !Core.mihomo.running) Core.restartProxyBlocking() else { Core.mihomo.applySelections(store); ui { Core.pushState() } }
-                    store.rtOf(i.id).exit = null
+                    if (store.subUrl.isNotEmpty() && (wasDirect != i.direct || !Core.mihomo.running)) Core.restartProxyBlocking() else { Core.mihomo.applySelections(store); ui { Core.pushState() } }
+                    val rt = store.rtOf(i.id)
+                    rt.exit = null; rt.latency = 0
+                    if (i.direct) rt.node = ""
                     ui { Core.probe(i.id) }
                     null
                 }
@@ -95,24 +108,34 @@ object Bridge {
 
             // ---------- 节点与订阅 ----------
             k == "GET /api/nodes" -> slow(ok, fail) { nodes(req.optString("inst").ifEmpty { uri.getQueryParameter("inst") ?: store.current }) }
-            k == "POST /api/nodes/test" -> slow(ok, fail) { Core.mihomo.healthcheck(); nodes(uri.getQueryParameter("inst") ?: store.current) }
+            // 全部测速：排进后台任务立刻返回，页面轮询 GET /api/nodes 看进度（job）
+            k == "POST /api/nodes/test" -> {
+                if (store.subUrl.isEmpty()) return fail("还没有订阅")
+                if (!Core.job.busy) Core.syncProxy(restart = false, fetch = false, test = true)
+                slow(ok, fail) { nodes(req.optString("inst").ifEmpty { uri.getQueryParameter("inst") ?: store.current }) }
+            }
+            // 刷新订阅：让 mihomo 重新拉一次，再测速
+            k == "POST /api/sub/refresh" -> {
+                if (store.subUrl.isEmpty()) return fail("还没有订阅")
+                if (!Core.job.busy) Core.syncProxy(restart = false, fetch = true, test = true)
+                ok(Core.job.toJson())
+            }
             k == "PUT /api/sub" -> {
                 val url = b.str("url").trim()
                 if (url.isNotEmpty() && !Regex("^https?://", RegexOption.IGNORE_CASE).containsMatchIn(url)) return fail("订阅地址要以 http:// 或 https:// 开头")
-                val had = store.subUrl.isNotEmpty()
+                val old = store.subUrl
+                val had = old.isNotEmpty()
                 store.subUrl = url
                 // 第一次加订阅：还在直连的实例改为自动选节点（之后用户可逐个改回直连）
                 if (!had && url.isNotEmpty()) store.insts.forEach { if (it.direct) it.node = "auto" }
                 if (url.isEmpty()) store.insts.forEach { it.node = "DIRECT" }
+                if (url != old) store.insts.forEach { it.last = "" }
                 store.save()
-                slow(ok, fail) {
-                    val good = Core.restartProxyBlocking()
-                    if (good && url.isNotEmpty()) { waitProvider(15000); Core.mihomo.applySelections(store); ui { Core.pushState() } }
-                    store.insts.forEach { store.rtOf(it.id).exit = null }
-                    ui { Core.probe(store.current) }
-                    if (!good) throw IllegalStateException(Core.mihomo.lastError)
-                    null
-                }
+                store.insts.forEach { val rt = store.rtOf(it.id); rt.exit = null; rt.latency = 0; rt.node = ""; rt.error = "" }
+                Core.pushState()
+                // 保存后立刻返回；启动 mihomo、拉订阅、测速在后台做，页面轮询 GET /api/nodes 看进度和失败原因
+                Core.syncProxy(restart = true, fetch = url.isNotEmpty(), test = if (url.isNotEmpty()) true else null)
+                ok(Core.job.toJson())
             }
             k == "PUT /api/settings" -> {
                 if (b.has("searchUrl")) store.searchUrl = b.str("searchUrl").ifEmpty { store.searchUrl }
@@ -152,32 +175,33 @@ object Bridge {
             seg.size == 4 && seg[1] == "addons" && m == "POST" -> Addons.act(seg[2], seg[3]) { e -> if (e == null) ok(null) else fail(e) }
 
             // ---------- 界面 ----------
-            k == "POST /ui/open" -> { Core.ui?.openSheet(b.str("route"), b.optBoolean("full", true)); ok(null) }
-            k == "POST /ui/close" -> { Core.ui?.closeSheet(); ok(null) }
-            k == "POST /ui/tab" -> { Core.openTab(store.current, b.str("url").ifEmpty { null }); Core.ui?.closeSheet(); ok(null) }
+            // 先回话、再换页面：这几个请求是页面自己发来的，如果在回话之前就把发请求的那个页面（会话）关掉，
+            // 等于在它自己的消息回调里销毁它；换页放到下一轮主线程消息里做。
+            k == "POST /ui/open" -> { val r = b.str("route"); val full = b.optBoolean("full", true); ok(null); mainHandler.post { Core.ui?.openSheet(r, full) } }
+            k == "POST /ui/close" -> { ok(null); mainHandler.post { Core.ui?.closeSheet() } }
+            k == "POST /ui/tab" -> { val u = b.str("url").ifEmpty { null }; ok(null); mainHandler.post { Core.ui?.closeSheet(); Core.openTab(store.current, u) } }
+            k == "POST /ui/log" -> { Core.pageLog(b.str("msg")); ok(null) }
+            k == "GET /api/diag" -> slow(ok, fail) { jsonOf("text" to Core.diag()) }
             else -> fail("未知接口 $k")
         }
     }
 
-    private fun emailOf(i: Inst): String = if (i.name.contains("@") && !i.name.any { it == ' ' || it == '\t' }) i.name else ""
+    private fun validTz(tz: String): Boolean = tz.contains('/') && try { java.time.ZoneId.of(tz); true } catch (e: Exception) { false }
 
-    private fun waitProvider(ms: Long) {
-        val end = System.currentTimeMillis() + ms
-        while (System.currentTimeMillis() < end) {
-            if (Core.mihomo.nodes().isNotEmpty()) return
-            Thread.sleep(500)
-        }
-    }
+    private fun emailOf(i: Inst): String = if (i.name.contains("@") && !i.name.any { it == ' ' || it == '\t' }) i.name else ""
 
     fun nodes(instId: String): JSONObject {
         val i = store.get(instId)
         val mh = Core.mihomo
-        val info = if (mh.running) mh.providerInfo() else null
+        val running = mh.running
+        val info = if (running) mh.providerInfo() else null
+        val job = Core.job
         return jsonOf(
-            "sub" to jsonOf("url" to store.subUrl, "running" to mh.running, "version" to mh.version, "error" to mh.lastError,
+            "sub" to jsonOf("url" to store.subUrl, "running" to running, "version" to mh.version, "error" to job.error.ifEmpty { mh.lastError },
                 "updatedAt" to (info?.str("updatedAt") ?: ""), "loaded" to (info != null)),
-            "nodes" to JSONArray(if (mh.running) mh.nodes().map { it.toJson() } else emptyList()),
-            "inst" to (i?.let { jsonOf("id" to it.id, "node" to it.node, "now" to (if (it.direct || !mh.running) "" else mh.selected(it))) } ?: JSONObject.NULL),
+            "nodes" to JSONArray(if (running) mh.nodes().map { it.toJson() } else emptyList()),
+            "inst" to (i?.let { jsonOf("id" to it.id, "node" to it.node, "now" to (if (it.direct || !running) "" else mh.selected(it).takeUnless { n -> n == "REJECT" } ?: "")) } ?: JSONObject.NULL),
+            "job" to job.toJson(),
         )
     }
 
@@ -218,7 +242,7 @@ object Bridge {
             "launchSteps" to JSONArray(LAUNCH_STEPS),
             "vault" to jsonOf("hasDefault" to vault.default().isNotEmpty(), "error" to vault.error.ifEmpty { null }),
             "settings" to jsonOf("searchUrl" to store.searchUrl, "subUrl" to store.subUrl),
-            "proxy" to jsonOf("running" to Core.mihomo.running, "error" to Core.mihomo.lastError, "installed" to Core.mihomo.installed),
+            "proxy" to jsonOf("running" to Core.mihomo.running, "error" to Core.job.error.ifEmpty { Core.mihomo.lastError }, "installed" to Core.mihomo.installed, "busy" to Core.job.busy),
             "current" to store.current, "platform" to "android",
         )
     }

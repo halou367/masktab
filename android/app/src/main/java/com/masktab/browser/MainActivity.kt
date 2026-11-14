@@ -43,6 +43,9 @@ class MainActivity : Activity(), CoreUi {
     private var startup: StartupView? = null
     private var sheet: Dialog? = null
     private var sheetSession: GeckoSession? = null
+    private var sheetRoute = ""
+    private var sheetFull = false
+    private var sheetRetry = 0
     private var shown: GeckoSession? = null
     private var hold = false
     override var prompts: Prompts? = null
@@ -233,13 +236,13 @@ class MainActivity : Activity(), CoreUi {
                     s = System.currentTimeMillis()
                     step(3, 1)
                     if (ok) {
-                        var n = 0
-                        val end = System.currentTimeMillis() + 12000
-                        while (System.currentTimeMillis() < end) { n = Core.mihomo.nodes().size; if (n > 0) break; Thread.sleep(400) }
-                        Core.mihomo.applySelections(store)
+                        // 等节点、选节点；“自动”实例手上的节点不通时在这里把全部节点测一遍（进度显示在这一步），再挑一个通的
+                        Core.job.busy = true
+                        val n = try { Core.loadSub(fetch = false, test = null) { msg -> step(3, 1, msg) } } catch (e: Exception) { logw("加载订阅出错", e); 0 } finally { Core.job.busy = false; Core.job.phase = "" }
                         pace(s)
-                        step(3, if (n > 0) 2 else 4, if (n > 0) "$n 个节点" else "订阅没有拉到节点")
-                    } else step(3, 3)
+                        val good = Core.mihomo.nodes().count { it.good }
+                        step(3, if (n > 0) 2 else 4, if (n > 0) "$n 个节点" + (if (good > 0) "，测过可用 $good 个" else "") else Core.job.error.ifEmpty { "订阅没有拉到节点" })
+                    } else { Core.job.error = Core.mihomo.lastError; step(3, 3) }
                 }
                 // 网络检测：当前实例的出口
                 s = System.currentTimeMillis()
@@ -271,8 +274,17 @@ class MainActivity : Activity(), CoreUi {
 
     // ---------- 实例菜单、管理页等（内置扩展页面） ----------
 
-    override fun openSheet(route: String, full: Boolean) {
-        if (!Core.started || Core.baseUrl.isEmpty()) return
+    override fun openSheet(route: String, full: Boolean) { sheetRetry = 0; showSheet(route, full) }
+
+    private fun showSheet(route: String, full: Boolean) {
+        if (!Core.started || Core.baseUrl.isEmpty() || isFinishing || isDestroyed) return
+        // 已经开着一个整页：在同一个页面里换路由（地址 # 后面变了，页面自己重画），不销毁重建窗口和会话
+        val cur = sheetSession
+        if (full && sheetFull && sheet?.isShowing == true && cur != null && cur.isOpen) {
+            sheetRoute = route
+            cur.loadUri(Core.pageUrl(route))
+            return
+        }
         closeSheet()
         val d = Dialog(this, if (full) android.R.style.Theme_Material_Light_NoActionBar else android.R.style.Theme_Material_Light_Dialog_NoActionBar)
         d.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -282,12 +294,23 @@ class MainActivity : Activity(), CoreUi {
         s.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
                 // 菜单 / 管理页里点到的外部链接在当前实例的新标签页打开
-                if (request.uri.startsWith("http")) { Core.openTab(Core.store.current, request.uri); ui { closeSheet() }; return GeckoResult.deny() }
+                if (request.uri.startsWith("http")) { val u = request.uri; mainHandler.post { closeSheet(); Core.openTab(Core.store.current, u) }; return GeckoResult.deny() }
+                return null
+            }
+            override fun onLoadError(session: GeckoSession, uri: String?, error: org.mozilla.geckoview.WebRequestError): GeckoResult<String>? {
+                logw("内置页面打不开 $uri 类别 ${error.category} 代码 ${error.code}")
+                Core.pageLog("内置页面打不开 ${uri?.substringAfterLast('/')} 代码 ${error.code}")
                 return null
             }
         }
         s.contentDelegate = object : GeckoSession.ContentDelegate {
-            override fun onCloseRequest(session: GeckoSession) { closeSheet() }
+            override fun onCloseRequest(session: GeckoSession) { if (sheetSession === session) closeSheet() }
+            // 扩展页面所在的进程崩溃或被系统回收（手机内存紧张时常见）：页面会变成一片白，这里关掉重开，最多两次
+            override fun onCrash(session: GeckoSession) { sheetDied(session, "崩溃") }
+            override fun onKill(session: GeckoSession) { sheetDied(session, "被系统回收") }
+        }
+        s.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onPageStop(session: GeckoSession, success: Boolean) { if (!success) logw("内置页面加载失败 $sheetRoute") }
         }
         Core.ext?.let { s.webExtensionController.setMessageDelegate(it, Core.sessionMsg(null), Core.NATIVE) }
         s.open(Core.ensureRuntime())
@@ -314,17 +337,34 @@ class MainActivity : Activity(), CoreUi {
             }
         }
         d.setOnDismissListener {
-            if (sheet === d) { sheet = null; sheetSession = null }
-            v.releaseSession()
-            s.close()
+            if (sheet === d) { sheet = null; sheetSession = null; sheetFull = false }
+            try { v.releaseSession(); s.close() } catch (e: Exception) { logw("关闭内置页面出错", e) }
             onTabsChanged()
         }
         sheet = d
         sheetSession = s
-        d.show()
+        sheetRoute = route
+        sheetFull = full
+        try { d.show() } catch (e: Exception) { logw("页面窗口打不开", e); sheet = null; sheetSession = null; s.close() }
     }
 
-    override fun closeSheet() { sheet?.dismiss() }
+    private fun sheetDied(session: GeckoSession, why: String) {
+        if (sheetSession !== session) return
+        logw("内置页面$why：$sheetRoute（第 ${sheetRetry + 1} 次）")
+        Core.pageLog("内置页面$why：$sheetRoute")
+        val r = sheetRoute
+        val f = sheetFull
+        closeSheet()
+        if (sheetRetry++ < 2) mainHandler.postDelayed({ showSheet(r, f) }, 400) else toast("页面打不开（内置扩展进程$why），请重启应用")
+    }
+
+    override fun closeSheet() {
+        val d = sheet ?: return
+        sheet = null
+        sheetSession = null
+        sheetFull = false
+        try { d.dismiss() } catch (e: Exception) { logw("关闭页面窗口出错", e) }
+    }
 
     /** 用户扩展的弹窗。 */
     override fun showPopup(session: GeckoSession) {

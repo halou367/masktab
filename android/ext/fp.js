@@ -73,34 +73,44 @@
     try { return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'long' }).formatToParts(new Date(t)).find((x) => x.type === 'timeZoneName').value; } catch (e) { return tz; }
   }
   function dateStr(t, off) { const d = new Date(t - off * 60000); return `${DAYS[d.getUTCDay()]} ${MONS[d.getUTCMonth()]} ${p2(d.getUTCDate())} ${String(d.getUTCFullYear()).padStart(4, '0')}`; }
-  function timeStr(t, off, tz) {
-    const d = new Date(t - off * 60000), a = Math.abs(off);
-    return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())} GMT${off <= 0 ? '+' : '-'}${p2(Math.floor(a / 60))}${p2(a % 60)} (${tzName(tz, t)})`;
-  }
 
   function run(win, cfg) {
     if (!cfg || win.__mtfpDone) return false;
     win.__mtfpDone = true;
     const page = win.wrappedJSObject || win;
-    const ex = typeof exportFunction === 'function' ? (f) => exportFunction(f, page) : (f) => f;
+    const FF = typeof exportFunction === 'function'; // 火狐内容脚本（有 Xray 隔离）；否则是普通页面环境（测试）
     const clone = typeof cloneInto === 'function' ? (o) => cloneInto(o, page) : (o) => o;
     const pr = profile(cfg.seed);
     const tryit = (f) => { try { f(); } catch (e) { /* 某一项失败不影响其它项和页面 */ } };
+    // 把内容脚本里的函数交给页面，并让它看起来和原生函数一样：
+    // - 用 defineAs 导出，函数自带名字，toString() 得到 "function 名字() { [native code] }"（不给名字时是匿名函数，一查就露馅）
+    // - name / length 再按原函数补齐（取值函数的 name 是 "get xxx"）
+    const ex = (f, name, len, shown) => {
+      let g = f;
+      if (FF) g = exportFunction(f, clone({}), { defineAs: name });
+      const def = FF ? (k, v) => page.Object.defineProperty(g, k, clone({ value: v, configurable: true })) : (k, v) => Object.defineProperty(g, k, { value: v, configurable: true });
+      tryit(() => def('name', shown || name));
+      tryit(() => def('length', len || 0));
+      return g;
+    };
     const getter = (proto, name, fn) => tryit(() => {
       const d = Object.getOwnPropertyDescriptor(proto, name);
-      Object.defineProperty(proto, name, { configurable: true, enumerable: d ? d.enumerable : true, get: ex(fn) });
+      Object.defineProperty(proto, name, { configurable: true, enumerable: d ? d.enumerable : true, get: ex(fn, name, 0, 'get ' + name) });
     });
+    // 注意：改过的函数里调原函数一律用 orig.call(this, 参数…)，不能用 orig.apply(this, arguments)——
+    // arguments 是内容脚本这边的对象，页面那边读它的 length 会报 “Permission denied to access property "length"”
+    // （真火狐里实测：toDataURL / getImageData / toBlob / 音频 / resolvedOptions 全部抛错，网页直接坏掉）。
     const method = (proto, name, make) => tryit(() => {
       const orig = proto[name];
       if (typeof orig !== 'function') return;
-      proto[name] = ex(make(orig));
+      proto[name] = ex(make(orig), name, orig.length);
     });
 
     // ---- 画布 ----
     tryit(() => {
       const C2 = page.CanvasRenderingContext2D.prototype;
       const oGet = C2.getImageData;
-      method(C2, 'getImageData', (orig) => function () { const img = orig.apply(this, arguments); tryit(() => noisePixels(img.data, pr.key)); return img; });
+      method(C2, 'getImageData', (orig) => function (...a) { const img = orig.call(this, ...a); tryit(() => noisePixels(img.data, pr.key)); return img; });
       const noisy = (cv) => {
         const w = cv.width, h = cv.height;
         if (!w || !h || w * h > 4e6) return cv;
@@ -114,12 +124,12 @@
         return c2;
       };
       const HC = page.HTMLCanvasElement.prototype;
-      method(HC, 'toDataURL', (orig) => function () { let src = this; tryit(() => { src = noisy(this); }); return orig.apply(src, arguments); });
-      method(HC, 'toBlob', (orig) => function () { let src = this; tryit(() => { src = noisy(this); }); return orig.apply(src, arguments); });
+      method(HC, 'toDataURL', (orig) => function (...a) { let src = this; tryit(() => { src = noisy(this); }); return orig.call(src, ...a); });
+      method(HC, 'toBlob', (orig) => function (...a) { let src = this; tryit(() => { src = noisy(this); }); return orig.call(src, ...a); });
     });
     // ---- 音频 ----
     tryit(() => {
-      method(page.AudioBuffer.prototype, 'getChannelData', (orig) => function () { const a = orig.apply(this, arguments); tryit(() => noiseSamples(a, pr.key)); return a; });
+      method(page.AudioBuffer.prototype, 'getChannelData', (orig) => function (...a) { const d = orig.call(this, ...a); tryit(() => noiseSamples(d, pr.key)); return d; });
     });
     // ---- 硬件、屏幕 ----
     getter(page.Navigator.prototype, 'hardwareConcurrency', function () { return pr.cores; });
@@ -143,14 +153,27 @@
       if (REAL === tz) return;
       const DP = page.Date.prototype;
       const oTime = DP.getTime;
-      const off = (self) => { const t = oTime.call(self); return [t, isNaN(t) ? 0 : tzOffset(tz, t)]; };
-      method(DP, 'getTimezoneOffset', () => function () { const [t, o] = off(this); return isNaN(t) ? NaN : o; });
+      // 偏移按 15 分钟一格缓存：时区规则的变更点都落在整 15 分钟上，网页一秒内调上万次 getHours 也不会拖慢
+      const offs = new Map();
+      const offAt = (t) => {
+        const b = Math.floor(t / 900000);
+        let o = offs.get(b);
+        if (o === undefined) { if (offs.size > 4096) offs.clear(); o = tzOffset(tz, b * 900000); offs.set(b, o); }
+        return o;
+      };
+      const names = new Map();
+      const nameAt = (t, o) => { let n = names.get(o); if (n === undefined) { n = tzName(tz, t); names.set(o, n); } return n; };
+      const tstr = (t, o) => {
+        const d = new Date(t - o * 60000), a = Math.abs(o);
+        return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())} GMT${o <= 0 ? '+' : '-'}${p2(Math.floor(a / 60))}${p2(a % 60)} (${nameAt(t, o)})`;
+      };
+      method(DP, 'getTimezoneOffset', () => function () { const t = oTime.call(this); return isNaN(t) ? NaN : offAt(t); });
       for (const [k, u] of [['getFullYear', 'getUTCFullYear'], ['getMonth', 'getUTCMonth'], ['getDate', 'getUTCDate'], ['getDay', 'getUTCDay'], ['getHours', 'getUTCHours'], ['getMinutes', 'getUTCMinutes']]) {
-        method(DP, k, () => function () { const [t, o] = off(this); return isNaN(t) ? NaN : new Date(t - o * 60000)[u](); });
+        method(DP, k, () => function () { const t = oTime.call(this); return isNaN(t) ? NaN : new Date(t - offAt(t) * 60000)[u](); });
       }
-      method(DP, 'toString', () => function () { const [t, o] = off(this); return isNaN(t) ? 'Invalid Date' : `${dateStr(t, o)} ${timeStr(t, o, tz)}`; });
-      method(DP, 'toDateString', () => function () { const [t, o] = off(this); return isNaN(t) ? 'Invalid Date' : dateStr(t, o); });
-      method(DP, 'toTimeString', () => function () { const [t, o] = off(this); return isNaN(t) ? 'Invalid Date' : timeStr(t, o, tz); });
+      method(DP, 'toString', () => function () { const t = oTime.call(this); if (isNaN(t)) return 'Invalid Date'; const o = offAt(t); return `${dateStr(t, o)} ${tstr(t, o)}`; });
+      method(DP, 'toDateString', () => function () { const t = oTime.call(this); return isNaN(t) ? 'Invalid Date' : dateStr(t, offAt(t)); });
+      method(DP, 'toTimeString', () => function () { const t = oTime.call(this); return isNaN(t) ? 'Invalid Date' : tstr(t, offAt(t)); });
       for (const k of ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString']) {
         method(DP, k, (orig) => function (locales, options) {
           const o = {};
@@ -161,7 +184,7 @@
       }
       // Intl.DateTimeFormat：没指定时区的格式化器按伪装时区出结果（用同样选项另建一个带时区的格式化器代办）
       const DTF = page.Intl.DateTimeFormat, IP = DTF.prototype;
-      const oRO = IP.resolvedOptions, oFTP = IP.formatToParts;
+      const oRO = IP.resolvedOptions, oFTP = IP.formatToParts, oFR = IP.formatRange, oFRP = IP.formatRangeToParts;
       const fmtDesc = Object.getOwnPropertyDescriptor(IP, 'format');
       const KEYS = ['calendar', 'numberingSystem', 'hourCycle', 'weekday', 'era', 'year', 'month', 'day', 'dayPeriod', 'hour', 'minute', 'second', 'fractionalSecondDigits', 'timeZoneName'];
       const cache = new Map();
@@ -172,12 +195,23 @@
         if (ro.dateStyle || ro.timeStyle) { for (const k of ['dateStyle', 'timeStyle', 'calendar', 'numberingSystem', 'hourCycle']) if (ro[k] !== undefined) o[k] = ro[k]; } else for (const k of KEYS) if (ro[k] !== undefined) o[k] = ro[k];
         const key = ro.locale + JSON.stringify(o);
         let f = cache.get(key);
-        if (!f) { f = new DTF(ro.locale, clone(o)); cache.set(key, f); }
+        if (!f) { if (cache.size > 64) cache.clear(); f = new DTF(ro.locale, clone(o)); cache.set(key, f); }
         return f;
       };
-      method(IP, 'resolvedOptions', (orig) => function () { const r = orig.apply(this, arguments); if (r.timeZone === REAL) r.timeZone = tz; return r; });
+      method(IP, 'resolvedOptions', (orig) => function () { const r = orig.call(this); if (r.timeZone === REAL) r.timeZone = tz; return r; });
       method(IP, 'formatToParts', () => function (d) { return oFTP.call(sub(this) || this, d); });
+      if (typeof oFR === 'function') method(IP, 'formatRange', () => function (a, b) { return oFR.call(sub(this) || this, a, b); });
+      if (typeof oFRP === 'function') method(IP, 'formatRangeToParts', () => function (a, b) { return oFRP.call(sub(this) || this, a, b); });
       if (fmtDesc && fmtDesc.get) getter(IP, 'format', function () { return fmtDesc.get.call(sub(this) || this); });
+      // Temporal（火狐 139 起自带）：不带参数取“现在”时用系统时区，一样要换掉
+      tryit(() => {
+        const N = page.Temporal && page.Temporal.Now;
+        if (!N) return;
+        method(N, 'timeZoneId', () => function () { return tz; });
+        for (const k of ['plainDateTimeISO', 'plainDateISO', 'plainTimeISO', 'zonedDateTimeISO']) {
+          method(N, k, (orig) => function (z) { return orig.call(this, z === undefined ? tz : z); });
+        }
+      });
     });
     return true;
   }

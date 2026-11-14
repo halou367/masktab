@@ -1,0 +1,59 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MaskTab 指纹自检</title>
+<body style="font:14px/1.5 system-ui,sans-serif;margin:16px"><h3>MaskTab 指纹自检</h3><pre id="out">检查中…</pre><script>
+// 指纹伪装自检页（CI 模拟器冒烟测试和本地真火狐测试都用它）：
+// 在一个装了伪装的标签页里打开 fpcheck.html?tz=Asia/Tokyo&off=-540&lang=ja-JP，
+// 逐项调用被改过的接口——任何一项抛错（比如 Permission denied）或者值不对都算失败。
+// 结果打到控制台一行：MTFPCHECK pass … / MTFPCHECK fail …（logcat 里搜这一行），同时显示在页面上。
+const want = new URLSearchParams(location.search), R = {}, bad = [];
+const T = (k, f) => { try { R[k] = f(); } catch (e) { R[k] = 'ERR ' + e.message; } };
+const draw = () => { const c = document.createElement('canvas'); c.width = 120; c.height = 40; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 120, 40); x.fillStyle = '#069'; x.font = '16px sans-serif'; x.fillText('MaskTab fp', 4, 26); return c; };
+const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+T('toDataURL', () => draw().toDataURL().length > 100);
+T('toDataURL_stable', () => draw().toDataURL() === draw().toDataURL());
+T('toDataURL_jpeg', () => draw().toDataURL('image/jpeg', 0.5).startsWith('data:image/jpeg'));
+T('getImageData', () => draw().getContext('2d').getImageData(0, 0, 120, 40).data.length);
+T('getImageData_opts', () => draw().getContext('2d').getImageData(0, 0, 10, 10, { colorSpace: 'srgb' }).data.length);
+T('toBlob', () => { draw().toBlob((b) => { R.toBlob_cb = b ? b.size > 0 : false; }); return true; });
+T('audio', () => { const b = new AudioBuffer({ length: 300, sampleRate: 44100 }); const a = b.getChannelData(0); for (let i = 0; i < a.length; i++) a[i] = Math.sin(i); const x = b.getChannelData(0); return b.getChannelData(0)[111] === x[111]; });
+T('cores', () => navigator.hardwareConcurrency);
+T('lang', () => navigator.language + ' ' + navigator.languages.join(','));
+T('avail', () => screen.availHeight <= screen.height);
+T('tzo', () => d.getTimezoneOffset());
+T('hours', () => d.getHours());
+T('str', () => String(d));
+T('loc', () => d.toLocaleString('en-US', { hour: 'numeric', timeZoneName: 'short' }) + ' | ' + d.toLocaleDateString(['en-US'], { weekday: 'long' }) + ' | ' + d.toLocaleTimeString());
+T('intl_fmt', () => new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false }).format(d));
+T('intl_parts', () => new Intl.DateTimeFormat('en-US', { dateStyle: 'full', timeStyle: 'long' }).formatToParts(d).length > 3);
+T('intl_tz', () => Intl.DateTimeFormat().resolvedOptions().timeZone);
+T('intl_range', () => new Intl.DateTimeFormat('en-US', { hour: 'numeric' }).formatRange(d, new Date(+d + 3600e3)));
+T('temporal', () => (typeof Temporal === 'undefined' ? 'none' : Temporal.Now.timeZoneId() + ' ' + Temporal.Now.zonedDateTimeISO().timeZoneId));
+T('fn_str', () => [HTMLCanvasElement.prototype.toDataURL, Date.prototype.getHours, Object.getOwnPropertyDescriptor(Navigator.prototype, 'hardwareConcurrency').get, Intl.DateTimeFormat.prototype.resolvedOptions].map((f) => f.toString().replace(/\s+/g, ' ')).join(' ; '));
+T('fn_name', () => [HTMLCanvasElement.prototype.toDataURL.name, Date.prototype.getHours.name, CanvasRenderingContext2D.prototype.getImageData.length].join(','));
+T('throws', () => { try { Date.prototype.getHours.call({}); return 'no throw'; } catch (e) { return e instanceof TypeError ? 'TypeError' : String(e); } });
+T('invalid', () => String(new Date(NaN).getHours()) + ' ' + String(new Date(NaN)));
+T('perf_ms', () => { const t0 = performance.now(), x = new Date(); let s = 0; for (let i = 0; i < 20000; i++) s += x.getHours() + x.getTimezoneOffset(); return Math.round(performance.now() - t0); });
+T('iframe', () => { const f = document.createElement('iframe'); document.body.append(f); const w = f.contentWindow; const r = [w.navigator.hardwareConcurrency, new w.Date(+d).getTimezoneOffset(), w.navigator.language].join(','); f.remove(); return r; });
+setTimeout(() => {
+  for (const [k, v] of Object.entries(R)) if (typeof v === 'string' && v.startsWith('ERR')) bad.push(k + ': ' + v);
+  for (const k of ['toDataURL', 'toDataURL_stable', 'toDataURL_jpeg', 'toBlob', 'toBlob_cb', 'audio', 'avail', 'intl_parts']) if (R[k] !== true) bad.push(k + ' = ' + R[k]);
+  if (![4, 6, 8].includes(R.cores)) bad.push('cores = ' + R.cores);
+  const tz = want.get('tz'), off = want.get('off'), lang = want.get('lang');
+  if (tz) {
+    if (R.intl_tz !== tz) bad.push('intl_tz = ' + R.intl_tz);
+    if (String(R.tzo) !== off) bad.push('tzo = ' + R.tzo);
+    if (R.hours !== ((24 - Number(off) / 60) % 24)) bad.push('hours = ' + R.hours);
+    if (typeof R.temporal === 'string' && R.temporal !== 'none' && R.temporal !== tz + ' ' + tz) bad.push('temporal = ' + R.temporal);
+    if (String(R.iframe).split(',')[1] !== off) bad.push('iframe = ' + R.iframe);
+  }
+  if (lang && !String(R.lang).startsWith(lang + ' ' + lang)) bad.push('lang = ' + R.lang);
+  if (!/^function toDataURL\(\) \{ \[native code\] \} ; function getHours\(\) \{ \[native code\] \} ; function hardwareConcurrency\(\) \{ \[native code\] \} ; function resolvedOptions\(\) \{ \[native code\] \}$/.test(R.fn_str)) bad.push('fn_str = ' + R.fn_str);
+  if (R.fn_name !== 'toDataURL,getHours,4') bad.push('fn_name = ' + R.fn_name);
+  if (R.throws !== 'TypeError') bad.push('throws = ' + R.throws);
+  if (R.invalid !== 'NaN Invalid Date') bad.push('invalid = ' + R.invalid);
+  if (!(R.perf_ms < 1500)) bad.push('perf_ms = ' + R.perf_ms);
+  const line = bad.length ? 'MTFPCHECK fail ' + bad.join(' || ') : `MTFPCHECK pass cores=${R.cores} tz=${R.intl_tz} off=${R.tzo} lang=${navigator.language} perf=${R.perf_ms}ms`;
+  console.info(line);
+  document.title = bad.length ? 'fail' : 'pass';
+  document.getElementById('out').textContent = line.replace(/ \|\| /g, '\n') + '\n\n' + JSON.stringify(R, null, 1);
+}, 2000);
+</script>

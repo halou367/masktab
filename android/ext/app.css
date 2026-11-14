@@ -111,3 +111,14 @@ body.ntp #q{width:100%;padding:14px 18px 14px 46px;border-radius:999px;font-size
 .tile .site{width:48px;height:48px;border-radius:16px;background:var(--card);box-shadow:none}
 .tile span:last-child{max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .warnline{display:flex;align-items:center;gap:4px}
+/* 加载中 / 出错提示（任何一页都不留白屏） */
+.boot{display:flex;align-items:center;justify-content:center;gap:10px;min-height:60vh;color:var(--sub);font-size:14px}
+.boot i,.dotspin{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite;display:inline-block;flex:none;vertical-align:-3px;margin-right:6px}
+.boot i{margin:0}
+.oops{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:18vh 24px 24px;color:var(--fg)} .oops>.ic{color:var(--bad)} .oops b{font-size:16px} .oops .sub{font-size:13px;line-height:1.6;word-break:break-word;max-width:420px} .oops .row{margin-top:8px;gap:10px}
+/* 节点页：进度、失败原因、筛选 */
+.box .banner{margin:8px 0 0;font-size:13px;line-height:1.5;align-items:flex-start;word-break:break-word} .box .banner>.ic{color:var(--bad);flex:none;margin-top:1px}
+.prog{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--accent);min-height:24px} .prog .bar{width:96px;height:5px;border-radius:5px;background:var(--line);overflow:hidden;flex:none} .prog .bar i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.box .qs{margin:0 0 8px;height:38px} .box .qs input{border:0;background:none;padding:0;flex:1;min-width:0;font-size:14px;color:var(--fg);outline:none}
+.ib.dis{opacity:.4} .node .ck .dotspin{margin:0}
+textarea.diag{margin-top:10px;min-height:220px;font-size:11.5px;line-height:1.5;white-space:pre;overflow:auto}
