@@ -23,3 +23,9 @@ export function noticeText(n, cname = (c) => c) {
   if (n === 'switched') return '线路不通，已自动换了一条';
   return n;
 }
+// 头像上的字：实例名里的第一个字母，或开头的那串数字（最多三位）；名字里没有就用编号（整个编号，不是第一位）。
+// 手机上一律用编号（和工具栏的彩色编号圆点一致）。
+export function letterOf(i, mobile) {
+  const m = mobile ? null : /[A-Za-z]|\d{1,3}/.exec(i?.name || '');
+  return (m ? m[0] : String(i?.no ?? 0)).toUpperCase();
+}

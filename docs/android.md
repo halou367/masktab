@@ -44,7 +44,7 @@ android/
     fixture-state.json    上面用的状态：从真的核心服务（宿主模式）抓的，只改了数值
 ```
 
-复用桌面伴随扩展的文件（构建时拷贝，不复制进仓库）：`ui.js`、`ui.css`、`sites.js`、`menu.js`、`instances.js`、`autofill.js`、`common.js`、`panel.js`、`panel.css`、`pages.js`、`assets/flags`。
+复用桌面伴随扩展的文件（构建时拷贝，不复制进仓库）：`ui.js`、`ui.css`、`sites.js`、`menu.js`、`instances.js`、`autofill.js`、`common.js`、`vaultmsg.js`、`panel.js`、`panel.css`、`pages.js`、`assets/flags`。
 `menu.js` 为此加了两行：手机上头像写编号、不显示键盘快捷键。改这些文件时，桌面和安卓两边都要看。
 
 本地构建：装 JDK 21、安卓 SDK（platforms;android-37.2）、NDK、Go、Gradle 9.9.1，然后

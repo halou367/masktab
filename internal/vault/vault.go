@@ -5,6 +5,7 @@ package vault
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,15 @@ type data struct {
 	Default string  `json:"default,omitempty"` // 默认密码（批量导入、注册新站时用）
 	Items   []*Item `json:"items"`
 	Rules   []*Rule `json:"rules,omitempty"` // 录入规则，全部实例共用
+	Icons   []*Icon `json:"icons,omitempty"` // 记住了账号的站点的网页图标（界面上画在实例卡片下面）
+}
+
+// Icon 是一个站点的网页图标（favicon）。由网页里的内容脚本在登录页取下来交给核心服务，界面不为它发任何请求。
+type Icon struct {
+	Host string `json:"host"`
+	Type string `json:"type"` // image/png 等
+	Data string `json:"data"` // base64
+	At   int64  `json:"at"`
 }
 
 type Vault struct {
@@ -218,7 +228,7 @@ func (v *Vault) List(inst string) []Item {
 	return out
 }
 
-// Match 找能填进 site 的记录：站点完全匹配（F-PWD-5），当前实例的排前；"*" 记录（导入的邮箱账号）只给本实例用、排在最后。
+// Match 找能填进 site 的记录：站点完全匹配（F-PWD-5；只差一个 www. 也算），当前实例的排前；"*" 记录（导入的邮箱账号）只给本实例用、排在最后。
 func (v *Vault) Match(inst, site string) []Item {
 	site = NormSite(site)
 	v.mu.Lock()
@@ -226,15 +236,161 @@ func (v *Vault) Match(inst, site string) []Item {
 	var mine, star, other []Item
 	for _, x := range v.d.Items {
 		switch {
-		case x.Site == site && x.Inst == inst:
+		case sameSite(x.Site, site) && x.Inst == inst:
 			mine = append(mine, *x)
-		case x.Site == site:
+		case sameSite(x.Site, site):
 			other = append(other, *x)
 		case x.Site == "*" && x.Inst == inst:
 			star = append(star, *x)
 		}
 	}
 	return append(append(mine, other...), star...)
+}
+
+// 很多人各用一个子域名的公共后缀：这些后缀下面的子域名互不相干，不算“同一个网站”。
+var sharedSuffix = []string{"github.io", "gitlab.io", "pages.dev", "workers.dev", "r2.dev", "vercel.app", "netlify.app", "herokuapp.com", "onrender.com", "fly.dev",
+	"web.app", "firebaseapp.com", "appspot.com", "blogspot.com", "azurewebsites.net", "cloudfront.net", "amazonaws.com", "glitch.me", "repl.co", "replit.dev", "ngrok.io", "ngrok-free.app", "trycloudflare.com"}
+var sld2 = map[string]bool{"co.uk": true, "com.cn": true, "com.hk": true, "com.tw": true, "co.jp": true, "co.kr": true, "com.au": true, "com.br": true, "net.cn": true, "org.cn": true,
+	"gov.cn": true, "ac.uk": true, "org.uk": true, "com.sg": true, "co.in": true, "com.mx": true, "co.nz": true, "com.tr": true}
+
+// Base 取主机名的主域名（example.com、example.co.uk）；IP、单段主机名、公共后缀下的子域名原样返回。
+// 简化版（不带完整的公共后缀表），只用来判断“是不是同一个网站的另一个子域名”，判断错的后果只是聚焦时多列或少列一条候选。
+func Base(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	p := strings.Split(host, ".")
+	if len(p) <= 2 || strings.Contains(host, ":") || strings.Trim(p[len(p)-1], "0123456789") == "" {
+		return host
+	}
+	for _, sfx := range sharedSuffix {
+		if strings.HasSuffix(host, "."+sfx) {
+			return host
+		}
+	}
+	if sld2[strings.Join(p[len(p)-2:], ".")] {
+		return strings.Join(p[len(p)-3:], ".")
+	}
+	return strings.Join(p[len(p)-2:], ".")
+}
+
+// sameSite：两个站点只差一个 www.（协议、端口相同）算同一个站点。
+func sameSite(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ua, e1 := url.Parse(a)
+	ub, e2 := url.Parse(b)
+	if e1 != nil || e2 != nil || ua.Scheme != ub.Scheme || ua.Port() != ub.Port() {
+		return false
+	}
+	return strings.TrimPrefix(ua.Hostname(), "www.") == strings.TrimPrefix(ub.Hostname(), "www.")
+}
+
+// Near 返回本实例在“同一个网站的别的子域名”上记住的账号（login.example.com 与 www.example.com）。
+// 这些只在用户点输入框时作为候选列出来，不自动填。
+func (v *Vault) Near(inst, site string) []Item {
+	site = NormSite(site)
+	u, err := url.Parse(site)
+	if err != nil || site == "" || site == "*" {
+		return nil
+	}
+	base := Base(u.Hostname())
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	var out []Item
+	for _, x := range v.d.Items {
+		if x.Inst != inst || x.Site == "*" || sameSite(x.Site, site) {
+			continue
+		}
+		xu, err := url.Parse(x.Site)
+		if err != nil || xu.Scheme != u.Scheme {
+			continue
+		}
+		if h := xu.Hostname(); h != u.Hostname() && Base(h) == base {
+			out = append(out, *x)
+		}
+	}
+	return out
+}
+
+var iconTypes = map[string]bool{"image/png": true, "image/x-icon": true, "image/vnd.microsoft.icon": true, "image/svg+xml": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
+
+// MaxIcon 是一个图标的大小上限（解码后的字节数）。
+const MaxIcon = 48 << 10
+
+// SetIcon 记下一个站点的网页图标。只收“已经记住了账号的站点”的（不给没存过账号的网站留痕迹）；返回是否收下。
+func (v *Vault) SetIcon(site, typ, b64 string) (bool, error) {
+	host := Host(NormSite(site))
+	typ = strings.ToLower(strings.TrimSpace(strings.SplitN(typ, ";", 2)[0]))
+	if host == "" || host == "*" || !iconTypes[typ] || b64 == "" || len(b64) > MaxIcon*4/3+8 {
+		return false, nil
+	}
+	if _, err := base64.StdEncoding.DecodeString(b64); err != nil {
+		return false, nil
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	has := false
+	for _, x := range v.d.Items {
+		if Host(x.Site) == host {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return false, nil
+	}
+	ic := &Icon{Host: host, Type: typ, Data: b64, At: time.Now().UnixMilli()}
+	for i, x := range v.d.Icons {
+		if x.Host == host {
+			v.d.Icons[i] = ic
+			return true, v.saveLocked()
+		}
+	}
+	v.d.Icons = append(v.d.Icons, ic)
+	return true, v.saveLocked()
+}
+
+// HasIcon：这个站点有没有图标。
+func (v *Vault) HasIcon(site string) bool {
+	host := Host(NormSite(site))
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, x := range v.d.Icons {
+		if x.Host == host {
+			return true
+		}
+	}
+	return false
+}
+
+// Icons 返回 主机名 → data: 网址，只含还有账号的站点。
+func (v *Vault) Icons() map[string]string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	live := map[string]bool{}
+	for _, x := range v.d.Items {
+		live[Host(x.Site)] = true
+	}
+	out := map[string]string{}
+	for _, x := range v.d.Icons {
+		if live[x.Host] {
+			out[x.Host] = "data:" + x.Type + ";base64," + x.Data
+		}
+	}
+	return out
+}
+
+// IconStamp 在图标有增改、或账号有增删时变化（界面据此决定要不要把图标重新取一遍）。
+func (v *Vault) IconStamp() int64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	var t int64
+	for _, x := range v.d.Icons {
+		if x.At > t {
+			t = x.At
+		}
+	}
+	return t + int64(len(v.d.Items))
 }
 
 // Sites 返回每个实例记住的站点主机名（去重，按最近修改在前），给卡片上的图标用；不含密码。
@@ -298,13 +454,18 @@ func (v *Vault) RuleOf(site string) *Rule {
 	site = NormSite(site)
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	var www *Rule
 	for _, x := range v.d.Rules {
 		if x.Site == site {
 			cp := *x
 			return &cp
 		}
+		if www == nil && sameSite(x.Site, site) {
+			cp := *x
+			www = &cp
+		}
 	}
-	return nil
+	return www
 }
 
 // DeleteRule 删除 site 的录入规则（已经记住的账号不动）。

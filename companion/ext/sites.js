@@ -1,5 +1,7 @@
 // 站点图标：记住了账号的站点在实例卡片、头像菜单上画成小图标。
-// 常见站点用打包的品牌图标（常量 SVG，只有这些常量会进 innerHTML）；其余站点画一个带首字母的色块（用 DOM 接口画，不拼 HTML）。
+// 常见站点用打包的品牌图标（常量 SVG，只有这些常量会进 innerHTML）；其余站点用它自己的网页图标——登录页上的内容脚本取下来、存在核心服务里的那份
+//（这里只从核心服务拿，不向任何网站发请求）；再没有就画一个带首字母的色块（用 DOM 接口画，不拼 HTML）。
+import { api } from './api.js';
 const KNOWN = {
   google: { name: "Google", doms: ["google.com", "gmail.com", "youtube.com", "google.com.hk"], svg: '<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.6 12.2c0-.8-.1-1.5-.2-2.2H12v4.2h5.9a5 5 0 0 1-2.2 3.3v2.7h3.6c2.1-1.9 3.3-4.8 3.3-8z"/><path fill="#34A853" d="M12 23c3 0 5.5-1 7.3-2.7l-3.6-2.7c-1 .7-2.2 1.1-3.7 1.1-2.9 0-5.3-1.9-6.2-4.5H2.1v2.8A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.8 14.2a6.6 6.6 0 0 1 0-4.3V7.1H2.1a11 11 0 0 0 0 9.9z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3.1.6 4.2 1.7l3.2-3.2A11 11 0 0 0 2.1 7.1l3.7 2.8C6.7 7.3 9.1 5.4 12 5.4z"/></svg>' },
   github: { name: "GitHub", doms: ["github.com"], svg: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 1.5a10.5 10.5 0 0 0-3.3 20.5c.5.1.7-.2.7-.5v-1.8c-2.9.6-3.5-1.4-3.5-1.4-.5-1.2-1.2-1.5-1.2-1.5-.9-.6.1-.6.1-.6 1 .1 1.6 1.1 1.6 1.1.9 1.6 2.5 1.1 3.1.9.1-.7.4-1.1.7-1.4-2.3-.3-4.8-1.2-4.8-5.2 0-1.1.4-2.1 1.1-2.8-.1-.3-.5-1.3.1-2.8 0 0 .9-.3 2.9 1.1a10 10 0 0 1 5.3 0c2-1.4 2.9-1.1 2.9-1.1.6 1.5.2 2.5.1 2.8.7.7 1.1 1.7 1.1 2.8 0 4-2.5 4.9-4.8 5.2.4.3.7 1 .7 2v2.9c0 .3.2.6.7.5A10.5 10.5 0 0 0 12 1.5z"/></svg>' },
@@ -11,6 +13,22 @@ const KNOWN = {
   apple: { name: "Apple", doms: ["apple.com", "icloud.com"], svg: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M16.4 12.6c0-2.6 2.1-3.8 2.2-3.9a4.8 4.8 0 0 0-3.8-2c-1.6-.2-3.1.9-3.9.9s-2-.9-3.4-.9a5 5 0 0 0-4.2 2.6c-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6s1.8-.8 3.3-.8 2 .8 3.4.8 2.2-1.3 3.1-2.5a11 11 0 0 0 1.4-2.9 4.5 4.5 0 0 1-2.6-4.1zM13.8 5a4.4 4.4 0 0 0 1-3.2 4.6 4.6 0 0 0-3 1.5 4.2 4.2 0 0 0-1 3.1 3.8 3.8 0 0 0 3-1.4z"/></svg>' },
 };
 const PALETTE = ['#1a73e8', '#188038', '#9334e6', '#e8710a', '#d93025', '#12b5cb', '#e52592', '#5f6368'];
+
+// 核心服务里存着的网页图标：主机名 → data: 网址。状态里的 vault.icons 是它的版本号，变了才重新取一遍。
+let icons = {}, stamp = 0;
+export async function syncIcons(st) {
+  const s = st?.vault?.icons || 0;
+  if (s === stamp) return false;
+  try { icons = (await api('GET', '/api/vault/icons')).icons || {}; stamp = s; } catch { return false; }
+  return true;
+}
+// 主机名对不上时，同一网站别的子域名的图标也可以用（Cookie 按主域名统计，账号按登录页的子域名记）。
+function pageIcon(host) {
+  const h = String(host || '').toLowerCase();
+  if (icons[h]) return icons[h];
+  for (const k of Object.keys(icons)) if (h.endsWith('.' + k) || k.endsWith('.' + h)) return icons[k];
+  return '';
+}
 
 // 主机名 → 已知站点的 key；不认识返回 ''。
 export function siteKey(host) {
@@ -35,8 +53,13 @@ export function siteIcon(host, size = 16) {
   const box = document.createElement('span');
   box.className = 'site';
   box.title = siteName(host);
+  const own = k ? '' : pageIcon(host);
   if (k) {
     box.innerHTML = KNOWN[k].svg;
+  } else if (/^data:image\//.test(own)) {
+    const im = document.createElement('img');
+    im.alt = ''; im.src = own; im.style.borderRadius = '3px'; im.style.objectFit = 'contain';
+    box.append(im);
   } else {
     const n = String(host || '?').replace(/^www\./, '');
     let hs = 0; for (const ch of n) hs = (hs * 31 + ch.charCodeAt(0)) >>> 0;

@@ -275,3 +275,19 @@
 - 需求方：“合并吧，之后一起更新同步发布”。`demo/android` 快进并入 `main`。
 - `ci.yml` 在 `main` 上调用 `android.yml`，新增 `release` 任务：全部测试通过后把两个电脑安装程序和手机 APK 放进同一个 Release，版本号相同。
 
+### 2026-11-13 录入登录闭环、登录页提示、站点图标、两位数头像、工具栏图标（decisions M-4，M-2 修订）
+- 需求方反馈（电脑版 0.1.43）：录入走得完，但再打开登录页不自动填、账号管理里没有；要登录页自动提示录入；录入后卡片下出现网站图标；
+  两位数编号的头像只显示一位；工具栏图标的延迟角标把国旗盖住。
+- 原因与改法见 decisions M-4。改动：
+  - Go：`internal/vault`（`www.` 与裸域名同站、兄弟子域名 `Near`、网页图标）、`internal/core/accounts.go`（`PUT /api/vault/icon`、`GET /api/vault/icons`，匹配结果带 `near` / `needIcon`）、状态加 `vault.icons`。
+  - 共用：新增 `vaultmsg.js`（后台存账号 / 规则 / 图标）；`autofill.js`（一条消息保存、登录页提示卡片、取网页图标）；`sites.js`（存下的网页图标）；`common.js` / `menu.js` / `ui.css`（两位、三位数头像）。
+  - 电脑：`background.js`（用 `vaultmsg.js`；延迟改色点；`chrome.privacy` 关内核自带的保存密码）、新增 `icon.js`、`manifest.json` 加 `privacy` 权限。
+  - 手机：`android/ext/background.js` 用同一份 `vaultmsg.js`；打包清单、CI 清单同步。Kotlin 没有改。
+- 本地验证：
+  - `go vet`（含 `GOOS=windows`）、`go test ./...` 通过（新增 `TestNearAndWWW`、`TestIcons`）。
+  - `scripts/rec-test.mjs`：Chromium、Firefox 各 38 项全过（登录页在子域名、登录页在别的站、单页应用、弹窗登录后立刻关窗、第二个实例按规则自动录入、实例之间不串、兄弟子域名不自动填、“不用”后不再问）。
+  - `scripts/ext-e2e.mjs`：真 Chromium（159）装真扩展 + 真核心服务，16 项全过：提示 → 录入 → 两步登录 → 跳到另一个子域名 → 入库 → 再打开自动填邮箱和密码 → 管理页卡片下出现网页图标、头像写“14”→ 内核自带的保存密码显示为“被扩展关闭”。
+  - `android/scripts/preview-pages.mjs`：两端页面 47 项全过（含“14”头像、存下的网页图标）。
+  - 用 0.1.43 的逻辑在同样的仿真网站上跑：账号记到了登录后的网站名下 / 单点登录什么都没存，和反馈一致。
+- 未验证：真实网站；Windows 实机和指纹内核 148（本地是 Linux 的 Chromium 159）；安卓真机上的提示卡片与录入；工具栏图标在真工具栏里的观感（只看了渲染出的 32 / 24 / 16 像素图）。
+  需求方说的“内核自带的密码管理里有这个网站”没能复现：偏好文件里一直是关的，本地内核也认这个设置。

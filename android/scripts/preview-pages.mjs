@@ -1,7 +1,7 @@
 // 在没有安卓环境的地方预览内置扩展页面：用 Playwright 的 Chromium 打开 app.html / newtab.html，
 // 把 GeckoView 原生消息换成一个假的 Bridge（数据写死），截图并检查页面上有没有脚本错误；顺带检查 fp.js 的伪装效果。
 // 用法：node android/scripts/preview-pages.mjs <合成好的扩展目录> <截图输出目录> [电脑版扩展目录]
-//   合成扩展目录：companion/ext 里的 ui.js ui.css sites.js menu.js instances.js autofill.js common.js panel.js panel.css pages.js assets/ + android/ext/*
+//   合成扩展目录：companion/ext 里的 ui.js ui.css sites.js menu.js instances.js autofill.js common.js panel.js panel.css pages.js vaultmsg.js assets/ + android/ext/*
 //   给了第三个参数（companion/ext）：再用同一份状态把电脑版的工具栏弹窗画一遍，检查两端的节点面板内容一致。
 // 需要 playwright（npm i playwright && npx playwright install chromium）。
 import { chromium } from 'playwright';
@@ -23,6 +23,16 @@ const base = `http://127.0.0.1:${srv.address().port}/`;
 // （宿主模式，和安卓版里跑的是同一个程序）GET /api/state 抓下来的，形状原样；只把延迟、IP、纯净度这些数值改成了截图里好看的。
 // 核心服务的状态改了形状，就重新抓一份（见 docs/android.md“本机联调”）。
 const fixture = JSON.parse(fs.readFileSync(new URL('./fixture-state.json', import.meta.url), 'utf8'));
+// 在抓来的状态上加两样用来检查的东西：一个两位数编号、没有名字的实例（头像要写得下“14”），
+// 和一个带网页图标的站点（实例卡片下面要画它自己的图标，不是首字母色块）。
+const ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJ0lEQVR42mP8z8BQz0AEYBxVSF+FjP///ydOIeOoQvoqHA0e+isEAGbbH/EqsmRNAAAAAElFTkSuQmCC';
+{
+  const p3 = fixture.instances.find((x) => x.no === 3), p2 = fixture.instances.find((x) => x.id === 'p2');
+  if (p3) { p3.no = 14; p3.name = ''; }
+  if (p2?.acct) { p2.acct.sites = ['login.shop.test', ...p2.acct.sites]; p2.acct.count++; if (fixture.me?.id === 'p2') fixture.me.acct = p2.acct; }
+  fixture.vault.icons = 7;
+  fixture.__icons = { 'login.shop.test': ICON };
+}
 const mock = (state) => {
   const vault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' }], hasDefault: true };
   const addons = [{ id: 'ublock0@raymondhill.net', name: 'uBlock Origin', version: '1.62.0', enabled: true, desc: '高效的广告拦截器', action: true, options: true }];
@@ -30,6 +40,7 @@ const mock = (state) => {
     const k = `${m} ${p.split('?')[0]}`;
     if (k === 'GET /api/state') return state;
     if (k === 'GET /api/vault') return vault;
+    if (k === 'GET /api/vault/icons') return { icons: state.__icons };
     if (k === 'GET /api/addons') return addons;
     if (k === 'GET /api/diag') return { text: 'MaskTab 诊断信息（示例）' };
     if (k === 'GET /api/events') return { seq: state.seq };
@@ -202,7 +213,7 @@ if (desk) {
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2' })); return; }
     if (u.pathname.startsWith('/api/')) {
       const st = { ...fixture, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
-      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : { ok: true })); return;
+      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : { ok: true })); return;
     }
     const f = path.join(desk, decodeURIComponent(u.pathname));
     if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); r.end(); return; }
@@ -255,6 +266,28 @@ if (desk) {
     check(`电脑版管理页：${name}`, h2.includes(name), { h2 });
     await ap.screenshot({ path: path.join(out, `desk-${tab}.png`), fullPage: true });
     await ap.close();
+  }
+  // 实例页：两端是同一份 instances.js。两位数编号写得进头像；记住账号的站点用它自己的网页图标。
+  const cards = (pg2) => pg2.evaluate(() => {
+    const faces = [...document.querySelectorAll('.face')].map((f) => ({ t: (f.firstChild?.nodeValue || '').trim(), cls: f.className, w: f.getBoundingClientRect().width, tw: (() => { const r = document.createRange(); r.selectNodeContents(f.firstChild || f); return r.getBoundingClientRect().width; })() }));
+    const sites = [...document.querySelectorAll('.cs .site')].map((e) => ({ title: e.title, img: !!e.querySelector('img'), w: e.querySelector('img')?.naturalWidth || 0 }));
+    return { f14: faces.find((x) => x.t === '14'), shop: sites.find((x) => /login\.shop\.test/.test(x.title)), github: sites.find((x) => /GitHub/.test(x.title)) };
+  });
+  const ip = await dctx.newPage();
+  ip.on('pageerror', (e) => errors.push(`电脑版实例页: ${e.message}`));
+  await ip.setViewportSize({ width: 1100, height: 800 });
+  await ip.goto(dbase + 'app.html#instances');
+  await ip.waitForTimeout(700);
+  const dc = await cards(ip);
+  await ip.screenshot({ path: path.join(out, 'desk-instances.png') });
+  const pp = await ctx.newPage();
+  await pp.goto(base + 'app.html#instances');
+  await pp.waitForTimeout(700);
+  const pc = await cards(pp);
+  await pp.close(); await ip.close();
+  for (const [end, c] of [['电脑', dc], ['手机', pc]]) {
+    check(`${end}实例页：编号 14 的头像写的是“14”，字缩小后在圆里放得下`, !!c.f14 && /\bl2\b/.test(c.f14.cls) && c.f14.tw > 0 && c.f14.tw <= c.f14.w - 4, c.f14 || c);
+    check(`${end}实例页：login.shop.test 画的是它自己的网页图标，GitHub 仍是品牌图标`, !!c.shop?.img && c.shop.w > 0 && !!c.github && !c.github.img, c);
   }
   await mp.close(); await dctx.close(); dsrv.close();
 }

@@ -13,8 +13,7 @@ let searchUrl = '';
 const tabInst = new Map(); // tabId → 实例 id
 const tabCs = new Map();   // tabId → cookieStoreId
 const csInst = new Map();  // cookieStoreId（容器）→ 实例 id
-const pending = new Map(); // 两步登录暂存：`${tabId}|${主域名}` → {u, at}
-const recs = new Map();    // 录入到一半的内容（decisions M-3）：`${tabId}|${主域名}` → {rec, off, at}，只在内存里
+const vstore = new Map();  // 密码库消息的暂存（两步登录的用户名、录入到一半的内容、刚取到的网页图标），只在内存里；逻辑在共用的 vaultmsg.js
 const visTab = new Map();  // 实例 id → 正显示着的网页标签页（从菜单点“录入登录”时转给它）
 const recWant = new Map(); // 实例 id → 点“录入登录”的时间：当时没有网页在显示，等下一个显示出来的网页接手（2 分钟内）
 
@@ -78,8 +77,7 @@ function bind(tab, id) {
 browser.tabs.onCreated.addListener((t) => { if (t.openerTabId != null && tabInst.has(t.openerTabId) && !tabInst.has(t.id)) tabInst.set(t.id, tabInst.get(t.openerTabId)); });
 browser.tabs.onRemoved.addListener((id) => {
   tabInst.delete(id); tabCs.delete(id);
-  for (const k of [...pending.keys()]) if (k.startsWith(id + '|')) pending.delete(k);
-  for (const k of [...recs.keys()]) if (k.startsWith(id + '|')) recs.delete(k);
+  vaultBox.tabGone(id); // 录到一半、已经点过登录的照样落库；其余暂存清掉
   for (const [k, v] of [...visTab]) if (v === id) visTab.delete(k);
 });
 
@@ -159,46 +157,33 @@ browser.webRequest.onBeforeRequest.addListener(async (d) => {
 }, { urls: ['https://fp.masktab.invalid/*'] }, ['blocking']);
 
 // ---------- 消息 ----------
-function siteOfSender(s) {
-  try { const u = new URL(s.url || s.tab?.url || ''); return /^https?:$/.test(u.protocol) ? u.origin : ''; } catch { return ''; }
-}
-// 主域名（两步登录暂存按它分组，子域名之间能对上）。简化版：取最后两段，常见二级后缀取三段。
-function baseDomain(h) {
-  const p = h.split('.');
-  if (p.length <= 2 || /^\d+$/.test(p[p.length - 1])) return h;
-  const two = p.slice(-2).join('.');
-  return /^(com|net|org|gov|edu|co|ac)\.[a-z]{2}$/.test(two) ? p.slice(-3).join('.') : two;
-}
-async function vaultMsg(m, s) {
-  const site = siteOfSender(s);
-  if (!site) throw new Error('不支持的页面');
-  if (s.frameId && s.frameId !== 0) throw new Error('不向内嵌框架填充（F-PWD-5）');
-  const inst = await instOfTab(s.tab?.id);
-  if (!inst) throw new Error('认不出这个标签页属于哪个实例');
-  const ex = { inst };
-  if (m.t === 'vault:match') return native('GET', `/api/vault/match?site=${encodeURIComponent(site)}`, null, ex);
-  if (m.t === 'vault:save') return native('POST', '/api/vault', { site, user: String(m.user || ''), pass: String(m.pass || ''), src: 'saved', inst }, ex);
-  const pk = `${s.tab?.id}|${baseDomain(new URL(site).hostname)}`;
-  if (m.t === 'vault:pending-set') { const u = String(m.user || '').trim().slice(0, 256); if (u) pending.set(pk, { u, at: Date.now() }); return true; }
-  if (m.t === 'vault:pending-get') { const x = pending.get(pk); return x && Date.now() - x.at < 600_000 ? x.u : ''; }
-  if (m.t === 'vault:undo') return native('DELETE', `/api/vault/${encodeURIComponent(m.id)}`, null, ex);
-  // 录入（标记网站）：规则交给 app 存，全部实例共用；录到一半的内容只暂存在后台内存里。
-  if (m.t === 'vault:rule-save') return native('PUT', '/api/vault/rule', { site, steps: Array.isArray(m.steps) ? m.steps.slice(0, 6) : [], inst }, ex);
-  if (m.t === 'vault:rec-set') {
-    const rec = m.rec && typeof m.rec === 'object' && JSON.stringify(m.rec).length < 4000 ? m.rec : null;
-    if (rec || m.off) recs.set(pk, { rec, off: !rec && !!m.off, at: Date.now() }); else recs.delete(pk);
-    return true;
-  }
-  if (m.t === 'vault:rec-get') { const x = recs.get(pk); return x && Date.now() - x.at < 600_000 ? { rec: x.rec, off: x.off } : null; }
-  if (m.t === 'vault:vis') {
+const baseDomain = globalThis.MTVault.baseDomain;
+// 密码库消息：逻辑和电脑版共用 vaultmsg.js（manifest 里排在这个文件前面）。这里只说明：请求经 app 转给核心服务、标签页属于哪个实例、暂存放在内存里。
+const vaultBox = globalThis.MTVault({
+  call: (method, path, body, who) => native(method, path, body || null, { inst: who.inst }),
+  who: async (s) => {
+    const inst = await instOfTab(s.tab?.id);
+    if (!inst) throw new Error('认不出这个标签页属于哪个实例');
+    return { inst };
+  },
+  store: {
+    get: async (k) => vstore.get(k),
+    set: async (k, v) => { vstore.set(k, v); },
+    del: async (k) => { vstore.delete(k); },
+    keys: async () => [...vstore.keys()],
+  },
+  keep: { get: async (k) => (await browser.storage.local.get(k))[k], set: (k, v) => browser.storage.local.set({ [k]: v }) },
+  // 记“哪个标签页正显示着”：从实例菜单点“录入登录”时转给它
+  vis: (m, s, who) => {
+    const inst = who.inst;
     if (!m.on) { if (visTab.get(inst) === s.tab.id) visTab.delete(inst); return {}; }
     visTab.set(inst, s.tab.id);
     const w = recWant.get(inst);
     if (w) recWant.delete(inst);
     return { start: !!w && Date.now() - w < 120_000 };
-  }
-  throw new Error('未知请求');
-}
+  },
+});
+const vaultMsg = vaultBox.msg;
 
 browser.runtime.onMessage.addListener((m, sender) => {
   if (sender.id !== browser.runtime.id || !m || typeof m !== 'object') return;

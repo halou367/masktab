@@ -16,4 +16,4 @@ export async function api(method, path, body) {
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
 }
-export { fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText } from './common.js';
+export { fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText, letterOf } from './common.js';

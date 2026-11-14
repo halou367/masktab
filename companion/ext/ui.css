@@ -37,5 +37,7 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); }
 
 /* 实例管理：卡片上只有 Cookie 的网站图标淡一点；已标记的网站（录入规则） */
 .site.ckonly{opacity:.5}
+/* 头像里的字：两位、三位数缩小一点塞进圆里 */
+.face.l2{font-size:12px;letter-spacing:-.2px} .face.l3{font-size:10px;letter-spacing:-.3px} .face.big.l2{font-size:24px} .face.big.l3{font-size:19px}
 .rules{margin-top:18px} .rules h3{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;margin:0 0 8px} .rules .tipq{margin-left:auto;text-decoration:underline dotted;cursor:help;font-weight:400}
 .ck.rule{padding-right:3px} .ck.rule .x{border:0;background:none;color:var(--sub);cursor:pointer;display:inline-flex;padding:3px;border-radius:99px} .ck.rule .x:hover{background:var(--line);color:inherit}

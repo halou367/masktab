@@ -81,6 +81,14 @@ func (a *App) acctViewsLocked() map[string]*acctView {
 	return out
 }
 
+// iconStamp：站点图标的版本（0 = 没有图标）。界面看到它变了才去取 /api/vault/icons。
+func (a *App) iconStamp() int64 {
+	if a.vault == nil {
+		return 0
+	}
+	return a.vault.IconStamp()
+}
+
 // ruleView 是管理页上“已标记的网站”的一项（不含选择器）。
 type ruleView struct {
 	Site  string   `json:"site"`
@@ -155,14 +163,41 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		a.mu.Unlock()
 		type m struct {
 			vault.Item
-			No   int  `json:"no"`
-			Mine bool `json:"mine"`
+			No   int    `json:"no"`
+			Mine bool   `json:"mine"`
+			Near string `json:"near,omitempty"` // 不是这个站点、而是同一网站别的子域名上记的：这里是那个主机名。只作候选，不自动填
 		}
+		site := r.URL.Query().Get("site")
 		items := []m{}
-		for _, it := range a.vault.Match(id, r.URL.Query().Get("site")) {
-			items = append(items, m{it, nos[it.Inst], it.Inst == id})
+		for _, it := range a.vault.Match(id, site) {
+			items = append(items, m{it, nos[it.Inst], it.Inst == id, ""})
 		}
-		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "no": no, "rule": a.vault.RuleOf(r.URL.Query().Get("site"))}, nil)
+		for _, it := range a.vault.Near(id, site) {
+			items = append(items, m{it, nos[it.Inst], true, vault.Host(it.Site)})
+		}
+		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "no": no, "rule": a.vault.RuleOf(site), "needIcon": !a.vault.HasIcon(site)}, nil)
+	})
+	// 站点的网页图标：内容脚本在登录页取下来交上来（只收已经记住账号的站点的）；界面一次取全部。
+	mux.HandleFunc("PUT /api/vault/icon", func(w http.ResponseWriter, r *http.Request) {
+		if !vt(w) {
+			return
+		}
+		var in struct{ Site, Type, Data string }
+		if err := body(r, &in); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		ok, err := a.vault.SetIcon(in.Site, in.Type, in.Data)
+		if ok && err == nil {
+			a.bump("state", "")
+		}
+		reply(w, map[string]any{"stored": ok}, err)
+	})
+	mux.HandleFunc("GET /api/vault/icons", func(w http.ResponseWriter, r *http.Request) {
+		if !vt(w) {
+			return
+		}
+		reply(w, map[string]any{"icons": a.vault.Icons()}, nil)
 	})
 	// 录入规则（标记网站）：全部实例共用，只有“哪个框填什么”。
 	mux.HandleFunc("PUT /api/vault/rule", func(w http.ResponseWriter, r *http.Request) {

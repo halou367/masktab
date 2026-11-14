@@ -26,7 +26,7 @@
 电脑和手机用的是**同一个核心服务**（`cmd/masktab` + `internal/…`，手机上以 `-host android` 作为 app 的子进程运行）和**同一批页面文件**。改功能时只改一处：
 
 - 逻辑（实例、订阅、选线、探测、密码库、接口）→ 改 Go。不要在 `android/…/*.kt` 里再实现一遍；Kotlin 只管浏览器外壳（标签页、工具栏、GeckoView、把请求转给核心服务）。
-- 节点面板 → `companion/ext/panel.js` + `panel.css`；订阅与出口、设置 → `pages.js`；实例管理 → `instances.js`；实例菜单 → `menu.js`；自动填写 → `autofill.js`；两端共用的小函数 → `common.js`。
+- 节点面板 → `companion/ext/panel.js` + `panel.css`；订阅与出口、设置 → `pages.js`；实例管理 → `instances.js`；实例菜单 → `menu.js`；自动填写、录入登录、登录页提示 → `autofill.js`（网页里）+ `vaultmsg.js`（后台里：存账号、存规则、存网页图标；两端后台各自只提供“怎么发请求、标签页属于哪个实例”）；实例卡片下的站点图标 → `sites.js`；两端共用的小函数 → `common.js`。
   `companion/ext/popup.js`、`app.js` 和 `android/ext/main.js` 只是外壳，不要往里写功能。
 - 两端确实不同的地方（内核做不到的）用状态里的 `kernel.caps` / `host` 判断后显示或隐藏，写在共用文件里，不要分叉成两份。
 - 共用文件里的类名、请求路径改了，两端一起受影响：跑 `android/scripts/preview-pages.mjs`（CI 也跑），它拿同一份状态画两端的面板并比对内容。

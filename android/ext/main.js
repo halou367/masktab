@@ -14,6 +14,7 @@ import { api, shownExit } from './api.js';
 import { h, icon, ibtn, flag, toast, run, delayText, delayCls } from './ui.js';
 import { face, stepLine } from './menu.js';
 import { instancesView } from './instances.js';
+import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
 import { exitsView, settingsView } from './pages.js';
 
@@ -40,6 +41,7 @@ async function load(force) {
     if (!st) oops('应用没有回话', loadErr); else if (force) toast(loadErr, true);
     return;
   }
+  if (await syncIcons(s)) last = ''; // 站点图标更新了：这一轮一定重画
   const j = JSON.stringify(s);
   if (!force && j === last) return; // 没变化不重画（重画会打断输入、拖动）
   const first = !st;

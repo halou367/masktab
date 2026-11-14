@@ -1,6 +1,7 @@
 import { api } from './api.js';
 import { h, icon, run } from './ui.js';
 import { menuView } from './menu.js';
+import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
 
 // 工具栏弹窗的外壳：实例菜单（点头像打开时的首页）+ 节点面板。
@@ -19,6 +20,7 @@ const record = () => run(async () => {
 
 async function load() {
   try { st = await api('GET', '/api/state'); } catch (e) { root.replaceChildren(h('div', { class: 'banner bad', style: { marginTop: '8px' } }, icon('warn'), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
+  await syncIcons(st);
   panel.set(st);
   render();
   chrome.runtime.sendMessage('repaint').catch(() => {});

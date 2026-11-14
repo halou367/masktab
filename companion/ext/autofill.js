@@ -9,12 +9,17 @@
 //   之后亲手输入的邮箱 / 用户名 / 手机号和密码都被记下，点了登录、登录框消失就算成功，自动结束并保存。
 //   保存两样东西：本实例的账号（进密码库），和这个网站的“录入规则”（哪个框填什么，不含账号内容，全部实例共用）。
 //   别的实例打开有规则的网站：有账号就按规则填；没有账号就自动进入录入，登录一次就记住。
+//   看起来是登录页、本实例又没有它的账号时，右上角主动问一句“录入这个网站的登录？”，点“录入”就开始（decisions M-4）。
+// - 落库都在后台做（vaultmsg.js）：这里只发一条消息，页面随后跳走、跳到别的域名都不影响；账号记在“输入它的那个站点”名下。
+// - 网页图标：登录页上顺手把这个网站的图标取下来交给后台，实例卡片下面就画它（界面自己不为图标发任何请求）。
 // 安全：只在顶层页面工作（不进内嵌框架）；站点由后台从发送方的真实地址取得；界面放在封闭的影子 DOM 里，网页脚本拿不到。
 (() => {
   if (window.top !== window || window.__masktabFill) return;
   window.__masktabFill = true;
   const send = (m) => new Promise((res) => { try { chrome.runtime.sendMessage(m, (r) => res(chrome.runtime.lastError ? null : r)); } catch { res(null); } });
   let info = null, infoAt = 0, lastSaved = '', pendingUser = '', hasRule = null;
+  // 本实例在这个站点记住的账号（不含导入的邮箱账号，也不含同一网站别的子域名上记的——那些只作候选）。
+  const own = (inf) => (inf?.items || []).filter((x) => x.mine && !x.near && x.site !== '*');
   const filled = new WeakSet(); // 每个输入框只自动填一次（两步登录的两页各填各的）
 
   // 查询时也进入开放的影子 DOM（有的登录框是网页组件）。
@@ -93,6 +98,9 @@
     .bar .k{opacity:.55} .bar .k.ok{opacity:1;color:#81c995}
     .bar button{pointer-events:auto;border:0;background:rgba(255,255,255,.16);color:#fff;border-radius:99px;padding:3px 10px;cursor:pointer}
     .bar button.x{background:none;padding:3px 6px;opacity:.7}
+    .ask{position:fixed;right:12px;top:12px;z-index:2147483647;background:#fff;color:#1f1f1f;border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,.16),0 12px 32px rgba(0,0,0,.14);padding:9px 8px 9px 12px;display:flex;align-items:center;gap:9px;max-width:min(380px,calc(100vw - 24px))}
+    .ask .tx{flex:1;min-width:0} .ask b{display:block;font-weight:600} .ask .s{display:block;font-size:11.5px;color:#5f6368}
+    .ask button{border:0;border-radius:99px;padding:5px 13px;cursor:pointer;flex:none;white-space:nowrap} .ask .y{background:#1a73e8;color:#fff} .ask .n{background:none;color:#5f6368;padding:5px 7px}
   </style>`;
   const REC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
   const KEY = '<svg class="key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/></svg>';
@@ -121,7 +129,7 @@
     for (const it of items) {
       const b = el('button', 'it');
       const tag = el('span', 'no', it.site === '*' ? '邮箱' : '#' + it.no); tag.style.background = it.mine ? '#1a73e8' : '#5f6368';
-      const tx = el('span', 'u'); tx.append(el('div', '', it.user || '（无用户名）'), el('div', 's', it.mine ? (it.site === '*' ? '本实例的邮箱账号' : '本实例') : `#${it.no} 保存的`));
+      const tx = el('span', 'u'); tx.append(el('div', '', it.user || '（无用户名）'), el('div', 's', it.near ? `本实例在 ${it.near} 记的` : it.mine ? (it.site === '*' ? '本实例的邮箱账号' : '本实例') : `#${it.no} 保存的`));
       b.append(tag, tx);
       b.onmousedown = (ev) => { ev.preventDefault(); fill(it); closePop(); };
       pop.append(b);
@@ -157,19 +165,23 @@
   async function tryFill() {
     const pws = pwFields();
     const lone = loneUserField();
+    if (askEl && !pws.length && !lone) hideAsk(); // 登录框没了：提示跟着收起
     if (!pws.length && !lone && hasRule === false) return; // 没有登录框、这个网站也没有录入规则：不打扰后台
+    await boot; // 先知道“这个标签页是不是正录到一半”“这个网站是不是说过不用问”
     const inf = await getInfo();
     hasRule = !!inf?.rule;
     if (!inf) return;
+    const mine = own(inf);
+    if (inf.needIcon && (mine.length || pws.length || lone)) grabIcon();
     const rid = ruleEl(ID), rpw = ruleEl(['pass']);
     if (!pws.length && !lone && !rid && !rpw) return;
     if (signupPage()) return; // 注册页不自动填，聚焦时提示
-    // 已标记的网站、本实例还没有它的账号：自动进入录入，登录一次就记住。
-    if (inf.rule && !rec && !recOff && !inf.items.some((x) => x.mine && x.site !== '*')) startRec(true);
+    // 已标记的网站、本实例还没有它的账号：自动进入录入，登录一次就记住。没标记过的登录页：问一句要不要录。
+    if (inf.rule && !rec && !recOff && !mine.length) startRec(true);
+    else maybeAsk(inf, pws, lone);
     if (pws.some((p) => p.value) || lone?.value || rid?.value || rpw?.value) return;
     const target = pws[0] || lone || rpw || rid;
     if (filled.has(target)) return;
-    const mine = inf.items.filter((x) => x.mine && x.site !== '*');
     const star = inf.items.filter((x) => x.mine && x.site === '*');
     let pick = mine.length === 1 ? mine[0] : !mine.length && star.length === 1 && !inf.items.some((x) => !x.mine) ? star[0] : null;
     // 第二步只剩密码框：按第一步的用户名挑（本实例在这个站点存了多个账号时也能对上）。
@@ -189,10 +201,10 @@
     if (!inf || document.activeElement !== t && !t.matches(':focus')) return;
     const signup = signupPage();
     // “录入”按钮：这个网站还没有规则、本实例也没有它的账号时，在像登录框的输入框旁边出现。
-    if (!rec && !signup && !inf.rule && !inf.items.some((x) => x.mine && x.site !== '*') && isField(t)) showBtn(t);
+    if (!rec && !recOff && !askEl && !signup && !inf.rule && !own(inf).length && isField(t)) showBtn(t);
     if (!isPw && !isUser) return;
     if (isPw && signup && inf.default) { suggestDefault(t, inf.default); return; }
-    if (inf.items.length > 1 || (inf.items.length === 1 && !inf.items[0].mine)) chooser(t, inf.items);
+    if (inf.items.length > 1 || (inf.items.length === 1 && (!inf.items[0].mine || inf.items[0].near))) chooser(t, inf.items);
   }, true);
   document.addEventListener('focusout', () => setTimeout(() => { closePop(); hideBtn(); }, 150), true);
 
@@ -208,23 +220,22 @@
   // 先同步把值读出来（有的网页点了登录会立刻清空 / 换掉表单），再异步保存。
   function capture() {
     stashUser();
-    if (rec) { snap(); rec.submitAt = Date.now(); if (rec.pass?.val) rec.lock = true; paintBar(); syncRec(); return; } // 录入中：等登录成功再一起保存
+    if (rec) { if (!elsewhere()) snap(); rec.submitAt = Date.now(); if (rec.pass?.val) rec.lock = true; paintBar(); syncRec(); return; } // 录入中：等登录成功再一起保存
     const pws = pwFields().filter((p) => p.value);
     if (!pws.length) return;
     const pw = pws.find(isNew) || pws[pws.length - 1]; // 改密码 / 注册时取新密码
     const pass = pw.value;
     const typed = shownUser(pws[0]);
-    save(typed, pass);
+    remember(typed, pass);
   }
-  async function save(typed, pass) {
-    const user = (typed || pendingUser || (await send({ t: 'vault:pending-get' }))?.r || info?.email || '').trim();
+  // 交给后台去存：只发这一条消息，页面马上跳走也不影响。用户名没取到时，后台用两步登录第一步暂存的那个（再没有就用本实例的邮箱）。
+  async function remember(typed, pass) {
+    const user = (typed || pendingUser || '').trim();
     const key = user + '\n' + pass;
     if (key === lastSaved) return;
     lastSaved = key;
-    const inf = await getInfo();
-    if (inf?.items.some((x) => x.mine && x.site !== '*' && x.user === user && x.pass === pass)) return; // 没变
-    const r = await send({ t: 'vault:save', user, pass });
-    if (r?.ok) { info = null; toast(`MaskTab 已记住 ${user || '这个账号'}`, () => send({ t: 'vault:undo', id: r.r.id })); }
+    const r = await send({ t: 'vault:remember', user, pass });
+    if (r?.ok && r.r?.saved) { info = null; hideAsk(); toast(r.r.msg, () => send({ t: 'vault:undo', id: r.r.saved.id })); }
   }
   document.addEventListener('submit', () => capture(), true);
   // pointerdown 比 click 早：有的网页在 click 里就把表单换掉了。
@@ -281,9 +292,11 @@
         : e.type && e.type !== 'text' ? `input[type=${e.type}]` : 'input:not([type=hidden]):not([type=password]):not([type=checkbox]):not([type=radio]):not([type=submit])';
     let n = 0;
     try { n = Math.max(0, qsa(sel).filter(visible).indexOf(e)); } catch { /* 选择器不合法时按第一个算 */ }
-    return { sel, n, path: location.pathname.slice(0, 200) };
+    return { sel, n, path: location.pathname.slice(0, 200), o: location.origin };
   }
-  const slotEl = (k) => { const x = rec?.[k]; if (!x?.sel) return null; try { const all = qsa(x.sel).filter(visible); return all[x.n || 0] || null; } catch { return null; } };
+  // 录到的框现在在页面上的那个；这个框是在别的站点录的（登录后跳了域名）→ 不在这一页找。
+  const slotEl = (k) => { const x = rec?.[k]; if (!x?.sel || (x.o && x.o !== location.origin)) return null; try { const all = qsa(x.sel).filter(visible); return all[x.n || 0] || null; } catch { return null; } };
+  const elsewhere = () => !!rec && [rec.id, rec.pass].some((x) => x?.o) && ![rec.id, rec.pass].some((x) => x?.o === location.origin);
   const syncRec = () => send({ t: 'vault:rec-set', rec });
   const syncSoon = () => { clearTimeout(syncT); syncT = setTimeout(syncRec, 300); };
   // 记下一个亲手输入的框。
@@ -314,7 +327,7 @@
       const u = pws.length ? userFieldFor(pws[0]) : loneUserField();
       if (u?.value) { slots.set(u, 'id'); const k = kindOf(u); rec.id = { kind: ID.includes(k) ? k : 'user', ...selOf(u), val: u.value.trim() }; } else {
         const shown = pws.length ? shownUser(pws[0]) : '';
-        if (shown) rec.id = { kind: EMAIL.test(shown) ? 'email' : 'user', sel: '', n: 0, path: '', val: shown };
+        if (shown) rec.id = { kind: EMAIL.test(shown) ? 'email' : 'user', sel: '', n: 0, path: '', o: location.origin, val: shown };
       }
     }
   }
@@ -357,12 +370,51 @@
     btn.onpointerdown = (ev) => { ev.preventDefault(); ev.stopPropagation(); startRec(false, t); };
     btnFor = t; root.append(btn); placeBtn();
   }
+  // 登录页上主动问一句（decisions M-4）：看起来是登录页、这个网站没录过、本实例也没有它的账号。
+  // 不拦操作：不理它照常登录，密码照样会被记住；点“不用”这个网站 30 天内不再问。
+  let askEl = null, asked = false;
+  function hideAsk() { askEl?.remove(); askEl = null; }
+  const LOGINISH = /(^|[^a-z])(log[-_ ]?in|sign[-_ ]?in|signin|auth|sso|passport|accounts?|登录|登入)([^a-z]|$)/i;
+  const loginPage = (pws, lone) => (pws.length ? !signupPage() : !!lone && (LOGINISH.test(location.pathname + ' ' + location.hostname + ' ' + document.title) || /username|identifier|login/i.test(lone.autocomplete + ' ' + lone.name + ' ' + lone.id)));
+  function maybeAsk(inf, pws, lone) {
+    if (askEl || asked || rec || recOff || inf.rule || own(inf).length || !loginPage(pws, lone)) return;
+    asked = true; mount();
+    askEl = el('div', 'ask'); askEl.insertAdjacentHTML('afterbegin', KEY);
+    const tx = el('span', 'tx'); tx.append(el('b', '', '录入这个网站的登录？'), el('span', 's', '照常登录一次，MaskTab 记住账号，下次自动填'));
+    const y = el('button', 'y', '录入'), n = el('button', 'n', '不用');
+    y.onclick = () => { const a = document.activeElement, p = pwFields()[0]; startRec(false, isField(a) ? a : (p && userFieldFor(p)) || loneUserField() || p || null); };
+    n.title = '这个网站 30 天内不再问；实例菜单里的“录入登录”随时可以录';
+    n.onclick = () => { hideAsk(); recOff = true; send({ t: 'vault:rec-set', rec: null, off: true }); };
+    askEl.append(tx, y, n); root.append(askEl);
+  }
+  // 网页图标：挑一个大小合适的（32–96 像素优先），取下来交给后台；每个页面只试一次，取不到就算了（界面画首字母色块）。
+  let iconTried = false;
+  async function grabIcon() {
+    if (iconTried) return;
+    iconTried = true;
+    try {
+      const links = [...document.querySelectorAll('link[rel~="icon" i],link[rel="apple-touch-icon" i]')].filter((l) => /^https?:/.test(l.href || ''));
+      const size = (l) => { const m = /(\d+)x\d+/.exec(l.getAttribute('sizes') || ''); return m ? +m[1] : /apple/i.test(l.rel) ? 180 : 0; };
+      const rank = (l) => { const z = size(l); return z >= 32 && z <= 96 ? 0 : !z ? 1 : z < 32 ? 2 : 3; };
+      const urls = [...new Set([...links.sort((a, b) => rank(a) - rank(b) || size(a) - size(b)).map((l) => l.href), location.origin + '/favicon.ico'])].slice(0, 4);
+      for (const u of urls) {
+        const r = await fetch(u, { credentials: 'omit', cache: 'force-cache' }).catch(() => null);
+        if (!r?.ok) continue;
+        const b = await r.blob();
+        const type = (b.type || '').split(';')[0].trim().toLowerCase() || (/\.ico(\?|$)/i.test(u) ? 'image/x-icon' : /\.svg(\?|$)/i.test(u) ? 'image/svg+xml' : /\.png(\?|$)/i.test(u) ? 'image/png' : '');
+        if (!/^image\//.test(type) || b.size < 30 || b.size > 48 * 1024) continue;
+        const data = await new Promise((res) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(',')[1] || ''); f.onerror = () => res(''); f.readAsDataURL(b); });
+        if (data) { send({ t: 'vault:icon', icon: { type, data } }); return; }
+      }
+    } catch { /* 取不到图标不影响别的 */ }
+  }
   let moveT = 0;
   const moved = () => { placeBtn(); clearTimeout(moveT); moveT = setTimeout(placeBar, 200); };
   addEventListener('scroll', moved, true);
   addEventListener('resize', moved);
   function startRec(auto, e) {
     if (rec) return;
+    hideAsk(); grabIcon();
     rec = { auto: !!auto, at: Date.now(), submitAt: 0 };
     closePop(); hideBtn(); paintBar(); syncRec(); watch();
     if (e) { if (e.value) note(e); e.focus(); }
@@ -390,19 +442,16 @@
   async function finish(manual) {
     const r = rec;
     if (!r) return;
-    if (manual) snap();
+    if (manual && !elsewhere()) snap();
     const user = (r.id?.val || '').trim(), pass = r.pass?.val || '';
     if (!user && !pass) { if (manual) toast('还没有录到账号或密码：先在登录框里输入'); return; }
-    rec = null; clearInterval(watchT); paintBar();
-    send({ t: 'vault:rec-set', rec: null });
+    rec = null; clearInterval(watchT); clearTimeout(syncT); paintBar(); hideAsk();
     lastSaved = user + '\n' + pass;
-    // 规则只在手动录入时写：自动录入沿用已有的规则，不拿一次没录全的结果去覆盖它。
-    const steps = [r.id, r.pass].filter((x) => x?.sel).map(({ kind, sel, n, path }) => ({ kind, sel, n, path }));
-    if (!r.auto && steps.length) await send({ t: 'vault:rule-save', steps });
-    const sv = await send({ t: 'vault:save', user, pass });
-    info = null;
-    if (sv?.ok) toast(`已录入 ${location.hostname}：${user || '（只有密码）'}${r.auto ? '' : '。其它实例打开这个网站会自动录入'}`, () => send({ t: 'vault:undo', id: sv.r.id }));
-    else toast('录入没有保存成功：' + (sv?.error || '后台没有回应'));
+    // 落库在后台做：规则（手动录入才写，自动录入沿用已有的）和账号都记在“输入它们的那个站点”名下，哪怕现在已经跳到了别的域名。
+    const sv = await send({ t: 'vault:rec-finish', rec: r });
+    info = null; infoAt = 0;
+    if (sv?.ok && sv.r?.saved) toast(sv.r.msg + (r.auto ? '' : '。其它实例打开这个网站会自动录入'), () => send({ t: 'vault:undo', id: sv.r.saved.id }));
+    else toast('录入没有保存成功：' + (sv?.error || (sv?.ok ? '没有录到内容' : '后台没有回应')));
   }
   document.addEventListener('input', (ev) => { if (rec && ev.isTrusted) note(ev.composedPath?.()[0] || ev.target); }, true);
   // 实例菜单里的“录入登录”：后台把消息转到当前标签页。
@@ -411,10 +460,11 @@
     fromMenu();
     reply({ ok: true });
   });
-  // 跨页面的登录流程：换页后接着录。
-  send({ t: 'vault:rec-get' }).then((r) => {
+  // 跨页面的登录流程：换页后接着录；上一页刚存好、提示还没来得及看的，在这一页补上。
+  const boot = send({ t: 'vault:rec-get' }).then((r) => {
     const x = r?.r;
     if (x?.off) recOff = true;
+    if (x?.note) toast(x.note.msg, x.note.id ? () => send({ t: 'vault:undo', id: x.note.id }) : null);
     if (x?.rec && !rec) { rec = x.rec; paintBar(); watch(); }
   });
   // 告诉后台“现在显示的是这个标签页”（手机上从菜单点“录入登录”时要知道转给谁）。

@@ -9,7 +9,8 @@
     "storage",
     "alarms",
     "tabs",
-    "cookies"
+    "cookies",
+    "privacy"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",

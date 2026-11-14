@@ -169,6 +169,12 @@ jobs:
           key: tools-linux-${{ hashFiles('internal/kernel/fetch.go') }}
       - name: 冒烟测试
         run: node scripts/smoke.mjs --bin ./masktab --data smoke-data --shots shots
+      - name: 录入登录与自动填写（真浏览器 + 真核心服务；最后一项把伴随扩展真的装进 Chromium 走一遍）
+        run: |
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y > /dev/null && npm i playwright@1.65.1 > /dev/null && npx playwright install --with-deps chromium firefox > /dev/null
+          node "$GITHUB_WORKSPACE/scripts/rec-test.mjs" "$GITHUB_WORKSPACE/masktab" chromium "$GITHUB_WORKSPACE/shots/rec"
+          node "$GITHUB_WORKSPACE/scripts/rec-test.mjs" "$GITHUB_WORKSPACE/masktab" firefox
+          node "$GITHUB_WORKSPACE/scripts/ext-e2e.mjs" "$GITHUB_WORKSPACE/masktab" "$GITHUB_WORKSPACE/shots/ext"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

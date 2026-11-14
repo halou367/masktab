@@ -1,17 +1,18 @@
 // 实例菜单：点工具栏最右边的头像打开（照 Chromium 个人资料菜单的版式）。
 // 上面是当前实例：大头像、出口、记住账号的站点；中间是常用入口；下面列出其它实例，运行中的点了切过去（聚焦它的窗口），休眠的点了打开。
-import { api, shownExit } from './api.js';
+import { api, shownExit, letterOf as letter } from './api.js';
 import { h, icon, flag, run, delayText, delayCls, cname } from './ui.js';
 import { siteIcon, uniqSites } from './sites.js';
 
 // 安卓版（docs/android.md）复用这个文件：手机上头像写编号（与工具栏的彩色编号圆点一致），不显示键盘快捷键。
 const MOBILE = /Android/i.test(navigator.userAgent);
-export const letterOf = (i) => { if (MOBILE) return String(i.no); const m = /[A-Za-z0-9]/.exec(i.name || ''); return (m ? m[0] : String(i.no)[0] || '0').toUpperCase(); };
+export const letterOf = (i) => letter(i, MOBILE);
 
 // 头像：实例色圆 + 首字母 + 国旗角标（+ 运行中的小绿点）。
 export function face(i, big, withDot, noFlag) {
   const ex = !noFlag && i.proxy?.state === 'on' ? shownExit(i) : null;
-  return h('span', { class: 'face' + (big ? ' big' : ''), style: { background: i.color } }, letterOf(i),
+  const tx = letterOf(i);
+  return h('span', { class: 'face' + (big ? ' big' : '') + (tx.length > 2 ? ' l3' : tx.length > 1 ? ' l2' : ''), style: { background: i.color } }, tx,
     ex?.country && flag(ex.country),
     withDot && h('i', { class: 'run' + (i.rt.running ? ' on' : i.rt.starting ? ' st' : '') }));
 }

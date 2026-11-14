@@ -3,6 +3,7 @@ package vault
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +95,74 @@ func TestRules(t *testing.T) {
 	}
 	if err := v2.DeleteRule("example.com"); err != nil || len(v2.Rules()) != 0 {
 		t.Fatalf("删除：%v", err)
+	}
+}
+
+// 同一网站别的子域名上记的账号只作候选；www 与不带 www 算同一个站点；公共后缀下的子域名互不相干。
+func TestNearAndWWW(t *testing.T) {
+	v, _ := Open(t.TempDir())
+	v.Upsert(Item{Inst: "a", Site: "https://www.example.com", User: "u1", Pass: "p1"})
+	v.Upsert(Item{Inst: "a", Site: "https://app.example.com", User: "u2", Pass: "p2"})
+	v.Upsert(Item{Inst: "b", Site: "https://app.example.com", User: "u3", Pass: "p3"})
+	v.Upsert(Item{Inst: "a", Site: "https://alice.github.io", User: "u4", Pass: "p4"})
+	v.Upsert(Item{Inst: "a", Site: "http://login.example.com", User: "u5", Pass: "p5"})
+	if m := v.Match("a", "https://example.com"); len(m) != 1 || m[0].User != "u1" {
+		t.Fatalf("www 应当算同一个站点：%+v", m)
+	}
+	n := v.Near("a", "https://login.example.com")
+	if len(n) != 2 || n[0].User != "u1" || n[1].User != "u2" {
+		t.Fatalf("候选应当是本实例在同一网站别的子域名上的两条（不含别的实例、不含 http 的）：%+v", n)
+	}
+	if n := v.Near("a", "https://bob.github.io"); len(n) != 0 {
+		t.Fatalf("公共后缀下的子域名不该互相当候选：%+v", n)
+	}
+	if n := v.Near("a", "https://www.example.com"); len(n) != 1 || n[0].User != "u2" {
+		t.Fatalf("已经精确匹配的不重复列：%+v", n)
+	}
+	for in, want := range map[string]string{"a.b.example.co.uk": "example.co.uk", "login.example.com": "example.com", "example.com": "example.com", "192.168.1.5": "192.168.1.5", "x.pages.dev": "x.pages.dev", "localhost": "localhost"} {
+		if got := Base(in); got != want {
+			t.Errorf("Base(%s) = %s，应当是 %s", in, got, want)
+		}
+	}
+	v.SetRule(Rule{Site: "https://example.com", Steps: []Step{{Kind: "pass", Sel: "input[type=password]"}}})
+	if r := v.RuleOf("https://www.example.com"); r == nil {
+		t.Fatal("规则也应当不分 www")
+	}
+}
+
+// 图标只收已经记住账号的站点的；类型和大小有限制；账号删掉后不再给出。
+func TestIcons(t *testing.T) {
+	v, _ := Open(t.TempDir())
+	png := "iVBORw0KGgo="
+	if ok, _ := v.SetIcon("https://nobody.test", "image/png", png); ok {
+		t.Fatal("没有账号的站点不该收图标")
+	}
+	it, _ := v.Upsert(Item{Inst: "a", Site: "https://site.test", User: "u", Pass: "p"})
+	if v.HasIcon("https://site.test") {
+		t.Fatal("还没有图标")
+	}
+	s0 := v.IconStamp()
+	if ok, err := v.SetIcon("https://site.test/login", "image/png; charset=binary", png); !ok || err != nil {
+		t.Fatalf("应当收下：%v %v", ok, err)
+	}
+	if ok, _ := v.SetIcon("https://site.test", "text/html", png); ok {
+		t.Fatal("不是图片不收")
+	}
+	if ok, _ := v.SetIcon("https://site.test", "image/png", "不是 base64"); ok {
+		t.Fatal("不是 base64 不收")
+	}
+	if ok, _ := v.SetIcon("https://site.test", "image/png", strings.Repeat("A", MaxIcon*2)); ok {
+		t.Fatal("太大不收")
+	}
+	if !v.HasIcon("https://site.test") || v.Icons()["site.test"] != "data:image/png;base64,"+png || v.IconStamp() == s0 {
+		t.Fatalf("图标没存上：%v", v.Icons())
+	}
+	v2, err := Open(filepath.Dir(v.path))
+	if err != nil || v2.Icons()["site.test"] == "" {
+		t.Fatalf("重新打开后图标应当还在：%v", err)
+	}
+	v.Delete(it.ID)
+	if len(v.Icons()) != 0 {
+		t.Fatal("账号删了，图标不该再给出")
 	}
 }

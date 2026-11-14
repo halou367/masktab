@@ -1,6 +1,7 @@
 import { api, shownExit, RESTART_WHY } from './api.js';
 import { h, icon, ibtn, flag, pill, toast, run } from './ui.js';
 import { instancesView } from './instances.js';
+import { syncIcons } from './sites.js';
 import { exitsView, settingsView } from './pages.js';
 
 const TABS = [['instances', 'layers', '实例'], ['exits', 'list', '订阅与出口'], ['extensions', 'puzzle', '全局扩展'], ['settings', 'gear', '设置']];
@@ -11,6 +12,7 @@ const act = (fn, ok) => run(async () => { await fn(); await load(true); }, ok);
 
 async function load(force) {
   try { st = await api('GET', '/api/state'); } catch (e) { document.getElementById('main').replaceChildren(h('div', { class: 'banner bad' }, '核心服务未连接：' + e.message)); return; }
+  await syncIcons(st);
   if (force || !editing()) render();
 }
 

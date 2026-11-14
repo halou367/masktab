@@ -1,4 +1,6 @@
-import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText } from './api.js';
+import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText, letterOf } from './api.js';
+import { avatarPx, hexRgb } from './icon.js';
+import './vaultmsg.js'; // 挂出 globalThis.MTVault（和手机的后台共用，所以不是模块导出）
 
 let seq = 0;
 let looping = false;
@@ -11,52 +13,18 @@ async function rgba(name) {
   const buf = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
   return new Uint8ClampedArray(buf);
 }
-function hexRgb(c) { const m = /^#?([0-9a-f]{6})$/i.exec(c || ''); const n = m ? parseInt(m[1], 16) : 0x5f6368; return [n >> 16, (n >> 8) & 255, n & 255]; }
 let glyphs = null;
-const GLYPH = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', GS = 18;
-// 头像上的字：实例名里第一个字母或数字；没有就用编号。
-function letterOf(me) {
-  const m = /[A-Za-z0-9]/.exec(me.name || '');
-  return (m ? m[0] : String(me.no)[0] || '0').toUpperCase();
-}
-// 工具栏头像：实例色圆 + 白色首字母 + 右下角国旗（出口国家）。逐像素拼，不经画布（K-3）。
-async function avatarPx(me, cc) {
+// 工具栏头像：实例色圆 + 白字 + 右下角国旗（出口国家）+ 左下角延迟色点。像素怎么拼在 icon.js。
+async function avatar(me, cc, dot) {
   if (!glyphs) glyphs = await rgba('_glyphs');
-  const px = new Uint8ClampedArray(32 * 32 * 4);
-  const [r, g, b] = hexRgb(me.color);
-  const put = (x, y, cr, cg, cb, a) => { // a ∈ [0,1]，盖在已有像素上
-    if (a <= 0) return;
-    const i = (y * 32 + x) * 4, da = px[i + 3] / 255, oa = a + da * (1 - a);
-    for (const [k, c] of [[0, cr], [1, cg], [2, cb]]) px[i + k] = (c * a + px[i + k] * da * (1 - a)) / (oa || 1);
-    px[i + 3] = oa * 255;
-  };
-  for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) { // 圆：中心 (15.5,15.5)，半径 15，边缘抗锯齿
-    const d = Math.hypot(x + 0.5 - 16, y + 0.5 - 16);
-    put(x, y, r, g, b, Math.max(0, Math.min(1, 15.5 - d)));
-  }
-  const gi = GLYPH.indexOf(letterOf(me));
-  if (gi >= 0) {
-    const ox = cc ? 4 : 7, oy = cc ? 3 : 7; // 有国旗时字往左上让一点
-    for (let y = 0; y < GS; y++) for (let x = 0; x < GS; x++) put(ox + x, oy + y, 255, 255, 255, glyphs[gi * GS * GS + y * GS + x] / 255);
-  }
-  if (cc) {
-    let fl = null;
-    try { fl = await rgba(cc.toLowerCase()); } catch { /* 没有这面旗 */ }
-    if (fl) { // 国旗原图在 32×32 的第 5–26 行（32×22），缩到 15×10 贴在右下角，外圈一像素白边
-      const FW = 15, FH = 10, X0 = 32 - FW - 1, Y0 = 32 - FH - 1;
-      for (let y = -1; y <= FH; y++) for (let x = -1; x <= FW; x++) put(X0 + x, Y0 + y, 255, 255, 255, 1);
-      for (let y = 0; y < FH; y++) for (let x = 0; x < FW; x++) {
-        const sx = Math.min(31, Math.floor((x + 0.5) * 32 / FW)), sy = 5 + Math.min(21, Math.floor((y + 0.5) * 22 / FH)), si = (sy * 32 + sx) * 4;
-        put(X0 + x, Y0 + y, fl[si], fl[si + 1], fl[si + 2], fl[si + 3] / 255);
-      }
-    }
-  }
-  return px;
+  let flag = null;
+  if (cc) try { flag = await rgba(cc.toLowerCase()); } catch { /* 没有这面旗 */ }
+  return avatarPx({ color: me.color, text: letterOf(me), glyphs, flag, dot });
 }
-async function setIcon(kind, cc, color, me) {
+async function setIcon(kind, cc, color, me, dot) {
   let px;
   if (me && (kind === 'flag' || kind === 'direct')) {
-    try { px = await avatarPx(me, kind === 'flag' ? cc : ''); } catch { px = null; }
+    try { px = await avatar(me, kind === 'flag' ? cc : '', dot); } catch { px = null; }
   }
   if (!px) {
     try { px = await rgba(kind === 'flag' && cc ? cc.toLowerCase() : '_' + (kind === 'flag' ? 'globe' : kind)); } catch { px = await rgba('_globe'); }
@@ -70,14 +38,15 @@ async function paint(st) {
   const me = st.me;
   if (!me) return;
   const rt = me.rt || {}, ex = shownExit(me), on = me.proxy.state === 'on';
-  let kind = 'globe', badge = '', bcolor = '#5f6368';
+  let kind = 'globe', badge = '', bcolor = '#5f6368', dot = '';
   const lines = [`#${me.no}${me.name ? ' ' + me.name : ''}`];
   if (rt.cut) { kind = 'cut'; badge = '✕'; bcolor = '#d93025'; lines.push('已断流：' + rt.cut); }
   else if (rt.error) { kind = 'error'; badge = '!'; bcolor = '#f9ab00'; lines.push(rt.error); }
   else if (!on) { kind = 'direct'; lines.push('直连（未使用代理）'); }
   else if (ex) {
     kind = 'flag';
-    if (rt.latency > 0) { badge = String(rt.latency); bcolor = rt.latency < 200 ? '#188038' : rt.latency < 500 ? '#b06000' : '#d93025'; }
+    // 延迟不再用角标写数字（角标是浏览器画的，三位数会把国旗整个盖住）：图标左下角一个色点，数值在悬停提示和面板里。
+    if (rt.latency > 0) dot = rt.latency < 200 ? '#1e8e3e' : rt.latency < 500 ? '#f29900' : '#d93025';
     else if (rt.latency < 0) { badge = '×'; bcolor = '#d93025'; }
   }
   const p = rt.probe;
@@ -89,7 +58,8 @@ async function paint(st) {
   if (rt.running) lines.push(`↑ ${fmtBytes(rt.upRate)}/s  ↓ ${fmtBytes(rt.downRate)}/s`, `已用 ↑ ${fmtBytes(rt.up)}  ↓ ${fmtBytes(rt.down)}`);
   if (rt.needRestart?.length) { badge = '↻'; bcolor = '#1a73e8'; lines.push('需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、')); }
   if (rt.notice) lines.push(noticeText(rt.notice));
-  await setIcon(kind, ex?.country, me.color, me);
+  await setIcon(kind, ex?.country, me.color, me, dot);
+  globalThis.lastIcon = { kind, text: letterOf(me), cc: ex?.country || '', dot, badge }; // 测试从调试端口看“图标上画了什么”
   await chrome.action.setBadgeText({ text: badge });
   await chrome.action.setBadgeBackgroundColor({ color: bcolor });
   if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: '#ffffff' });
@@ -138,12 +108,7 @@ async function loop() {
 }
 
 // ---------- Cookie 汇总：只把“哪些站点、各有几条”报给核心服务，不报内容 ----------
-const SLD2 = new Set(['co.uk', 'com.cn', 'com.hk', 'com.tw', 'co.jp', 'co.kr', 'com.au', 'com.br', 'net.cn', 'org.cn', 'gov.cn', 'ac.uk', 'org.uk']);
-function baseDomain(d) {
-  const p = d.replace(/^\./, '').toLowerCase().split('.');
-  if (p.length <= 2 || /^\d+$/.test(p[p.length - 1])) return p.join('.');
-  return SLD2.has(p.slice(-2).join('.')) ? p.slice(-3).join('.') : p.slice(-2).join('.');
-}
+const baseDomain = globalThis.MTVault.baseDomain;
 let cookieAt = 0, cookieTimer = 0;
 async function reportCookies(force) {
   if (!chrome.cookies || (!force && Date.now() - cookieAt < 60_000)) return;
@@ -156,36 +121,30 @@ async function reportCookies(force) {
 globalThis.reportCookies = reportCookies; // 冒烟测试从调试端口调用
 if (chrome.cookies) chrome.cookies.onChanged.addListener(() => { clearTimeout(cookieTimer); cookieTimer = setTimeout(() => reportCookies().catch(() => {}), 15_000); });
 
-// ---------- 密码库：内容脚本经这里取 / 存（令牌不进网页进程）。站点一律取自发送方的真实地址，不信消息里写的 ----------
-function siteOfSender(s) {
-  try { const u = new URL(s.url || s.tab?.url || ''); return /^https?:$/.test(u.protocol) ? u.origin : ''; } catch { return ''; }
+// ---------- 密码库：内容脚本经这里取 / 存（令牌不进网页进程）。逻辑在 vaultmsg.js，两端共用；这里只说明“请求怎么送、暂存放哪” ----------
+// 暂存用 chrome.storage.session：只有扩展自己的页面读得到（网页内容脚本默认读不到），后台休眠重启也不丢，浏览器关掉即清空。
+const sess = chrome.storage.session, vaultBox = globalThis.MTVault({
+  call: (method, path, body) => api(method, path, body),
+  who: async () => null, // 电脑上一个浏览器进程就是一个实例
+  store: {
+    get: async (k) => (await sess.get(k))[k],
+    set: (k, v) => sess.set({ [k]: v }),
+    del: (k) => sess.remove(k),
+    keys: async () => Object.keys(await sess.get(null)),
+  },
+  keep: { get: async (k) => (await chrome.storage.local.get(k))[k], set: (k, v) => chrome.storage.local.set({ [k]: v }) },
+});
+const vaultMsg = vaultBox.msg;
+chrome.tabs?.onRemoved?.addListener((id) => { vaultBox.tabGone(id); });
+
+// 内核自带的密码管理：启动前已经在偏好文件里关掉（F-PWD），这里由扩展再关一次——扩展设的值压过偏好文件和设置页，
+// 不会被“谁又把它打开了”绕过。账号只进 MaskTab 自己的密码库，否则同一个站点两边各记一份、各填各的。
+function ownPasswords() {
+  try {
+    chrome.privacy?.services?.passwordSavingEnabled?.set({ value: false });
+  } catch {}
 }
-// 两步登录暂存：chrome.storage.session 只在扩展自己的页面里可读（网页内容脚本默认读不到），后台休眠重启也不丢，浏览器关掉即清空。
-const pendingKey = (k) => 'pend:' + k;
-chrome.tabs?.onRemoved?.addListener(async (id) => { const all = await chrome.storage.session.get(null); const ks = Object.keys(all).filter((k) => k.startsWith(`pend:${id}|`) || k.startsWith(`rec:${id}|`)); if (ks.length) chrome.storage.session.remove(ks); });
-async function vaultMsg(m, s) {
-  const site = siteOfSender(s);
-  if (!site) throw new Error('不支持的页面');
-  if (s.frameId && s.frameId !== 0) throw new Error('不向内嵌框架填充（F-PWD-5）');
-  if (m.t === 'vault:match') return api('GET', `/api/vault/match?site=${encodeURIComponent(site)}`);
-  if (m.t === 'vault:save') return api('POST', '/api/vault', { site, user: String(m.user || ''), pass: String(m.pass || ''), src: 'saved' });
-  // 两步登录：第一步填的用户名暂存在后台（按标签页 + 主域名，10 分钟），第二步密码页取回；不放进网页能读到的存储。
-  const pk = `${s.tab?.id}|${baseDomain(new URL(site).hostname)}`;
-  if (m.t === 'vault:pending-set') { const u = String(m.user || '').trim().slice(0, 256); if (u) await chrome.storage.session.set({ [pendingKey(pk)]: { u, at: Date.now() } }); return true; }
-  if (m.t === 'vault:pending-get') { const x = (await chrome.storage.session.get(pendingKey(pk)))[pendingKey(pk)]; return x && Date.now() - x.at < 600_000 ? x.u : ''; }
-  if (m.t === 'vault:undo') return api('DELETE', `/api/vault/${encodeURIComponent(m.id)}`);
-  // 录入（标记网站，decisions M-3）：规则存进核心服务，全部实例共用；录到一半的内容只暂存在后台内存里（跨页面的登录流程换页后接着录）。
-  if (m.t === 'vault:rule-save') return api('PUT', '/api/vault/rule', { site, steps: Array.isArray(m.steps) ? m.steps.slice(0, 6) : [] });
-  const rk = 'rec:' + pk;
-  if (m.t === 'vault:rec-set') {
-    const rec = m.rec && typeof m.rec === 'object' && JSON.stringify(m.rec).length < 4000 ? m.rec : null;
-    if (rec || m.off) await chrome.storage.session.set({ [rk]: { rec, off: !rec && !!m.off, at: Date.now() } }); else await chrome.storage.session.remove(rk);
-    return true;
-  }
-  if (m.t === 'vault:rec-get') { const x = (await chrome.storage.session.get(rk))[rk]; return x && Date.now() - x.at < 600_000 ? { rec: x.rec, off: x.off } : null; }
-  if (m.t === 'vault:vis') return {}; // 手机版用它记“哪个标签页正显示着”；桌面版直接问浏览器
-  throw new Error('未知请求');
-}
+ownPasswords();
 
 chrome.commands.onCommand.addListener(async (cmd) => {
   try {
