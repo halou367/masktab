@@ -79,6 +79,7 @@ object Core {
     fun init(ctx: Context) {
         if (::app.isInitialized) return
         app = ctx.applicationContext
+        Diag.install(app)
         store = Store(app.filesDir).apply { load() }
         vault = Vault(app.filesDir)
         mihomo = Mihomo(app)

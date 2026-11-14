@@ -95,8 +95,9 @@ main.pg h2 .sub{font-weight:400}
 .addon{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line)} .addon .tx{flex:1;min-width:0} .addon .n{font-weight:500} .addon .sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .empty{padding:22px 8px;color:var(--sub);text-align:center}
 .spin{animation:spin 1s linear infinite;display:inline-flex} @keyframes spin{to{transform:rotate(360deg)}}
-/* 实例菜单（点头像弹出的小窗） */
-body.menu{background:var(--bg)} body.menu #root{padding:8px 0 6px} body.menu .mi{height:46px;font-size:15px} body.menu .inst{min-height:54px} body.menu .insts{max-height:none}
+/* 实例菜单（点头像打开，整页） */
+body.pg-idle{background:var(--bg)}
+body.menu{background:var(--bg)} body.menu #root{padding:0 0 6px;max-width:560px;margin:0 auto} body.menu .top{margin-bottom:8px} body.menu .mi{height:46px;font-size:15px} body.menu .inst{min-height:54px} body.menu .insts{max-height:none}
 /* 新标签页 */
 body.ntp{min-height:100vh;display:flex;justify-content:center}
 body.ntp #root{width:100%;max-width:560px;padding:12vh 18px 30px;display:flex;flex-direction:column;align-items:center;gap:22px}

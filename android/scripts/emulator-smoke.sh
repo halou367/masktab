@@ -59,46 +59,103 @@ A shell am start -n $ACT --es mt_open node
 sleep 6; shot 6-node
 A shell input keyevent KEYCODE_BACK; sleep 1
 
-# 5b. 真点击：点工具栏头像 → 在菜单里点某一项，整页要真的打开并就绪（以前只用测试参数直接开页面，没走过“从菜单点进去”这条路）。
-#     坐标按 pixel_6（1080x2400）量的：头像 (904,202)；菜单里 节点与出口 (283,890)、指纹与时区 (283,1010)、管理实例 (263,1591)。
+# 5b. 真点击：点工具栏头像 → 在菜单里点每一项，页面要真的打开并就绪。用户在真机上反馈的就是这条路
+#     （账号与密码、节点与出口、指纹与时区、新建实例、导入邮箱、管理实例，点了白屏或闪退），所以每一项都点一遍。
+#     头像坐标按 pixel_6（1080x2400）量的：(904,202)；菜单里的项按无障碍标签找位置。
 ready() { A logcat -d | grep -c "MaskTab 页面就绪 $1"; }
-# 按无障碍标签（content-desc / text）找到控件并点它的中心；找不到返回 1
+count() { A logcat -d | grep -c "$1"; }
+PID0=$(A shell pidof $PKG | tr -d '\r')
+# 按无障碍标签（content-desc / text，以给定文字开头）找到控件并点它的中心；找不到返回 1
+OFFMODE=half
 tap_desc() {
   local b UI_LABEL="$1"
   A shell uiautomator dump /sdcard/mt-ui.xml > /dev/null 2>&1 || return 1
   A shell cat /sdcard/mt-ui.xml > "$OUT/ui-dump.xml" 2>/dev/null || return 1
-  b=$(grep -o "<node[^>]*\(content-desc\|text\)=\"$1\"[^>]*>" "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1)
+  b=$(grep -o "<node[^>]*\(content-desc\|text\)=\"$1[^\"]*\"[^>]*>" "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1)
   [ -n "$b" ] || return 1
   # 内置页面的无障碍坐标比实际位置偏下一个状态栏的高度（页面容器按状态栏留了内边距，GeckoView 报坐标时又加了一次；
-  # 模拟器实测：WebView 报的顶边 256，实际 128）。所以纵坐标减掉 WebView 顶边的一半。
+  # 模拟器实测：WebView 报的顶边 256，实际 128）。所以纵坐标减掉 WebView 顶边的一半（OFFMODE=half）。
+  # 这个偏差是量出来的而不是算出来的，所以下面第一次点菜单时会校准：按 half 点不中就换 none（不减）。
   local wt off
   wt=$(grep -o '<node[^>]*class="android.webkit.WebView"[^>]*>' "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]' | grep -o '[0-9]*\]$' | tr -d ']')
-  off=$(( ${wt:-0} / 2 ))
+  if [ "$OFFMODE" = half ]; then off=$(( ${wt:-0} / 2 )); else off=0; fi
   # shellcheck disable=SC2046
   set -- $(echo "$b" | grep -o '[0-9]\+')
-  echo "点“$UI_LABEL”：($(( ($1 + $3) / 2 )),$(( ($2 + $4) / 2 - off )))"
+  echo "点“$UI_LABEL”：($(( ($1 + $3) / 2 )),$(( ($2 + $4) / 2 - off )))（WebView 顶边 ${wt:-?}，$OFFMODE）"
   A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 - off ))
 }
-tapflow() { # 名字 x y 路由
-  local n0 n1
-  A shell am start -n $ACT; sleep 2
-  A shell input tap 904 202; sleep 6; shot "t-$1-1menu"
-  n0=$(ready "$4")
-  A shell input tap "$2" "$3"; sleep 9; shot "t-$1-2page"
-  n1=$(ready "$4")
-  if [ "$n1" -gt "$n0" ]; then echo "通过：从菜单点开 $1（页面就绪 $n0 -> $n1）"; else echo "失败：从菜单点开 $1 后页面没有就绪（$n0 -> $n1）"; fail=1; fi
-  A shell input keyevent KEYCODE_BACK; sleep 2
+# 收起内置页面（测试参数 mt_open=close；不用返回键：页面没开着时返回键会把应用退到后台）
+closepanel() { A shell am start -n $ACT --es mt_open close > /dev/null; sleep 2; }
+# 点头像打开菜单，等菜单就绪；返回 1 = 菜单没出来
+openmenu() {
+  local n0 k
+  closepanel
+  n0=$(ready menu)
+  A shell input tap 904 202
+  for k in 1 2 3 4 5 6; do sleep 1; [ "$(ready menu)" -gt "$n0" ] && return 0; done
+  return 1
 }
-tapflow node 283 890 node
-tapflow fp 283 1010 fp
-tapflow manage 263 1591 instances
-# 5c. 整页之间直接换（设置 → 节点 → 指纹）：同一个窗口里换路由，不关了重开
+# 从菜单点一项，等对应页面就绪。参数：名字 菜单项文字 就绪标记（页面就绪 后面的路由）
+tapitem() {
+  local n0 k
+  if ! openmenu; then echo "失败：点头像后菜单没有就绪（$1）"; shot "t-$1-nomenu"; fail=1; return 1; fi
+  sleep 1; n0=$(ready "$3")
+  if ! tap_desc "$2"; then echo "失败：菜单里没找到“$2”"; shot "t-$1-noitem"; fail=1; return 1; fi
+  for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready "$3")" -gt "$n0" ] && break; done
+  sleep 2; shot "t-$1"
+  [ "$(ready "$3")" -gt "$n0" ]
+}
+tapflow() {
+  if tapitem "$@"; then echo "通过：从菜单点开 $1"; else echo "失败：从菜单点开 $1 后页面没有就绪"; fail=1; fi
+}
+# 校准：先按 half 点“节点与出口”，不中就换 none 再点一次
+if openmenu; then sleep 1; shot t-0menu; else echo "失败：点头像后菜单没有就绪"; shot t-0menu; fail=1; fi
+if tapitem node "节点与出口" node; then echo "通过：从菜单点开 node"
+else
+  OFFMODE=none; echo "按 half 没点中，换 none 再试"
+  if tapitem node "节点与出口" node; then echo "通过：从菜单点开 node（坐标不用修正）"; fail=0; else echo "失败：从菜单点开 node 后页面没有就绪"; fail=1; fi
+fi
+tapflow fp "指纹与时区" fp
+tapflow acct "账号与密码" "instances/"
+tapflow import "导入邮箱" "instances/import"
+tapflow manage "管理实例" "instances 有状态"
+# 新建实例：菜单收起、切到新实例、开出它的新标签页
+if openmenu; then
+  n0=$(count "新建实例 #"); t0=$(count "MaskTab 新标签页就绪")
+  if tap_desc "新建伪装实例"; then
+    for k in 1 2 3 4 5 6 7 8 9 10; do sleep 1; [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ] && break; done
+    sleep 2; shot t-newinst
+    if [ "$(count "新建实例 #")" -gt "$n0" ] && [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ]; then echo "通过：从菜单新建实例（建好并打开了它的新标签页）"; else echo "失败：从菜单新建实例（新建 $n0 -> $(count "新建实例 #")，新标签页 $t0 -> $(count "MaskTab 新标签页就绪")）"; fail=1; fi
+  else echo "失败：菜单里没找到“新建伪装实例”"; fail=1; fi
+else echo "失败：点头像后菜单没有就绪（新建实例）"; fail=1; fi
+# 在菜单里切回实例 #1（点列表里的另一个实例）不单独测；用测试参数切回去，后面的检查都按实例 #1
+A shell am start -n $ACT --es mt_inst p1 > /dev/null; sleep 3
+# 反复开关：头像 → 菜单 → 某一页 → 关，连做 12 轮，不停顿等待。应用不能死、内置页面不能崩
+for k in $(seq 1 12); do
+  A shell input tap 904 202; sleep 0.7
+  case $((k % 3)) in 0) r=node;; 1) r=fp;; 2) r=instances;; esac
+  A shell am start -n $ACT --es mt_open $r > /dev/null; sleep 0.7
+  A shell am start -n $ACT --es mt_open close > /dev/null; sleep 0.4
+done
+sleep 2
+if tapitem again "节点与出口" node; then echo "通过：反复开关 12 轮后菜单和页面照常"; else echo "失败：反复开关 12 轮后页面打不开"; fail=1; fi
+closepanel
+PID1=$(A shell pidof $PKG | tr -d '\r')
+if [ -n "$PID0" ] && [ "$PID0" = "$PID1" ]; then echo "通过：主进程一直是同一个（$PID1）"; else echo "失败：主进程换过或不在了（$PID0 -> ${PID1:-无}）"; fail=1; fi
+if A logcat -d | grep -q "内置页面崩溃\|内置页面被系统回收"; then echo "失败：内置页面崩溃过"; fail=1; else echo "通过：内置页面没有崩溃"; fi
+# 诊断信息窗口（原生的，不依赖内置页面）
+A shell am start -n $ACT --es mt_open diag > /dev/null
+for k in 1 2 3 4 5 6 7 8; do sleep 1; A logcat -d -s MaskTab:I | grep -q "诊断信息已收集" && break; done
+sleep 1; shot t-diag
+if A logcat -d -s MaskTab:I | grep -q "诊断信息已收集"; then echo "通过：诊断信息窗口"; else echo "失败：诊断信息没有收集出来"; fail=1; fi
+A shell input keyevent KEYCODE_BACK; sleep 2
+# 5c. 整页之间直接换（设置 → 节点 → 指纹）：同一个页面里换路由
 n0=$(ready fp)
 A shell am start -n $ACT --es mt_open settings; sleep 6; shot t-nav-1settings
 A shell am start -n $ACT --es mt_open node; sleep 4
 A shell am start -n $ACT --es mt_open fp; sleep 5; shot t-nav-2fp
 if [ "$(ready fp)" -gt "$n0" ]; then echo "通过：整页之间换路由"; else echo "失败：整页之间换路由后指纹页没有就绪"; fail=1; fi
-A shell input keyevent KEYCODE_BACK; sleep 2
+closepanel
 
 # 6. 打开一个网页（外部链接进当前实例）
 A shell am start -a android.intent.action.VIEW -d https://example.com -n $ACT

@@ -49,6 +49,7 @@ object Bridge {
             k == "POST /api/instances" -> {
                 val i = store.create(b.str("name"))
                 Core.restartProxy()
+                logi("新建实例 #${i.no}")
                 if (b.optBoolean("switch", true)) { Core.switchTo(i.id); Core.ui?.closeSheet() }
                 ok(i.toJson())
             }
@@ -213,13 +214,15 @@ object Bridge {
         var created = 0
         var skipped = 0
         var noPass = 0
-        for ((email, own) in pairs) {
-            if (email in exist) { skipped++; continue }
-            val pass = own.ifEmpty { def }
-            val i = store.create(email)
-            created++
-            if (pass.isEmpty()) noPass++
-            vault.upsert(VItem(inst = i.id, site = "*", user = email, pass = pass, src = "import"))
+        vault.batch {
+            for ((email, own) in pairs) {
+                if (email in exist) { skipped++; continue }
+                val pass = own.ifEmpty { def }
+                val i = store.create(email)
+                created++
+                if (pass.isEmpty()) noPass++
+                vault.upsert(VItem(inst = i.id, site = "*", user = email, pass = pass, src = "import"))
+            }
         }
         Core.restartProxy()
         Core.ui?.onTabsChanged()

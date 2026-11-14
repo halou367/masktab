@@ -32,7 +32,13 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 
 // 唯一的 Activity：像手机 Chrome——顶部地址栏，右侧依次是标签数、头像（当前实例的彩色编号圆点）、菜单。
-// 点头像弹出实例菜单（内置扩展页面 app.html#menu，复用桌面 menu.js）。
+// 点头像打开实例菜单（内置扩展页面 app.html#menu，复用桌面 menu.js）。
+//
+// 内置页面（菜单、实例管理、节点、指纹、设置、扩展）怎么显示（第三版，决策 A-8）：
+// 全应用只有一个 GeckoView。内置页面用一个常驻的会话 [panel]（启动时就把 app.html 载好），要显示时把它换进这个 GeckoView，
+// 关掉时换回当前标签页——和切换标签页是同一条路。页面之间跳转只是改地址 # 后面的路由，不新建也不销毁任何窗口、视图、会话。
+// 以前每开一页就新建一个对话框 + GeckoView + 会话、关掉时全部销毁；模拟器里没事，真机上从菜单点任何一项（都要先关菜单再开下一页）
+// 会白屏或闪退（用户两次反馈）。真机原因没有拿到日志确认，所以换成这条不创建、不销毁绘制表面的路，并加了不依赖内置页面的诊断入口。
 
 class MainActivity : Activity(), CoreUi {
     private lateinit var gecko: GeckoView
@@ -41,11 +47,12 @@ class MainActivity : Activity(), CoreUi {
     private lateinit var avatar: AvatarView
     private lateinit var progress: ProgressBar
     private var startup: StartupView? = null
-    private var sheet: Dialog? = null
-    private var sheetSession: GeckoSession? = null
-    private var sheetRoute = ""
-    private var sheetFull = false
-    private var sheetRetry = 0
+    private lateinit var toolbar: View
+    private var panel: GeckoSession? = null   // 内置页面专用的常驻会话
+    private var panelOn = false               // 现在显示的是不是内置页面
+    private var panelRoute = ""               // app 让它显示的路由
+    private var panelCur = ""                 // 页面现在所在的路由（页面自己也会换，例如从菜单点进某一页）
+    private var panelRetry = 0
     private var shown: GeckoSession? = null
     private var hold = false
     override var prompts: Prompts? = null
@@ -66,12 +73,16 @@ class MainActivity : Activity(), CoreUi {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { handleBack() }
         }
         if (!Core.started) boot() else { onTabsChanged(); handleIntent(intent) }
+        // 上次是崩溃 / 无响应 / 被系统杀掉的：开头就问要不要看诊断信息（不依赖内置页面，白屏时也能用）
+        bg { val why = Diag.lastBadExit(this); if (why != null) ui { askDiag(why) } }
     }
 
     override fun onDestroy() {
         if (Core.ui === this) Core.ui = null
-        sheet?.dismiss()
-        gecko.releaseSession()
+        panelOn = false
+        try { gecko.releaseSession() } catch (e: Exception) { logw("释放会话出错", e) }
+        try { panel?.close() } catch (e: Exception) { logw("关闭内置页面会话出错", e) }
+        panel = null
         super.onDestroy()
     }
 
@@ -80,14 +91,14 @@ class MainActivity : Activity(), CoreUi {
         handleIntent(intent)
     }
 
-    /** 测试用的启动参数（CI 截图）：mt_open=menu|instances|…打开对应页面；mt_inst=<实例id> 切换实例；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
+    /** 测试用的启动参数（CI 截图）：mt_open=menu|instances|…打开对应页面，close 收起，diag 打开诊断窗口；mt_inst=<实例id> 切换实例；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
     private fun handleIntent(i: Intent?) {
         if (i == null || !Core.started) return
         if (i.action == Intent.ACTION_VIEW && i.data != null) { closeSheet(); Core.openTab(Core.store.current, i.dataString); return }
         if (i.getBooleanExtra("mt_hold", false)) return
         if (hold) { hold = false; hideStartup() }
         i.getStringExtra("mt_inst")?.let { id -> closeSheet(); Core.switchTo(id) }
-        i.getStringExtra("mt_open")?.let { r -> openSheet(r, r != "menu") }
+        i.getStringExtra("mt_open")?.let { r -> when (r) { "diag" -> showDiag(); "close" -> closeSheet(); else -> openSheet(r, r != "menu") } }
         i.removeExtra("mt_open")
         i.removeExtra("mt_inst")
     }
@@ -132,17 +143,31 @@ class MainActivity : Activity(), CoreUi {
         tb.addView(iconBtn(tabCount, "标签页") { showTabs() }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(4) })
         avatar = AvatarView(this)
         tb.addView(iconBtn(avatar, "实例") { openSheet("menu", false) }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        avatar.setOnLongClickListener { showDiag(); true } // 长按头像：诊断信息（原生窗口）
         val dots = DotsView(this).apply { tint = ink }
         tb.addView(iconBtn(dots, "菜单") { showMenu(dots) }, LinearLayout.LayoutParams(dp(40), dp(44)))
-        col.addView(tb, LinearLayout.LayoutParams(-1, -2))
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; visibility = View.INVISIBLE }
-        col.addView(progress, LinearLayout.LayoutParams(-1, dp(3)))
+        // 地址栏和进度条包在一起：显示内置页面时整块藏起来（页面自己有标题和返回）
+        toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(tb, LinearLayout.LayoutParams(-1, -2))
+            addView(progress, LinearLayout.LayoutParams(-1, dp(3)))
+        }
+        col.addView(toolbar, LinearLayout.LayoutParams(-1, -2))
         gecko = GeckoView(this)
         col.addView(gecko, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(col, FrameLayout.LayoutParams(-1, -1))
         fitInsets(col)
         if (!Core.started) {
-            startup = StartupView(this, Bridge.LAUNCH_STEPS)
+            startup = StartupView(this, Bridge.LAUNCH_STEPS).also { sv ->
+                // 启动页底部：版本号 + 诊断入口（启动卡住时也能点）
+                sv.addView(TextView(this).apply {
+                    text = "版本 ${Diag.version(this@MainActivity)} · 诊断信息"
+                    textSize = 12f; setTextColor(Color.parseColor("#80868B")); gravity = Gravity.CENTER
+                    setPadding(dp(16), dp(28), dp(16), dp(12))
+                    setOnClickListener { showDiag() }
+                }, LinearLayout.LayoutParams(-2, -2))
+            }
             root.addView(startup, FrameLayout.LayoutParams(-1, -1))
         }
         return root
@@ -184,9 +209,11 @@ class MainActivity : Activity(), CoreUi {
     override fun onTabsChanged() {
         val i = Core.store.cur()
         val t = Core.curTab()
-        if (t != null && shown !== t.session) {
+        // 正显示内置页面时不动 GeckoView 里的会话（关掉页面时再换回标签页）
+        if (!panelOn && t != null && shown !== t.session) {
             gecko.releaseSession()
             for ((_, l) in Core.tabs) for (x in l) if (x !== t) x.session.setActive(false)
+            panel?.let { if (it.isOpen) it.setActive(false) }
             gecko.setSession(t.session)
             t.session.setActive(true)
             shown = t.session
@@ -260,6 +287,7 @@ class MainActivity : Activity(), CoreUi {
                     Core.pushState()
                     Core.restoreTabs()
                     if (!hold) hideStartup()
+                    preloadPanel()
                     handleIntent(intent)
                 }
             }
@@ -274,21 +302,9 @@ class MainActivity : Activity(), CoreUi {
 
     // ---------- 实例菜单、管理页等（内置扩展页面） ----------
 
-    override fun openSheet(route: String, full: Boolean) { sheetRetry = 0; showSheet(route, full) }
-
-    private fun showSheet(route: String, full: Boolean) {
-        if (!Core.started || Core.baseUrl.isEmpty() || isFinishing || isDestroyed) return
-        // 已经开着一个整页：在同一个页面里换路由（地址 # 后面变了，页面自己重画），不销毁重建窗口和会话
-        val cur = sheetSession
-        if (full && sheetFull && sheet?.isShowing == true && cur != null && cur.isOpen) {
-            sheetRoute = route
-            cur.loadUri(Core.pageUrl(route))
-            return
-        }
-        closeSheet()
-        val d = Dialog(this, if (full) android.R.style.Theme_Material_Light_NoActionBar else android.R.style.Theme_Material_Light_Dialog_NoActionBar)
-        d.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val v = GeckoView(this)
+    /** 内置页面的常驻会话：没有就建一个（只在第一次、或它崩溃之后）。 */
+    private fun ensurePanel(): GeckoSession {
+        panel?.let { if (it.isOpen) return it }
         val s = GeckoSession()
         s.promptDelegate = PromptBridge
         s.navigationDelegate = object : GeckoSession.NavigationDelegate {
@@ -297,6 +313,9 @@ class MainActivity : Activity(), CoreUi {
                 if (request.uri.startsWith("http")) { val u = request.uri; mainHandler.post { closeSheet(); Core.openTab(Core.store.current, u) }; return GeckoResult.deny() }
                 return null
             }
+            override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
+                panelCur = url?.substringAfter('#', "") ?: ""
+            }
             override fun onLoadError(session: GeckoSession, uri: String?, error: org.mozilla.geckoview.WebRequestError): GeckoResult<String>? {
                 logw("内置页面打不开 $uri 类别 ${error.category} 代码 ${error.code}")
                 Core.pageLog("内置页面打不开 ${uri?.substringAfterLast('/')} 代码 ${error.code}")
@@ -304,66 +323,120 @@ class MainActivity : Activity(), CoreUi {
             }
         }
         s.contentDelegate = object : GeckoSession.ContentDelegate {
-            override fun onCloseRequest(session: GeckoSession) { if (sheetSession === session) closeSheet() }
-            // 扩展页面所在的进程崩溃或被系统回收（手机内存紧张时常见）：页面会变成一片白，这里关掉重开，最多两次
-            override fun onCrash(session: GeckoSession) { sheetDied(session, "崩溃") }
-            override fun onKill(session: GeckoSession) { sheetDied(session, "被系统回收") }
+            override fun onCloseRequest(session: GeckoSession) { if (panel === session) closeSheet() }
+            override fun onCrash(session: GeckoSession) { panelDied(session, "崩溃") }
+            override fun onKill(session: GeckoSession) { panelDied(session, "被系统回收") }
         }
         s.progressDelegate = object : GeckoSession.ProgressDelegate {
-            override fun onPageStop(session: GeckoSession, success: Boolean) { if (!success) logw("内置页面加载失败 $sheetRoute") }
+            override fun onPageStop(session: GeckoSession, success: Boolean) { if (!success) logw("内置页面加载失败 $panelRoute") }
         }
         Core.ext?.let { s.webExtensionController.setMessageDelegate(it, Core.sessionMsg(null), Core.NATIVE) }
         s.open(Core.ensureRuntime())
-        v.setSession(s)
-        s.loadUri(Core.pageUrl(route))
-        val box = FrameLayout(this)
-        box.addView(v, FrameLayout.LayoutParams(-1, -1))
-        if (full) fitInsets(box)
-        d.setContentView(box)
-        d.window?.let { w ->
-            if (full) {
-                w.setLayout(-1, -1)
-            } else {
-                w.setBackgroundDrawable(rounded(Color.WHITE, dp(20).toFloat()))
-                w.setGravity(Gravity.TOP or Gravity.END)
-                val lp = w.attributes
-                lp.width = minOf(resources.displayMetrics.widthPixels - dp(16), dp(380))
-                lp.height = (resources.displayMetrics.heightPixels * 0.78f).toInt()
-                lp.y = dp(56)
-                lp.x = dp(8)
-                lp.dimAmount = 0.25f
-                w.attributes = lp
-                w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            }
-        }
-        d.setOnDismissListener {
-            if (sheet === d) { sheet = null; sheetSession = null; sheetFull = false }
-            try { v.releaseSession(); s.close() } catch (e: Exception) { logw("关闭内置页面出错", e) }
-            onTabsChanged()
-        }
-        sheet = d
-        sheetSession = s
-        sheetRoute = route
-        sheetFull = full
-        try { d.show() } catch (e: Exception) { logw("页面窗口打不开", e); sheet = null; sheetSession = null; s.close() }
+        panel = s
+        return s
     }
 
-    private fun sheetDied(session: GeckoSession, why: String) {
-        if (sheetSession !== session) return
-        logw("内置页面$why：$sheetRoute（第 ${sheetRetry + 1} 次）")
-        Core.pageLog("内置页面$why：$sheetRoute")
-        val r = sheetRoute
-        val f = sheetFull
-        closeSheet()
-        if (sheetRetry++ < 2) mainHandler.postDelayed({ showSheet(r, f) }, 400) else toast("页面打不开（内置扩展进程$why），请重启应用")
+    /** 启动完成后先把内置页面载好（停在空路由 idle），之后每次打开只是换路由，不用等加载。 */
+    private fun preloadPanel() {
+        if (Core.baseUrl.isEmpty() || isFinishing || isDestroyed) return
+        try { val s = ensurePanel(); if (!panelOn) { s.loadUri(Core.pageUrl("idle")); s.setActive(false) } } catch (e: Throwable) { logw("预载内置页面出错", e); Core.pageLog("预载内置页面出错：${e.message}") }
+    }
+
+    override fun openSheet(route: String, full: Boolean) { panelRetry = 0; showPanel(route) }
+
+    private fun showPanel(route: String) {
+        if (!Core.started || Core.baseUrl.isEmpty() || isFinishing || isDestroyed) return
+        try {
+            val s = ensurePanel()
+            panelRoute = route
+            s.loadUri(Core.pageUrl(route))
+            if (!panelOn || shown !== s) {
+                panelOn = true
+                url.clearFocus()
+                (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(url.windowToken, 0)
+                gecko.releaseSession()
+                for ((_, l) in Core.tabs) for (x in l) x.session.setActive(false)
+                gecko.setSession(s)
+                s.setActive(true)
+                shown = s
+                toolbar.visibility = View.GONE
+                gecko.requestFocus()
+            }
+            logi("内置页面 $route")
+        } catch (e: Throwable) {
+            logw("内置页面打不开 $route", e)
+            Core.pageLog("内置页面打不开 $route：$e")
+            panelOn = false
+            toolbar.visibility = View.VISIBLE
+            shown = null
+            onTabsChanged()
+            toast("页面打不开：${e.message ?: e}（长按头像可看诊断信息）")
+        }
+    }
+
+    private fun panelDied(session: GeckoSession, why: String) {
+        if (panel !== session) return
+        logw("内置页面$why：$panelRoute（第 ${panelRetry + 1} 次）")
+        Core.pageLog("内置页面$why：$panelRoute")
+        val r = panelRoute
+        val was = panelOn
+        panel = null
+        if (was) { closeSheet(); if (panelRetry++ < 2) mainHandler.postDelayed({ showPanel(r) }, 400) else toast("页面打不开（$why），长按头像可看诊断信息") }
     }
 
     override fun closeSheet() {
-        val d = sheet ?: return
-        sheet = null
-        sheetSession = null
-        sheetFull = false
-        try { d.dismiss() } catch (e: Exception) { logw("关闭页面窗口出错", e) }
+        if (!panelOn) return
+        panelOn = false
+        toolbar.visibility = View.VISIBLE
+        // 页面回到空路由：停掉它的轮询；下次打开一定是一次路由变化，页面会重新取状态重画
+        try { panel?.let { if (it.isOpen) { it.loadUri(Core.pageUrl("idle")); it.setActive(false) } } } catch (e: Exception) { logw("内置页面收起出错", e) }
+        if (Core.curTab() == null) { try { gecko.releaseSession() } catch (e: Exception) { logw("释放会话出错", e) }; shown = null }
+        onTabsChanged()
+    }
+
+    // ---------- 诊断信息（原生窗口，不依赖内置页面：白屏、卡在启动页时也能用） ----------
+
+    private fun showDiag() {
+        val tv = TextView(this).apply {
+            text = "正在收集…"; textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(Color.parseColor("#202124"))
+            setTextIsSelectable(true); setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        var text = ""
+        val d = android.app.AlertDialog.Builder(this)
+            .setTitle("诊断信息")
+            .setView(ScrollView(this).apply { addView(tv) })
+            .setPositiveButton("复制", null)
+            .setNeutralButton("分享", null)
+            .setNegativeButton("关闭", null)
+            .create()
+        d.setOnShowListener {
+            d.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (text.isEmpty()) return@setOnClickListener
+                (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("MaskTab 诊断信息", text))
+                Toast.makeText(this, "已复制，粘贴发给开发者", Toast.LENGTH_SHORT).show()
+            }
+            d.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                if (text.isEmpty()) return@setOnClickListener
+                try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "发送诊断信息")) } catch (e: Exception) { toast("没有可用的应用") }
+            }
+        }
+        try { d.show() } catch (e: Exception) { logw("诊断窗口打不开", e); return }
+        bg {
+            val t = try { Diag.collect(this) } catch (e: Throwable) { "收集诊断信息出错：$e" }
+            ui { text = t; tv.text = t; logi("诊断信息已收集 ${t.length} 字") }
+        }
+    }
+
+    private fun askDiag(why: String) {
+        if (isFinishing || isDestroyed) return
+        try {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("上次没有正常退出")
+                .setMessage("$why\n\n把诊断信息复制发给开发者，可以定位原因。以后也可以长按右上角头像、或点 ⋮ → 诊断信息 打开。")
+                .setPositiveButton("看诊断信息") { _, _ -> showDiag() }
+                .setNegativeButton("不用", null)
+                .show()
+        } catch (e: Exception) { logw("提示窗口打不开", e) }
     }
 
     /** 用户扩展的弹窗。 */
@@ -434,6 +507,7 @@ class MainActivity : Activity(), CoreUi {
         m.add(0, 5, 4, "节点与出口")
         m.add(0, 6, 5, "扩展")
         m.add(0, 7, 6, "设置")
+        m.add(0, 8, 7, "诊断信息（${Diag.version(this)}）")
         pm.setOnMenuItemClickListener {
             val t = Core.curTab()
             when (it.itemId) {
@@ -444,6 +518,7 @@ class MainActivity : Activity(), CoreUi {
                 5 -> openSheet("node", true)
                 6 -> openSheet("addons", true)
                 7 -> openSheet("settings", true)
+                8 -> showDiag()
             }
             true
         }
@@ -452,7 +527,12 @@ class MainActivity : Activity(), CoreUi {
 
     /** 返回：先关弹出的页面，再网页后退，再关多余的标签，最后退到后台（不结束进程，后台实例保持）。 */
     private fun handleBack() {
-        if (sheet != null) { closeSheet(); return }
+        if (panelOn) {
+            // 从菜单点进去的页面：返回键先回菜单；其它情况收起
+            val p = panel
+            if (panelRoute == "menu" && panelCur.isNotEmpty() && panelCur != "menu" && panelCur != "idle" && p != null && p.isOpen) p.loadUri(Core.pageUrl("menu")) else closeSheet()
+            return
+        }
         val t = Core.curTab()
         when {
             t != null && t.canBack -> t.session.goBack()

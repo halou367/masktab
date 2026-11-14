@@ -71,6 +71,67 @@ for (const [name, url, vp] of shots) {
   await pg.screenshot({ path: path.join(out, name + '.png'), fullPage: name !== 'menu' });
   await pg.close();
 }
+// 常驻页面的走法（与 app 里一样）：一个页面先停在 #idle，之后只改 # 后面的路由。
+// 从菜单把每一项点一遍：路由要变、页面要画出对应的标题、返回要回到菜单；回到 idle 后不再向 app 要状态。
+const flow = [];
+{
+  const pg = await ctx.newPage();
+  pg.on('pageerror', (e) => errors.push(`flow: ${e.message}`));
+  pg.on('console', (m) => { if (m.type() === 'error') errors.push(`flow: ${m.text()}`); });
+  await pg.goto(base + 'app.html#idle');
+  await pg.waitForTimeout(500);
+  const info = () => pg.evaluate(() => ({ hash: location.hash.slice(1), cls: document.body.className, h1: document.querySelector('.top h1')?.textContent || '', kids: document.getElementById('root').childElementCount }));
+  const setHash = async (r) => { await pg.evaluate((x) => { location.hash = x; }, r); await pg.waitForTimeout(250); };
+  const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${name}${ok ? '' : ' ' + JSON.stringify(got)}`); if (!ok) errors.push(`flow: ${name}`); };
+  let i = await info();
+  check('idle 是空页面', i.kids === 0 && i.cls === 'pg-idle', i);
+  const items = [['账号与密码', 'instances/a1', '实例管理'], ['节点与出口', 'node', '节点与出口'], ['指纹与时区', 'fp', '指纹与时区'], ['导入邮箱', 'instances/import', '实例管理'], ['管理实例', 'instances', '实例管理'], ['设置', 'settings', '设置']];
+  for (const [label, route, title] of items) {
+    await setHash('menu');
+    i = await info();
+    check(`菜单画出来（去 ${label} 之前）`, i.cls === 'menu' && i.h1 === '实例' && i.kids > 1, i);
+    await pg.locator('button.mi', { hasText: label }).first().click();
+    await pg.waitForTimeout(300);
+    i = await info();
+    check(`菜单 → ${label}`, i.hash === route && i.h1 === title, i);
+    if (label === '节点与出口') await pg.screenshot({ path: path.join(out, 'flow-node.png') });
+    if (route.includes('/')) {
+      // 抽屉 / 导入框盖在实例管理页上：先收起（回到实例管理），再点返回
+      await pg.locator(route.endsWith('import') ? '.modal button[title="关闭"]' : '.drawer button[title="收起"]').first().click();
+      await pg.waitForTimeout(250);
+      i = await info();
+      check(`${label} 收起后是实例管理`, i.hash === 'instances', i);
+    }
+    await pg.locator('.top button').first().click(); // 返回
+    await pg.waitForTimeout(250);
+    i = await info();
+    check(`${label} 点返回回到菜单`, i.hash === 'menu' && i.cls === 'menu', i);
+  }
+  await pg.screenshot({ path: path.join(out, 'flow-menu.png') });
+  // 新建实例：发出 POST /api/instances
+  await pg.evaluate(() => { window.__calls.length = 0; });
+  await pg.locator('button.mi', { hasText: '新建伪装实例' }).first().click();
+  await pg.waitForTimeout(300);
+  const posted = await pg.evaluate(() => window.__calls.some((c) => c.m === 'POST' && c.p === '/api/instances'));
+  check('菜单 → 新建伪装实例 发出请求', posted, {});
+  // 回到 idle：清空、之后 9 秒内不再取状态（轮询停了）
+  await setHash('idle');
+  await pg.evaluate(() => { window.__calls.length = 0; });
+  await pg.waitForTimeout(9000);
+  const n = await pg.evaluate(() => window.__calls.filter((c) => c.p && c.p.startsWith('/api/')).length);
+  i = await info();
+  check('回到 idle 后清空并停止轮询', i.kids === 0 && n === 0, { ...i, calls: n });
+  // 从 idle 直接开整页（三点菜单的入口）：返回是关闭（发 /ui/close），不是回菜单
+  await setHash('node');
+  await pg.evaluate(() => { window.__calls.length = 0; });
+  await pg.locator('.top button').first().click();
+  await pg.waitForTimeout(250);
+  const closed = await pg.evaluate(() => window.__calls.some((c) => c.p === '/ui/close'));
+  check('直接打开的整页点返回 = 关闭', closed, await info());
+  await pg.close();
+}
+console.log(flow.join('\n'));
+
 // fp.js：在普通页面环境里直接改 window，检查各项是否生效、同种子稳定、不同种子不同
 const pg = await ctx.newPage();
 await pg.goto(base + 'newtab.html#inst=a1&go=about:blank');
@@ -89,3 +150,4 @@ console.log(JSON.stringify(fp, null, 1));
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');
 await br.close();
 srv.close();
+process.exitCode = errors.length ? 1 : 0;

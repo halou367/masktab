@@ -71,7 +71,16 @@ class Vault(dir: File) {
         j.optJSONArray("items")?.objects()?.forEach { items.add(VItem.from(it)) }
     }
 
+    private var batching = 0
+    private var dirty = false
+    /** 一批改动只落盘一次（批量导入时每条都加密写盘会卡住界面：密钥在系统密钥库里，每次加密都要跨进程）。 */
+    @Synchronized fun <T> batch(block: () -> T): T {
+        batching++
+        try { return block() } finally { if (--batching == 0 && dirty) { dirty = false; save() } }
+    }
+
     private fun save() {
+        if (batching > 0) { dirty = true; return }
         val j = jsonOf("default" to def, "items" to JSONArray(items.map { it.toJson() }))
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.ENCRYPT_MODE, key())

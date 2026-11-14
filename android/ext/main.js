@@ -1,5 +1,7 @@
-// 安卓版的扩展页面（一个页面按地址 # 后的路由切换）：
-//   menu        点头像弹出的实例菜单（复用桌面 menu.js）
+// 安卓版的扩展页面（一个页面按地址 # 后的路由切换）。这个页面在 app 里常驻：启动时载好，停在空路由 idle；
+// 要显示哪一页，app 只改 # 后面的路由（不重新加载页面、不新建窗口），关掉时回到 idle。
+//   idle        空页面（没在显示）：不画东西、不轮询
+//   menu        点头像打开的实例菜单（复用桌面 menu.js）
 //   instances…  实例管理：卡片网格、抽屉、导入邮箱（复用桌面 instances.js）
 //   node        节点与出口：订阅地址、本实例的节点、出口检测
 //   fp          指纹：UA、种子、时区、语言、换指纹
@@ -50,15 +52,20 @@ function oops(title, detail) {
     h('div', { class: 'row' }, h('button', { class: 'btn pri', onclick: () => { st ? render(true) : location.reload(); } }, icon('refresh', 16), '重试'), h('button', { class: 'btn', onclick: closeMe }, '关闭'))));
 }
 
+let fromMenu = ''; // 从菜单点进来的那一页的路由：在这一页点返回先回菜单
 function top(title, me) {
-  const back = route().includes('/') && pageOf() === 'instances' ? () => { location.hash = 'instances'; } : closeMe;
+  const toMenu = () => { location.hash = 'menu'; };
+  const sub = route().includes('/') && pageOf() === 'instances';
+  const back = fromMenu && route() === fromMenu ? toMenu : sub ? () => { location.hash = 'instances'; } : fromMenu ? toMenu : closeMe;
   return h('div', { class: 'top' }, ibtn('chevL', '返回', back), me && face(me, false, false), h('h1', {}, title));
 }
 
 // ---------- 实例菜单 ----------
+// 菜单里点某一项：直接换路由（同一个页面里切换，最快也最稳），不绕 app 一圈
 function menu() {
-  const nav = { node: () => openFull('node'), fp: () => openFull('fp'), open: (r) => openFull(r), render };
-  return menuView(st, nav);
+  const go = (r) => { fromMenu = r; location.hash = r; };
+  const nav = { node: () => go('node'), fp: () => go('fp'), open: (r) => go(r), render };
+  return [h('div', { class: 'top' }, ibtn('chevL', '返回', closeMe), h('h1', {}, '实例')), menuView(st, nav)];
 }
 
 // ---------- 实例管理 ----------
@@ -261,8 +268,9 @@ function addonsPage() {
 // ---------- 画页面 ----------
 // force = false 且用户正在输入时，只替换带 data-live 标记的区块（状态、出口、节点列表），不动正在输入的那个框。
 function render(force) {
-  if (!st || document.body.classList.contains('dragging')) return;
   const p = pageOf();
+  if (p === 'idle') { document.body.className = 'pg-idle'; root.replaceChildren(); root.dataset.page = p; BOOT.ready = true; return; }
+  if (!st || document.body.classList.contains('dragging')) return;
   try {
     if (!st.me) throw new Error('没有实例');
     const view = { menu, instances, node, fp, settings, addons: addonsPage }[p] || menu;
@@ -289,6 +297,8 @@ function render(force) {
 // 进入一个页面（首次打开、# 后的路由变化）
 function enter() {
   clearTimeout(nodesTimer);
+  if (pageOf() === 'idle' || pageOf() === 'menu') fromMenu = '';
+  if (pageOf() === 'idle') { render(true); return; }
   if (pageOf() === 'node') { nodes = null; nodesErr = ''; order = null; nq = ''; }
   if (pageOf() === 'addons') addons = null;
   render(true);
@@ -297,10 +307,11 @@ function enter() {
   console.info('MaskTab 页面就绪', route(), st ? '有状态' : '无状态'); // CI 冒烟测试在 logcat 里找这一行
 }
 
-addEventListener('hashchange', () => { scrollTo(0, 0); enter(); });
+// 路由变了：先用手上的状态立刻画出来，再向 app 取一次最新状态（页面常驻，手上的状态可能是上次显示时的）
+addEventListener('hashchange', () => { scrollTo(0, 0); if (st || pageOf() === 'idle') enter(); if (pageOf() !== 'idle') load(!st); });
 // 长按拖动卡片排序：拖动时不让页面跟着滚
 document.addEventListener('touchmove', (e) => { if (document.body.classList.contains('dragging')) e.preventDefault(); }, { passive: false });
 document.addEventListener('contextmenu', (e) => { if (e.target.closest?.('.cardi')) e.preventDefault(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { load(false); if (pageOf() === 'node') { clearTimeout(nodesTimer); loadNodes(); } } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && pageOf() !== 'idle') { load(false); if (pageOf() === 'node') { clearTimeout(nodesTimer); loadNodes(); } } });
 await load(true);
-setInterval(() => { if (!document.hidden) load(false); }, 4000);
+setInterval(() => { if (!document.hidden && pageOf() !== 'idle') load(false); }, 4000);
