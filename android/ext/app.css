@@ -127,3 +127,70 @@ body.ntp #q{width:100%;padding:14px 18px 14px 46px;border-radius:999px;font-size
 .box .qs{margin:0 0 8px;height:38px} .box .qs input{border:0;background:none;padding:0;flex:1;min-width:0;font-size:14px;color:var(--fg);outline:none}
 .ib.dis{opacity:.4} .node .ck .dotspin{margin:0}
 textarea.diag{margin-top:10px;min-height:220px;font-size:11.5px;line-height:1.5;white-space:pre;overflow:auto}
+
+/* ---- 手机精简版（照 demo/unified 的 lite 版式，IMPROVE I-2）：一行一件事，次要的收起来 ----
+   注意上面那条：不要出现“圆角 + overflow:auto/scroll”。这里的容器都不滚动，整页滚。 */
+.el{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0} .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums} .num{font-variant-numeric:tabular-nums}
+.tg{padding:8px 2px} .tg i{width:34px;height:20px} .tg i::after{width:16px;height:16px} .tg.on i::after{left:16px}
+#toast{bottom:78px}
+.top .cnt{color:var(--sub);font-size:12.5px} .top h1{flex:0 1 auto}
+.top.hd1{gap:8px;padding-right:12px} .top.hd1 .no{font-size:15px;flex:none} .top.hd1 .sub{font-size:13px}
+.lat{font-size:13px;font-variant-numeric:tabular-nums;padding:6px;border-radius:8px;flex:none;display:inline-flex;align-items:center}
+.d{font-size:12.5px;font-variant-numeric:tabular-nums;flex:none}
+.ty{font-size:11px;color:var(--sub);border:1px solid var(--line);border-radius:5px;padding:0 5px;flex:none}
+.dotspin{margin-right:0}
+/* 实例菜单 */
+.top.mn{gap:12px;padding:10px 14px 10px 4px;border-bottom:0} body.menu .top.mn{margin-bottom:0}
+.top.mn .face{width:36px;height:36px;font-size:15px}
+.who1{min-width:0} .who1 .t{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .who1 .sub{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .who1 .sub b{font-weight:500}
+body.menu .mi{height:50px;font-size:15px} .mi .flag{width:20px;height:14px} .mi>.ic:last-child{color:var(--sub);opacity:.7}
+.avs{display:flex;flex-wrap:wrap;gap:12px 18px;padding:12px 16px}
+.av1{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;color:var(--sub);min-width:44px}
+.av1 .face{width:38px;height:38px;font-size:15px} .face.add{background:var(--card);color:var(--sub)}
+.acts{display:flex;justify-content:space-around;padding:6px 8px 10px}
+.act1{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11.5px;color:var(--sub);padding:10px 6px;border-radius:12px;min-width:70px} .act1:active{background:var(--hover)}
+/* 节点与出口 */
+.xc{margin:10px 12px;background:var(--card);border-radius:12px;padding:6px 12px}
+.xc .v{display:flex;align-items:center;gap:8px;font-size:14.5px;padding:4px 0;min-height:30px} .xc .v .r{text-align:right;font-size:12.5px} .xc .v>.ic{color:var(--sub);flex:none} .xc .flag{width:22px;height:15px;flex:none}
+.idr{margin:0 12px 10px;border:1px solid var(--line);border-radius:10px;display:flex;align-items:center;gap:12px;padding:11px 10px;width:calc(100% - 24px);text-align:left;font-size:13px}
+.idr.on{border-color:var(--accent)} .idr>span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap} .idr .ic{color:var(--sub)}
+.fpf{margin:0 12px 10px;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px 8px;align-items:center;font-size:13.5px}
+.fpf>label{color:var(--sub);font-size:13px} .fpf .wide{grid-column:1/3} .fpf code{font-size:11.5px;word-break:break-all;line-height:1.4} .fpf input{padding:6px 9px;font-size:14px;min-width:0}
+.fpf .pill{flex:none} .fpf .pill button{padding:6px 10px;font-size:12.5px;white-space:nowrap} .fpf .btn{height:32px;padding:0 12px;flex:none}
+.fold{display:inline-flex;align-items:center;gap:6px;color:var(--sub);font-weight:600;font-size:13px;padding:4px 2px}
+.boxl{margin:0 12px 12px;border:1px solid var(--line);border-radius:12px} .boxl>*+*{border-top:1px solid var(--line)} .boxl>div:empty{display:none}
+main.pg.lt .boxl{margin:0 0 12px}
+.ln1{display:flex;align-items:center;gap:8px;padding:2px 8px 2px 12px;min-height:52px;font-size:14px}
+.ln1 .lb{display:inline-flex;align-items:center;gap:4px;color:var(--sub);font-size:12px;width:52px;flex:none}
+.ln1 button.row{min-width:0;text-align:left;min-height:44px;gap:6px} .ln1 button.row>.ic{color:var(--sub);flex:none}
+.autol{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--sub);flex:none}
+.sube{padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.frm{display:flex;gap:8px;align-items:center;margin:0 0 10px} .frm input{flex:1;min-width:0} .sube .frm{margin:0}
+.stl{display:flex;align-items:center;gap:6px;font-size:12.5px;padding:8px 12px;line-height:1.45;word-break:break-word} .stl.prog{color:var(--accent)} .stl>.ic{flex:none}
+.stl .bar{width:96px;height:5px;border-radius:5px;background:var(--line);overflow:hidden;flex:none} .stl .bar i{display:block;height:100%;background:var(--accent);transition:width .3s}
+main.pg.lt .stl{padding:4px 2px 10px}
+/* 列表（节点） */
+.it{display:flex;align-items:center;gap:10px;min-height:50px;padding:6px 14px 6px 10px;width:100%;text-align:left;border-bottom:1px solid var(--line)}
+.it:active{background:var(--hover)} .it.on{background:color-mix(in srgb,var(--accent) 10%,transparent)} .it.dead{opacity:.55}
+.it .sel{width:20px;color:var(--accent);display:inline-flex;justify-content:center;flex:none} .it .sel.au{color:var(--sub)}
+#root>.qs{margin:8px 12px;height:38px} #root>.qs input{font-size:14px;outline:none}
+/* 管理页：四个标签 */
+main.pg.lt{padding:4px 12px 88px}
+main.pg.lt h2{font-size:16px;font-weight:600;margin:0 0 6px;display:flex;align-items:center;gap:8px;flex-wrap:nowrap;min-height:48px}
+main.pg.lt h2>.ib:first-child{margin:0 -4px 0 -8px} main.pg.lt h2 .sub{font-weight:400;font-size:12.5px} main.pg.lt h2>.ic{flex:none}
+main.pg.lt h3{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin:18px 0 8px;min-height:32px} main.pg.lt h3 .sub{font-weight:400}
+.tipl{padding:4px 2px 8px;line-height:1.5}
+.lc{border:1px solid var(--line);border-radius:12px;padding:5px 10px;margin-bottom:8px;display:flex;align-items:center;gap:10px;min-height:50px;flex-wrap:nowrap;background:var(--bg)}
+.lc.open{flex-wrap:wrap;border-color:var(--accent)} .lc.dead{opacity:.55} .lc>.ic{color:var(--sub);flex:none}
+.lc .nm{flex:1 1 0;min-width:0} .lc .more{flex:1 1 100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding:8px 0 3px;margin-top:2px} .lc .more .sub{line-height:1.45}
+.dots{gap:3px;flex:none} .dots .dot{width:8px;height:8px}
+.grid.lt{display:block}
+.cardi.lt{border-top:1px solid var(--line);border-radius:12px;padding:5px 4px 5px 10px;gap:4px;margin-bottom:8px;min-height:50px;justify-content:center}
+.cardi.lt.running{border-color:var(--line)} .cardi.lt.cur{border-color:var(--c);box-shadow:inset 0 0 0 1px var(--c)} .cardi.lt.ph{border:2px dashed var(--line);box-shadow:none}
+.cardi.lt .ct{gap:10px} .cardi.lt .ct .nm{font-size:14.5px} .cardi.lt .cs{min-height:0;padding:0 0 5px 38px} .cardi.lt .cs .site{width:20px;height:20px;border-radius:6px} .cardi.lt .cw{padding:0 0 5px 38px}
+.cardi.lt .lat{padding:0 2px} .cardi.lt .ib{width:40px;height:40px}
+.srow{padding:10px 12px;display:flex;flex-direction:column;gap:6px} .srow .sl{display:flex;align-items:center;gap:10px;font-size:14px} .srow .sl .ic{color:var(--sub)}
+.srow .sc{display:flex;align-items:center;gap:8px;padding-left:27px;min-height:30px;font-size:13.5px} .srow .sc .good,.srow .sc .sub{display:inline-flex;align-items:center;gap:2px} .srow .sc input{min-width:0}
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;background:var(--bg);border-top:1px solid var(--line);padding:4px 0 8px}
+.tabs button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--sub);padding:6px 0} .tabs button.on{color:var(--accent)}
+.drawer .hint{display:none}

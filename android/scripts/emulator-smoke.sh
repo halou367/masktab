@@ -131,11 +131,11 @@ else
 fi
 tapflow fp "指纹与时区" fp
 tapflow acct "账号与密码" "instances/"
-tapflow manage "管理实例" "instances 有状态"
+tapflow manage "管理" "instances 有状态"   # 菜单底部那排的“管理”（无障碍标签是“管理实例”）
 # 新建实例：菜单收起、切到新实例、开出它的新标签页
 if openmenu; then
   n0=$(count "新建实例 #"); t0=$(count "MaskTab 新标签页就绪")
-  if tap_desc "新建伪装实例"; then
+  if tap_desc "新建"; then   # 头像那排最后的“新建”（无障碍标签是“新建伪装实例”）
     for k in 1 2 3 4 5 6 7 8 9 10; do sleep 1; [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ] && break; done
     sleep 2; shot t-newinst
     if [ "$(count "新建实例 #")" -gt "$n0" ] && [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ]; then echo "通过：从菜单新建实例（建好并打开了它的新标签页）"; else echo "失败：从菜单新建实例（新建 $n0 -> $(count "新建实例 #")，新标签页 $t0 -> $(count "MaskTab 新标签页就绪")）"; fail=1; fi
@@ -172,10 +172,11 @@ n0=$(ready addons)
 A shell am start -n $ACT --es mt_open addons > /dev/null; sleep 6; shot t-addons
 if [ "$(ready addons)" -gt "$n0" ]; then echo "通过：扩展页"; else echo "失败：扩展页没有就绪"; fail=1; fi
 closepanel
-# 在页面里打字：点节点页的订阅地址框（坐标按 pixel_6、还没有订阅时的版面量的），弹出键盘、输入、收起键盘。
+# 在页面里打字：点节点页的订阅地址框（还没有订阅时它直接摆在“订阅”那一行下面），弹出键盘、输入、收起键盘。
+# 位置先按无障碍标签“订阅地址”找；找不到再按 pixel_6 上量出来的坐标点（preview-pages 的版面 × 2.625 + 状态栏）。
 # 键盘弹出会让 GeckoView 改大小，是另一条容易出问题的路。
 A shell am start -n $ACT --es mt_open node > /dev/null; sleep 5
-A shell input tap 471 591; sleep 4; shot t-type-1focus
+tap_desc "订阅地址" || A shell input tap 457 796; sleep 4; shot t-type-1focus
 A shell input text "https://sub.example.invalid/x"; sleep 3; shot t-type-2typed
 if grep -q "InsetsController: show(ime" "$OUT/logcat-live.txt" || grep -q "ImeTracker.*onShown\|ImeTracker.*onRequestShow" "$OUT/logcat-live.txt"; then echo "通过：点输入框弹出了键盘"; else echo "跳过：没看到键盘弹出的日志（坐标可能没点中输入框）"; fi
 A shell input keyevent KEYCODE_BACK; sleep 3   # 收起键盘

@@ -7,7 +7,7 @@ import { siteIcon, siteName, siteKey, uniqSites } from './sites.js';
 import { face, stepLine } from './menu.js';
 
 const MAXI = 9; // 卡片上最多几个站点图标，多的显示 +N
-let ctx;        // { st, act, load, render }
+let ctx;        // { st, act, load, render, lite?, back? }；lite = 手机精简版（一行一张卡片，照 demo/unified 的 mInstsLite），back = 标题左边的返回
 const route = () => location.hash.slice(1).split('/'); // ['instances', id | 'import']
 const setRoute = (sub) => { location.hash = sub ? `instances/${sub}` : 'instances'; };
 
@@ -15,12 +15,16 @@ export function instancesView(c) {
   ctx = c;
   const { st } = c;
   const [, sub] = route();
-  const head = h('h2', {}, icon('layers'), '实例', h('span', { class: 'sub' }, `  ${st.instances.length} 个 · 长按卡片拖动排序`), h('span', { class: 'grow' }),
-    h('button', { class: 'btn', title: '批量导入邮箱，一个邮箱一个实例', onclick: () => setRoute('import') }, icon('mail', 16), '导入邮箱'),
-    h('button', { class: 'btn pri', title: '新建伪装实例（Ctrl+M）', onclick: () => c.act(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('mask', 16), '新建'));
-  const grid = h('div', { class: 'grid' }, st.instances.map(card));
+  const head = c.lite
+    ? h('h2', {}, c.back, icon('layers'), '实例', h('span', { class: 'sub' }, String(st.instances.length)), h('span', { class: 'grow' }),
+      ibtn('mail', '导入邮箱：一个邮箱一个实例', () => setRoute('import')), ibtn('plus', '新建伪装实例', () => c.act(() => api('POST', '/api/instances', {}), '正在创建…'), 'on'))
+    : h('h2', {}, icon('layers'), '实例', h('span', { class: 'sub' }, `  ${st.instances.length} 个 · 长按卡片拖动排序`), h('span', { class: 'grow' }),
+      h('button', { class: 'btn', title: '批量导入邮箱，一个邮箱一个实例', onclick: () => setRoute('import') }, icon('mail', 16), '导入邮箱'),
+      h('button', { class: 'btn pri', title: '新建伪装实例（Ctrl+M）', onclick: () => c.act(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('mask', 16), '新建'));
+  const grid = h('div', { class: 'grid' + (c.lite ? ' lt' : '') }, st.instances.map(c.lite ? cardLite : card));
   dragSort(grid);
-  const out = [head, st.vault?.error ? h('div', { class: 'banner bad' }, icon('warn'), st.vault.error) : null, grid, rulesBox(st)];
+  const out = [head, st.vault?.error ? h('div', { class: 'banner bad' }, icon('warn'), st.vault.error) : null, grid,
+    c.lite ? h('div', { class: 'sub tipl' }, '点卡片：账号与密码、颜色、删除。长按拖动排序。') : null, rulesBox(st)];
   const cur = sub && sub !== 'import' && st.instances.find((i) => i.id === sub);
   if (cur) out.push(drawer(cur));
   if (sub === 'import') out.push(importBox());
@@ -83,6 +87,21 @@ function card(i) {
   return el;
 }
 
+// 手机精简版的卡片：一行——头像（国旗角标、运行点）、编号和名称、延迟、开 / 关；有记住账号或 Cookie 的网站时下面多一排图标。
+function cardLite(i) {
+  const rt = i.rt, on = i.proxy.state === 'on', sites = cardSites(i), MAXL = 8;
+  const el = h('div', { class: 'cardi lt' + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color },
+    onclick: (ev) => { if (ev.target.closest('button,input') || el.dataset.dragged) return; setRoute(i.id); } },
+  h('div', { class: 'ct' }, face(i, false, true), h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i)), h('span', { class: 'grow' }),
+    rt.starting ? stepLine(i, ctx.st.launchSteps) : on ? h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency)) : h('span', { class: 'sub' }, '直连'),
+    rt.running ? ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
+      : !rt.starting && ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'on')),
+  sites.length > 0 && h('div', { class: 'cs' }, sites.slice(0, MAXL).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
+    sites.length > MAXL && h('span', { class: 'more' }, `+${sites.length - MAXL}`)),
+  rt.error && h('div', { class: 'cw bad' }, icon('warn', 14), rt.error));
+  return el;
+}
+
 // 长按 350ms 后拖动；松手时把新顺序交给核心服务。
 function dragSort(grid) {
   let timer = 0, drag = null;
@@ -111,7 +130,7 @@ function dragSort(grid) {
     drag.c.style.left = ev.clientX - drag.dx + 'px';
     drag.c.style.top = ev.clientY - drag.dy + 'px';
     const over = document.elementsFromPoint(ev.clientX, ev.clientY).find((e) => e.classList?.contains('cardi') && e !== drag.c && e !== drag.ph);
-    if (over) { const r = over.getBoundingClientRect(); (ev.clientX < r.left + r.width / 2 ? over.before(drag.ph) : over.after(drag.ph)); }
+    if (over) { const r = over.getBoundingClientRect(), vert = r.width > grid.clientWidth * 0.7; /* 一行一张（手机）按上下半边，网格按左右半边 */ ((vert ? ev.clientY < r.top + r.height / 2 : ev.clientX < r.left + r.width / 2) ? over.before(drag.ph) : over.after(drag.ph)); }
   });
   addEventListener('pointerup', () => {
     if (!drag) return;

@@ -13,7 +13,7 @@
 | 代理 | mihomo 安卓二进制随包（`jniLibs/<abi>/libmihomo.so`），订阅用 proxy-providers；每个实例一个本地 mixed 入站；内置扩展用 `proxy.onRequest` 按标签所属实例分流 |
 | 指纹 | 每实例种子；UA 是安卓火狐（只换 Android 版本号）；内置扩展在 document_start 改页面：画布 / 音频噪声、核数、屏幕、语言、时区；Gecko 指纹保护打开 |
 | 密码库 | Android Keystore 的 AES-256-GCM 密钥加密整库；按实例隔离；复用桌面 `autofill.js` |
-| 实例管理 | 复用桌面 `instances.js`（卡片网格、国旗点开看 IP、站点图标、长按拖动排序、账号与 Cookie 抽屉、导入邮箱） |
+| 实例管理 | 复用桌面 `instances.js` 的 `lite` 模式（一行一张卡片、站点图标、长按拖动排序、账号与 Cookie 抽屉、导入邮箱） |
 | 启动 | 原生启动页：准备内核 → 加载内置扩展 → 启动 mihomo → 加载订阅 → 网络检测，每步动画与结果 |
 | 扩展 | 从 addons.mozilla.org 安装（安装前确认权限），“扩展”页里启用 / 停用 / 移除 / 打开弹窗 / 设置页 |
 | 不做 | 双端同步（第二版）、下载文件、edgetunnel 专用功能（优选 / 反代 / ECH） |
@@ -97,7 +97,10 @@ android/
 
 ### 界面
 
-- 实例菜单、实例管理、节点与出口、指纹、设置、扩展都是内置扩展页面 `app.html#<路由>`，用一个默认容器的 GeckoSession 显示；页面通过 `runtime.sendNativeMessage` 调 `Bridge`。
+- 实例菜单、节点与出口（含指纹与时区）、管理页（实例 / 订阅 / 扩展 / 设置四个标签）都是内置扩展页面 `app.html#<路由>`，用一个默认容器的 GeckoSession 显示；页面通过 `runtime.sendNativeMessage` 调 `Bridge`。
+- **版式照 `demo/unified` 的“手机精简版”**（IMPROVE I-2 第一期，2026-11-14）：一行一件事，次要的收起来点开才有，输入框点了才出现，不放大段说明。
+  路由：`menu`、`node`（`fp` 是同一页、指纹那块展开）、`node/list`（节点列表）、`instances`（`instances/<id>` 抽屉、`instances/import`）、`subs`、`addons`、`settings`。
+  演示页里手机后端没有的东西（两路出口、纯净度、出口 / 入口列表、多订阅、地址库）没有画，清单见 `docs/IMPROVE.md` I-2“落地情况”。
 - **内置页面怎么显示**（2026-11-14 第三版，决策 A-8）：全应用只有一个 GeckoView。内置页面用一个常驻会话（启动完成就把 `app.html#idle` 载好），
   要显示时把它换进这个 GeckoView 并藏起地址栏，关掉时换回当前标签页——和切换标签页同一条路。页面之间跳转（包括从菜单点任何一项）只改 `#` 后的路由，
   不新建、不销毁窗口 / 视图 / 会话。`idle` 路由是空页面，不轮询。从菜单点进去的页面，页面里的返回和系统返回键都先回菜单。
