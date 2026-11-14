@@ -76,11 +76,21 @@ const shots = [['settings', 'app.html#settings'], ['node', 'app.html#node'], ['f
   ['instances', 'app.html#instances'], ['drawer', 'app.html#instances/p2'], ['import', 'app.html#instances/import'],
   ['exits', 'app.html#exits'], ['addons', 'app.html#addons'], ['diag', 'app.html#diag'], ['history', 'app.html#history'],
   ['settings-adv', 'app.html#settings/adv'], ['settings-ntp', 'app.html#settings/ntp'], ['menu-page', 'app.html#menu'], ['newtab', 'newtab.html#inst=p2']];
+// 规矩（决策 UI-7）：不能有“圆角 + overflow:auto/scroll”的元素，这个组合在安卓模拟器里让 GeckoView 的 GPU 进程卡死。
+// 输入框、文本框本身可滚动且带圆角，以前实测不受影响（run 43574923756），不算在内。返回违规元素的描述。
+const roundScroll = (pg) => pg.evaluate(() => [...document.querySelectorAll('*')].filter((e) => {
+  if (/^(TEXTAREA|INPUT|SELECT)$/.test(e.tagName)) return false;
+  const s = getComputedStyle(e);
+  if (!/auto|scroll/.test(s.overflowX + ' ' + s.overflowY)) return false;
+  return [s.borderTopLeftRadius, s.borderTopRightRadius, s.borderBottomLeftRadius, s.borderBottomRightRadius].some((r) => parseFloat(r) > 0);
+}).map((e) => e.tagName.toLowerCase() + (e.className ? '.' + String(e.className).trim().replace(/\s+/g, '.') : '')));
+const rsBad = [];
 for (const [name, url] of shots) {
   const pg = await ctx.newPage();
   watch(pg, name);
   await pg.goto(base + url);
   await pg.waitForTimeout(700);
+  for (const x of await roundScroll(pg)) rsBad.push(`${name}: ${x}`);
   await pg.screenshot({ path: path.join(out, name + '.png'), fullPage: true });
   await pg.close();
 }
@@ -181,6 +191,7 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
   i = await info();
   let bars = (await calls()).filter((c) => c.p === '/ui/bars').pop()?.b;
   check('对话框打开：页面上报压暗状态栏', i.scrim && bars?.dim === true && bars?.src === 'panel', { ...i, bars });
+  for (const x of await roundScroll(pg)) rsBad.push(`对话框: ${x}`);
   await pg.screenshot({ path: path.join(out, 'flow-dialog.png') });
   await sysBack();
   i = await info();
@@ -334,6 +345,28 @@ if (desk) {
     check(`${end}实例页：login.shop.test 画的是它自己的网页图标，GitHub 仍是品牌图标`, !!c.shop?.img && c.shop.w > 0 && !!c.github && !c.github.img, c);
   }
   await mp.close(); await dctx.close(); dsrv.close();
+}
+check('没有“圆角 + 可滚动”的元素（各页面、对话框）', rsBad.length === 0, rsBad);
+// 矮屏上的“导入邮箱”弹框：弹框自己不滚、不被截断，滚的是外面的遮罩
+{
+  const c = await br.newContext({ viewport: { width: 412, height: 420 }, deviceScaleFactor: 1, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, fixture);
+  const pg = await c.newPage(); watch(pg, 'import-short');
+  await pg.goto(base + 'app.html#instances/import'); await pg.waitForTimeout(700);
+  const r = await pg.evaluate(() => { const sc = document.querySelector('.scrim'), m = document.querySelector('.modal'); if (!sc || !m) return { none: true };
+    const ms = getComputedStyle(m); return { scroll: sc.scrollHeight > sc.clientHeight, scOv: getComputedStyle(sc).overflowY, mOv: ms.overflowY, mH: m.scrollHeight, mCH: m.clientHeight, top: m.getBoundingClientRect().top }; });
+  check('矮屏导入邮箱：遮罩滚动，弹框不滚、不截断、顶边可见', !r.none && r.scroll && r.scOv === 'auto' && r.mOv === 'visible' && r.mH === r.mCH && r.top >= 0, r);
+  for (const x of await roundScroll(pg)) check('矮屏导入邮箱：没有圆角滚动容器', false, x);
+  await pg.screenshot({ path: path.join(out, 'import-short.png') });
+  await c.close();
+}
+// 新标签页的无障碍标签不能和原生头像菜单 / 三点菜单的项重名：模拟器冒烟按无障碍标签找控件，会点到网页里的那个（run 43622971231）
+{
+  const pg = await ctx.newPage(); watch(pg, 'ntp-labels');
+  await pg.goto(base + 'newtab.html#inst=p2'); await pg.waitForTimeout(700);
+  const names = ['节点与出口', '指纹与伪装', '账号与密码', '录入登录', '新建实例', '导入邮箱', '管理实例', '更多选项', '设置', '实例 #'];
+  const hit = await pg.evaluate((ns) => [...document.querySelectorAll('[aria-label]')].map((e) => e.getAttribute('aria-label')).filter((l) => ns.some((n) => l.startsWith(n))), names);
+  check('新标签页的无障碍标签不和原生菜单项重名（伪装概况卡叫“伪装概况”）', hit.length === 0 && await pg.locator('[aria-label="伪装概况"]').count() === 1, hit);
+  await pg.close();
 }
 console.log(flow.join('\n'));
 

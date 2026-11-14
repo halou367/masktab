@@ -571,3 +571,15 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
   - 另一条路是改窗口属性（`SHGetPropertyStoreForWindow` 写 `PKEY_AppUserModel_RelaunchIconResource` / 改 AppUserModelID）：Chromium 自己会按用户目录设置 AppUserModelID 并在窗口创建时写这些属性，外面改了会被覆盖，也会打乱任务栏分组。
   - 现有代码里没有任何任务栏 / AppUserModel / .ico 的实现可以接着做；没有真实 Windows 桌面验证（CI 的 Windows Server 截图看不出任务栏角标是否稳定）。
 - **影响**：任务栏上各实例仍是同一个浏览器图标，要靠窗口里的工具栏头像（M-2）区分。要做的话，比较稳的办法是改内核（在 Chromium 里按 `--fingerprint` 种子 / 实例编号画角标），不是在核心服务里做。
+
+### UI-7 弹框不滚，遮罩滚（“圆角 + overflow 滚动”在模拟器里卡死 GPU，第二次踩到）
+
+- **现象**：分支 `ui/chrome` 第一次推送（7901253）的模拟器冒烟（Android run 43622971231）里，打开“导入邮箱”后 GeckoView 的 GPU 进程卡死被杀（logcat：`Killing GPU process due to IPC reply timeout`），之后每张截图都截不出来，整个脚本超时。
+- **原因**：重写 `ui.css`（UI-1）时，`.dlg`、`.modal`、`.sheet` 又写成了“圆角 + `overflow-y:auto` + `max-height`”。这正是 A-8 里用 run 43574923756 逐项排除定位到的组合，旧 `android/ext/app.css` 里写着这条规矩，但重写时这条注释没有跟过来。
+- **做法**：遮罩 `.scrim` 自己滚（`overflow-y:auto`，纵向 flex），弹框不滚也不限高：`.dlg` / `.modal` 用 `margin:auto` 居中（比屏幕高时 auto 归零、从顶上排，遮罩滚）；`.sheet` 用 `margin-top:auto` 贴底（电脑上 `margin:auto` 居中）。规矩写回 `ui.css` 的注释。
+  全仓库搜过：别的可滚动容器（`.chips`、`.accs`、`.drawer`、`.pnav`、电脑弹窗的 `.insts`）都没有圆角；输入框 / 文本框不算（以前实测不受影响）。
+- **防止第三次**：`preview-pages.mjs` 新增检查：每个预览页面和打开的对话框里不能有“圆角 + overflow:auto/scroll”的元素；矮屏（412×420）上的导入邮箱弹框必须是遮罩滚、弹框本身不滚不截断。用旧的 `ui.css` 跑，这两项都会失败。
+- **同一次 run 里的另两处失败**（不是界面问题，是测试找错了控件 / 参数被吃掉）：
+  - 新标签页的伪装概况卡 `aria-label` 写成了“节点与出口”，和原生头像菜单的项重名；冒烟按无障碍标签找控件时先找到网页里的那个，点的坐标落在菜单的空白处，于是“从头像菜单点开 node”“反复开关 12 轮后”两项失败。卡片改叫“伪装概况”，`preview-pages.mjs` 加检查：新标签页的无障碍标签不能以原生菜单项的名字开头。
+  - `emulator-smoke.sh` 里 `adb shell am start ... --es mt_inst '#1'`：adb 把参数拼成一行交给设备上的 shell，`#1` 被当成注释，`am` 报 `Argument expected after "mt_inst"`，没有切回实例 #1。改成整条命令作为一个字符串传。
+- **下拉刷新（补充 UI-5）**：这次 run 在下拉刷新那一步之前就超时了，所以这项在模拟器上还没真正跑过。顺带放宽了一个条件：Gecko 报“没人接手”（`INPUT_RESULT_UNHANDLED`，整页不能滚的短页面，例如冒烟用的 example.com）时直接算可以下拉，不再要求越界方向里有纵向——这种情况下 Gecko 给的越界方向不一定可靠，按原条件短页面可能永远拉不出刷新。

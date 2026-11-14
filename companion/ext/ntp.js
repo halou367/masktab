@@ -43,7 +43,7 @@ function statCard(st, me, host) {
     : rt.cut || rt.error ? [icon('warn', 18), h('span', { class: 'bad el' }, rt.error || '已断流：' + rt.cut)] : [h('span', { class: 'ic spin' }, icon('refresh', 18)), '出口探测中…'])
     : [icon('globe', 18), '直连'];
   const cell = (big, t, v) => h('div', { class: 'nsc' }, big, h('span', { class: 'nst' }, t), h('span', { class: 'nsv' }, v));
-  return h('button', { class: 'nstat rp', 'aria-label': '节点与出口', onclick: () => host.openNode() },
+  return h('button', { class: 'nstat rp', 'aria-label': '伪装概况', onclick: () => host.openNode() },
     h('div', { class: 'nsh' }, head),
     on && h('div', { class: 'nsg' },
       cell(ringEl(dz.pct, 44), '伪装度', dz.total ? `${dz.pass}/${dz.total} 项一致` : '待判断'),

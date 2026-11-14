@@ -202,6 +202,9 @@ class TouchGecko(ctx: Context) : GeckoView(ctx) {
         val d = detail ?: return false
         if (d.handledResult() == PanZoomController.INPUT_RESULT_HANDLED_CONTENT) return false
         if ((d.scrollableDirections() and PanZoomController.SCROLLABLE_FLAG_TOP) != 0) return false
+        // 没人接手（INPUT_RESULT_UNHANDLED）：页面整个不能滚（短页面，如 example.com），网页也没 preventDefault。
+        // 这时 Gecko 给的越界方向不一定可靠（可能是 0），所以直接算可以下拉，免得短页面永远拉不出刷新（决策 UI-5）。
+        if (d.handledResult() == PanZoomController.INPUT_RESULT_UNHANDLED) return true
         return (d.overscrollDirections() and PanZoomController.OVERSCROLL_FLAG_VERTICAL) != 0
     }
 }

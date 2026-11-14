@@ -156,7 +156,9 @@ if openmenu; then
   else echo "失败：头像菜单里没找到“新建实例”"; fail=1; fi
 else echo "失败：点头像后菜单没有打开（新建实例）"; fail=1; fi
 # 切回实例 #1（实例 id 是核心服务编的，这里按编号 #1 找），后面的检查都按实例 #1；切换后头像的位置不变
-A shell am start -n $ACT --es mt_inst '#1' > /dev/null; sleep 3
+# 注意：adb shell 把参数拼成一行交给设备上的 shell，裸的 #1 会被当成注释吃掉（run 43622971231：Argument expected after "mt_inst"），
+# 所以整条命令作为一个字符串传，'#1' 的引号留给设备上的 shell。
+A shell "am start -n $ACT --es mt_inst '#1'" > /dev/null; sleep 3
 # 三点菜单：点工具栏的“更多选项”打开，点“设置”进设置首页
 n0=$(count "三点菜单已打开"); s0=$(ready settings)
 closepanel
