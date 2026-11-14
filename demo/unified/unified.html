@@ -24,7 +24,7 @@ textarea{resize:vertical;width:100%}
 
 /* ===== demo 外壳（不属于产品界面） ===== */
 .shell{display:grid;grid-template-columns:232px 1fr;grid-template-rows:auto 1fr;height:100vh}
-.sh-top{grid-column:1/3;display:flex;align-items:center;gap:12px;padding:8px 14px;background:var(--bg);border-bottom:1px solid var(--line)}
+.sh-top{grid-column:1/3;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 14px;background:var(--bg);border-bottom:1px solid var(--line)}
 .sh-top b{font-size:14px}
 .sh-side{background:var(--bg);border-right:1px solid var(--line);overflow:auto;padding:8px}
 .sh-side h4{margin:10px 8px 4px;font-size:11px;color:var(--sub);font-weight:600;letter-spacing:.04em}
@@ -204,6 +204,23 @@ textarea{resize:vertical;width:100%}
   .pn .head{padding:12px 14px 8px}
 }
 
+/* ===== 手机精简版用到的几个部件 ===== */
+.box.lite>*+*{border-top:1px solid var(--line)}
+.ln1{display:flex;align-items:center;gap:8px;padding:4px 10px 4px 12px;min-height:48px;font-size:14px}
+.ln1 .lb{display:inline-flex;align-items:center;gap:4px;color:var(--sub);font-size:12px;width:52px;flex:none}
+.avs{display:flex;gap:16px;padding:10px 16px;overflow-x:auto;scrollbar-width:none}
+.av1{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;color:var(--sub);flex:none}
+.tiles{display:flex;justify-content:space-around;padding:6px 8px 10px}
+.tile{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:var(--sub);padding:8px 6px;border-radius:12px;min-width:68px}
+.tile:hover{background:var(--hover)}
+.card.lt{padding:9px 10px;flex-wrap:nowrap;min-height:50px}.card.lt.open{flex-wrap:wrap}
+.card.lt .nm{flex:1 1 0;max-width:none;min-width:0}
+.card .more{flex:1 1 100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:8px;margin-top:2px;cursor:default}
+.fold{display:inline-flex;align-items:center;gap:6px;color:var(--sub);font-weight:600;font-size:13px;padding:4px 2px}
+.note .tag.lt{background:#fef7e0;color:#b06000}[data-theme=dark] .note .tag.lt{background:#3a3320;color:#fdd663}
+.xc .v .mono{font-size:14px}
+.it>.ring{min-width:40px}
+
 </style>
 </head>
 <body>
@@ -260,6 +277,147 @@ const P = {
   shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
 };
 const FLAGS = {"JP": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAOVBMVEW8AC3dfJPMPF7ILFHQTGvuvcjADzn////55urjkaXyzte9BTHqrbvDHEP++fr77/Hst8PmobHXZ4H4lhdsAAAAcUlEQVQ4y9XTuw6AIAyF4XKVclXf/2FNjDF0OMjgwj9/YWgLbZPRkjA4Zhc+YbB0Z8MYHp6efB7BmOgtRQyroQ6aCmEm0Q6hklBBqCXUEHoJPYRm9kUr4QkhS8gQttK70vBmHM1tRkyS/7me+Xtc+hdeTWcZDIhvaeAAAAAASUVORK5CYII=", "US": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAVBAMAAADGNLEtAAAALVBMVEX////GU3LZjKGzGUINM2PsxtAYPWotT3hed5enma46WoBPa46zGkMkR3Jrgp+6ntXWAAAAiklEQVQY02Nwc0lJcQMSxghgw+CRVdaWkVXWooQEGFxaPLxKWjxcGJCBn1fJExAWRAJglUuAKlEEPdyXgA1A0e62LTu9bFt2CopF3iCh9LItKE5yX5tVe31tVgmq9pL0NLcy95RQJMAAdiUQo2ifCQUoKrECY0xgw6CEBWDXLogFYBfECrBahM1JAItMTcEiMDpsAAAAAElFTkSuQmCC", "KR": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAvVBMVEX///8AR6DNLjrt7e6cnJwKCgoaGhrY2NiMjIxAQEB5eXmvr6+8vLyEhIQdQ5IgICCYmJivMUn59vfExMQ6OjrGxsaJiYlkZGReXl5wcHDQR1P55OYMT6TyyczH1ur+/f0RERGVlZWhoaEhISFoiLzZ4/HmvsZnOWx7n84HRZzlk5rOND/FLj3109XOMT3Ozs5HR0ff398zMzMgXqyFNl3dcXmWkrfkjpVKPXvCgpUmYq65zOXIqLuwvtqfudvB4UIoAAABKklEQVQ4y7WTWXeCMBCFmZCEQEBRW8oiKuC+Vbvv//9nFdLIaRPl+GDvS3KG73CTmRvD+D9Zpl4zLb02vHN6aq3nXOkgawfU/fNT06WsjVVuTzjB5PZ36ZpkJA9UczvahXb0s082XbHe2OFONccFpgGtvifLGCH0mFTeDqe5Yo75yCduuUlXSGiVCnOfcuWUlmeH5TLdIqltKsw9vUGsvHI3RrXiypydaPr0QHXWCG0apvMksRYsZmjZAI4fJFfq5bkBnMNsLTmA1wZwALCQGMDHCai6tfEGtVrDo7eWfRz0a/DzaB/rydTkVxUz4o+UyeQFo5mYtTm/B+iP38WsXZqpQbMjzg7pmUwMmR7GtejuyzT6ah59grU8Gqzw9IR7esLPfzNnv8KL6RtMsRLeZtvj3wAAAABJRU5ErkJggg==", "HK": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAVFBMVEXuHCX1eH794+T3mJzyU1rxRUv2io7/////+fn//v7uJC32g4j7vsH5pqn6t7rwOkL81dfzXGL/9PX0bnT3kJX7y8393N3+7e71fYLzY2nwNT35sLPTyISVAAAAmUlEQVQYGe3B13XDMBAEwEXcOyQSzJb679NugBC/9TyDbzeZjieycsIDQUmPBxyrVnwQABS7MPacPe75eWs/zcq188+ccKeTIpdcUeczkxF3JtXK1Znc3xSJBrccRawPoRlXPEaM1aOG1S024YOw+lZWXSrGXgsp+1sOTRiKdMp4SqPHSD94sqRNyAkjYZfZAHjZgme2hH/AL5JVBleYonGCAAAAAElFTkSuQmCC", "CA": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAMAAADImI+JAAAASFBMVEX/////ubn/oqL/Z2f/Jib/09P/7e3/AAD/+/v/Gxv/W1v/rq7/eXn/nZ3/DAz/OTn/AwP/Pj7//Pz/QED/PT3/g4P/xsb/xcWY5npoAAAAkUlEQVQoz43TyQ7DIAxFUQbDNZCx4///aTdt00ohsXdPHIFsGce33E79nO5AvRjhGCxQVYs41fMbpUIVw9MzwHwKk4sA0aUj6IdW7iNAGEobfBfmBbgC3IAld6HKllhEuzDwV6HfjJ+2OPmjrlP5pJKOx5PfsuSTOWZZY61xlWxYiufDuD3eG2FrRpiSEe5+hRcblQ+AegtNbgAAAABJRU5ErkJggg==", "SG": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAPFBMVEXtKTnvRFL5srj3oajvPEryW2fuM0L////2k5vtKjr1hY30doH+6On2lJzzbXjwTlv6wcb7ztL82Nv/9/iW1qa7AAAAe0lEQVQ4y+3RORIDIQxE0Q9IaATMfv+7OnDgyINyu+NXqmo1TijOG3pSicB9DAWZwn6fAi3XCazDNoStPdx0HNRu12OHevRH2OxCSgWaPsJuA/DPD77BZCakkmrRSetimXQKeZtAv6wHl9nXrDUCA1uvSygrFswf/g58AZjBEs/aTMUHAAAAAElFTkSuQmCC", "DE": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAYAgMAAAD16ldTAAAACVBMVEUAAADdAAD/zgDGIigcAAAAFUlEQVQY02NgoBEIhQPqMlfBAVWZANYST7G6bxb2AAAAAElFTkSuQmCC", "GB": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAMAAADImI+JAAAANlBMVEX////w8vfyxcx8jbJCWpAOLHFVa5sBIWnIEC7WTGLnv8qAkLTheYpecqHx0digrMfz3+T21dqBS5WQAAAApUlEQVQoz8WTyxpFMAyEpyqOuhTv/7IntImmurAzC59kfsIIhA5wnn6iASMLgzbIT2Fk6joUaAUKBsiJm+kJ0iyuR1mQBam8Cex1dINkZ6EesSZwrR8JfdYWl7AcbCRw5ypytYmPpy6w3X6jL8HXL6PxOODgTPYEcnXmFe94cuBsdJzwpIFrRwK3WPkJLQqL2aUoUVisXjOvLizWWNyMVljrV0gz/wdhEi0lRIbcAAAAAElFTkSuQmCC", "CN": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAOVBMVEXuHCX3jRL//wDuISPyURvvLCH6ugrwPh7xSRz0ZxjwNyD1ehX+6QP7wgn/+AH5ow793wX3lhHzXBqicYSuAAAAX0lEQVQYGe3BSRKCQBAAweplVgYB//9YY/QMdHgmk7+kxB1janvhhjD5mzvD+XHn3CKbriIJsG3lXMqqOipTMa4MVSegvo5d+KqdC61gwmQ5GyG9E+ALMS0XYhKPR9wHPPwBnsz8tAoAAAAASUVORK5CYII=", "TW": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAPFBMVEX+AAAAAJSAAEqbm9YNDZm2tuH+/v8uLqdOTrQ/P651dcUeHqBtbcHBwebs7PeBAUrn5/Tm5vTT0+3Q0OxOVgUiAAAAaUlEQVQ4y+2RSwqAMAxEq5NpE+vf+9/VunClkgoufQSyeQwkE5obwh1vxdSkMjUi+56+KJ1iGKCdeImJc4zLGfksGhgLhHmJGYeI7B4DchxJuMeIbMBalvseM1XTqmayfFTh1F4JPz817I2ZAvisYi9BAAAAAElFTkSuQmCC"};
+// ===== 手机精简版：组件、图标、颜色、顺序都和电脑一样，只是每块少一层 =====
+// 规则：一行一件事；次要信息收起来，点开才有；手机上没有悬停，所以图标旁留两个字。
+const tyI = (t) => { const e = icon(t === 'res' ? 'home' : 'server', 14); e.classList.add(t === 'res' ? 'good' : 'sub'); e.title = t === 'res' ? '住宅 IP' : '机房 IP'; return e; };
+const SORTS = [['delay', '延迟'], ['score', '纯净'], ['dl', '下载']];
+const autoTg = (on, fn, tip) => h('span', { class: 'row sub', style: { gap: '5px', fontSize: '11.5px', flex: 'none' } }, '自动', tg(on, fn, tip));
+const lab = (ic, t) => h('span', { class: 'lb' }, icon(ic, 15), t);
+const openTg = (id) => set(() => { S.open = S.open === id ? null : id; });
+const fold = (on, label, fn) => h('button', { class: 'fold', onclick: fn }, icon(on ? 'chev' : 'chevR', 15), label);
+
+function pMainLite(ctx, i, sub) {
+  const x = exitsNow(i), id = ident(i), et = sub.kind === 'edgetunnel', out = [];
+  const xd = x ? x.d : ((exitOf(i) || {}).d || 0);
+  out.push(h('div', { class: 'head' }, ctx.dev === 'm' && ibtn('chevL', '返回', go('menu')), h('span', { class: 'dot' }), h('span', { class: 'no' }, '#' + i.no), h('span', { class: 'sub grow el' }, nameOf(i)),
+    x && h('button', { class: dcls(x.d), title: '点一下重新检测出口' }, dtxt(x.d)), tg(i.proxy, () => { i.proxy = !i.proxy; render(); }, '代理开 / 关')));
+  if (!x) out.push(h('div', { class: 'xc' }, h('div', { class: 'v' }, icon('globe'), '直连 · 网站看到本机 IP')));
+  else {
+    const line = (ic, lb, e) => h('div', { class: 'v' }, h('span', { class: 'row sub', style: { gap: '4px', fontSize: '12px', width: lb ? '50px' : 'auto', flex: 'none' } }, icon(ic, 15), lb), flag(e.cc), h('span', { class: 'mono grow el' }, e.ip), tyI(e.t), ring(e.s));
+    out.push(h('div', { class: 'xc' }, x.n.ip === x.cf.ip ? line('globe', '', x.cf) : [line('globe', '普通', x.n), line('cloud', 'CF', x.cf)]));
+  }
+  out.push(h('button', { class: 'idr' + (S.fpOpen ? ' on' : ''), onclick: set(() => { S.fpOpen = !S.fpOpen; S.screen = S.fpOpen ? 'fp' : 'panel'; }) },
+    h('span', {}, icon(ctx.dev === 'm' ? 'phone' : 'device', 16), ctx.dev === 'm' ? 'Android' : 'Windows · ' + i.fp.browser), h('span', {}, icon('clock', 16), id.utc), h('span', {}, icon('lang', 16), id.lang), h('span', { class: 'grow' }), icon(S.fpOpen ? 'chev' : 'chevR', 16)));
+  if (S.fpOpen) out.push(fpLite(ctx, i, id));
+  const node = D.nodes.find((n) => n[0] === i.entry) || D.nodes[0], en = entryOf(i);
+  out.push(h('div', { style: { padding: '0 12px 12px' } }, h('div', { class: 'box lite' },
+    h('div', { class: 'ln1' }, lab('link', '订阅'), h('button', { class: 'row grow', style: { minWidth: 0 }, onclick: set(() => { S.subOpen = !S.subOpen; }) }, h('span', { class: 'el' }, sub.name), subTags(sub)[0], h('span', { class: 'grow' }), h('span', { class: 'sub' }, `${sub.alive}/${sub.total}`), icon('chev', 15)), ibtn('bolt', '测延迟', () => {})),
+    S.subOpen && h('div', {}, D.subs.map((s) => h('button', { class: 'it', onclick: set(() => { i.sub = s.id; S.subOpen = false; if (s.kind === 'generic' && !D.nodes.find((n) => n[0] === i.entry)) i.entry = D.nodes[0][0]; }) },
+      h('span', { class: 'ic on', style: { width: '16px', color: 'var(--accent)' } }, s.id === sub.id && icon('check', 15)), h('span', { class: 'grow el' }, s.name), subTags(s)[0], h('span', { class: 'sub' }, `${s.alive}/${s.total}`))),
+      h('button', { class: 'it sub', onclick: go('m-lines') }, h('span', { style: { width: '16px' } }), icon('list', 15), '添加 / 管理订阅')),
+    et ? [
+      h('div', { class: 'ln1' }, lab('swap', '出口'), i.autoExit
+        ? [h('button', { class: 'row grow', onclick: go('region', { pv: 'region' }) }, flag(i.region), CN[i.region] || '不限', icon('chev', 15)), h('span', { class: dcls(xd) }, dtxt(xd)), ibtn('shuffle', '换一个', () => {})]
+        : [h('button', { class: 'row grow', style: { minWidth: 0 }, onclick: go('exit', { pv: 'exit' }) }, flag((exitOf(i) || {}).cc), h('span', { class: 'mono el' }, i.exit), icon('chevR', 15)), h('span', { class: dcls(xd) }, dtxt(xd))],
+        autoTg(i.autoExit, () => { i.autoExit = !i.autoExit; if (!i.autoExit) i.exit = (exitOf(i) || D.exits[5]).a; render(); }, '自动 = 只定国家')),
+      h('div', { class: 'ln1' }, lab('enter', '入口'), h('button', { class: 'row grow', style: { minWidth: 0 }, disabled: i.autoEntry, onclick: go('entry', { pv: 'entry' }) }, flag(en.cc), h('span', { class: 'mono el' }, en.a), !i.autoEntry && icon('chevR', 15)), h('span', { class: dcls(en.d) }, dtxt(en.d)),
+        autoTg(i.autoEntry, () => { i.autoEntry = !i.autoEntry; if (!i.entry) i.entry = D.entries[1].a; render(); }, '自动 = 跟着出口')),
+    ] : h('div', { class: 'ln1' }, lab('server', '节点'), h('button', { class: 'row grow', style: { minWidth: 0 }, disabled: i.autoEntry, onclick: go('entry', { pv: 'entry' }) }, flag(node[3]), h('span', { class: 'el' }, node[0]), !i.autoEntry && icon('chevR', 15)), h('span', { class: dcls(node[2]) }, dtxt(node[2])),
+      autoTg(i.autoEntry, () => { i.autoEntry = !i.autoEntry; render(); }, '自动 = 挑一个通的')))));
+  return out;
+}
+function fpLite(ctx, i, id) {
+  const f = i.fp;
+  return h('div', { class: 'fp' },
+    h('label', {}, '时区'), h('div', { class: 'row' }, pill(f.tz, [['auto', '跟随出口'], ['fixed', '固定']], (v) => { f.tz = v; render(); }), f.tz === 'fixed' ? h('input', { class: 'grow', value: f.tzFixed || 'Asia/Shanghai', list: 'tzlist' }) : h('span', { class: 'sub el' }, id.tz)),
+    h('label', {}, '语言'), h('div', { class: 'row' }, pill(f.lang, [['auto', '跟随出口'], ['fixed', '固定']], (v) => { f.lang = v; render(); }), f.lang === 'fixed' ? h('input', { class: 'grow', value: f.langFixed || 'zh-CN' }) : h('span', { class: 'sub' }, id.lang)),
+    h('label', {}, '指纹'), h('div', { class: 'row' }, h('span', { class: 'mono grow' }, f.seed), h('button', { class: 'btn', onclick: set(() => { f.seed = Math.floor(Math.random() * 9e8) + 1e8; }) }, icon('refresh', 15), '换一套')),
+    h('div', { class: 'wide' }, fold(S.fpMore, '更多', set(() => { S.fpMore = !S.fpMore; }))),
+    S.fpMore && [
+      h('label', {}, '跟随哪路'), h('div', {}, pill(f.tzSrc, [['n', '普通网站'], ['cf', 'CF 网站']], (v) => { f.tzSrc = v; render(); })),
+      h('label', {}, '伪装项'), h('div', { class: 'tgs' }, Object.keys(f.items).map((k) => h('span', {}, tg(f.items[k], () => { f.items[k] = !f.items[k]; render(); }), k))),
+      h('label', {}, 'CPU 核数'), h('select', {}, ['自动（8）', '4', '6', '8', '12', '16'].map((o) => h('option', {}, o))),
+      ctx.dev === 'm' ? [h('label', {}, '设备'), h('span', { class: 'sub' }, 'Android · Firefox 160（固定，和内核一致）')]
+        : [h('label', {}, '系统'), h('select', {}, ['与本机一致', 'Windows', 'macOS', 'Linux'].map((o) => h('option', {}, o))), h('label', {}, '浏览器'), h('select', {}, ['Chrome', 'Edge'].map((o) => h('option', { selected: o === f.browser }, o)))]],
+    h('div', { class: 'wide sub' }, '重启该实例后生效。'));
+}
+function listTopLite(title, n, sorts) {
+  const cur = sorts.find((s) => s[0] === S.sort) || sorts[0];
+  return h('div', { class: 'top' }, ibtn('back', '返回', go('panel', { pv: 'main' })), h('h1', {}, title), h('span', { class: 'cnt grow' }, n),
+    h('button', { class: 'chip', title: '排序：点一下换一种', onclick: set(() => { const k = sorts.findIndex((s) => s[0] === cur[0]); S.sort = sorts[(k + 1) % sorts.length][0]; }) }, cur[1], icon('chev', 13)),
+    ibtn('plus', '添加地址', set(() => { S.adding = !S.adding; }), S.adding ? 'on' : ''), ibtn('bolt', '测延迟', () => {}));
+}
+const rowLite = (x, on, pick, extra) => h('button', { class: 'it' + (on ? ' on' : '') + (x.d > 0 ? '' : ' dead'), onclick: pick }, flag(x.cc), h('span', { class: 'mono grow el a' }, x.a),
+  x.d > 0 ? [extra, S.sort === 'dl' && x.dl ? h('span', { class: 'd good' }, (x.dl >= 100 ? Math.round(x.dl) : x.dl.toFixed(1)) + ' Mbps') : h('span', { class: 'd ' + dcls(x.d) }, dtxt(x.d))] : h('span', { class: 'sub' }, x.err));
+function pExitLite(ctx, i) {
+  const l = sorted(D.exits.filter((x) => (!S.flt || x.cc === S.flt) && (!S.resOnly || x.t === 'res')));
+  return [listTopLite('出口', `${D.exits.filter((x) => x.d > 0).length} / ${D.exits.length}`, SORTS), addBox(),
+    chips(D.exits, h('button', { class: 'chip' + (S.resOnly ? ' on' : ''), onclick: set(() => { S.resOnly = !S.resOnly; }) }, icon('home', 14), '住宅')),
+    h('div', {}, l.map((x) => rowLite(x, x.a === i.exit && !i.autoExit, set(() => { if (x.d > 0) { i.exit = x.a; i.autoExit = false; i.region = x.cc; S.pv = 'main'; S.screen = 'panel'; } }),
+      [x.dom && h('span', { class: 'tag' }, `${x.dom} IP`), tyI(x.t), ring(x.s)])))];
+}
+function pEntryLite(ctx, i, sub) {
+  if (sub.kind !== 'edgetunnel') {
+    return [h('div', { class: 'top' }, ibtn('back', '返回', go('panel', { pv: 'main' })), h('h1', {}, '节点'), h('span', { class: 'cnt grow' }, `${D.nodes.filter((n) => n[2] > 0).length} / ${D.nodes.length}`), ibtn('bolt', '测延迟', () => {})),
+      h('div', {}, D.nodes.map((n) => h('button', { class: 'it' + (n[0] === i.entry && !i.autoEntry ? ' on' : '') + (n[2] > 0 ? '' : ' dead'), onclick: set(() => { if (n[2] > 0) { i.entry = n[0]; i.autoEntry = false; S.pv = 'main'; S.screen = 'panel'; } }) },
+        flag(n[3]), h('span', { class: 'grow a el' }, n[0]), h('span', { class: 'd ' + dcls(n[2]) }, dtxt(n[2])))))];
+  }
+  const l = sorted(D.entries.filter((x) => (!S.flt || x.cc === S.flt) && (!S.kindFlt || x.k === S.kindFlt)));
+  const kc = (k, ic, t) => h('button', { class: 'chip' + (S.kindFlt === k ? ' on' : ''), onclick: set(() => { S.kindFlt = S.kindFlt === k ? '' : k; }) }, icon(ic, 14), t);
+  return [listTopLite('入口', `${D.entries.filter((x) => x.d > 0).length} / ${D.entries.length}`, [SORTS[0], SORTS[2]]), addBox(),
+    chips(D.entries, [kc('cf', 'cloud', '优选'), kc('rp', 'swap', '反代')]),
+    h('div', {}, l.map((x) => { const e = icon(x.k === 'cf' ? 'cloud' : 'swap', 14); e.classList.add('sub'); return rowLite(x, x.a === i.entry && !i.autoEntry, set(() => { if (x.d > 0) { i.entry = x.a; i.autoEntry = false; S.pv = 'main'; S.screen = 'panel'; } }), e); }))];
+}
+function menuLite(ctx) {
+  const i = me(), x = exitsNow(i), others = D.insts.filter((o) => o.id !== i.id);
+  const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic), h('span', { class: 'grow' }, label), k, icon('chevR', 15));
+  const tile = (ic, t, fn) => h('button', { class: 'tile', onclick: fn }, icon(ic, 22), t);
+  return h('div', { class: 'mn', style: { '--c': i.color } },
+    h('div', { class: 'row', style: { padding: '12px 14px', gap: '12px' } }, ibtn('chevL', '返回', go('newtab')), face(i, false),
+      h('div', { class: 'grow', style: { minWidth: 0 } }, h('div', { class: 'el', style: { fontWeight: 600, fontSize: '15px' } }, `#${i.no}  ${nameOf(i)}`),
+        h('div', { class: 'sub el' }, x ? [h('span', { class: 'mono' }, x.cf.ip), h('b', { class: dcls(x.d) }, ' · ' + dtxt(x.d))] : '直连 · 网站看到真实 IP'))),
+    h('div', { class: 'grp' }, mi('key', '账号与密码', go('m-insts', { drawer: i.id }), i.acct ? h('span', { class: 'k' }, i.acct) : null), mi('globe', '节点与出口', go('panel', { pv: 'main', fpOpen: false }), x && flag(x.cf.cc)), mi('finger', '指纹与时区', go('fp', { pv: 'main', fpOpen: true }), h('span', { class: 'k' }, ident(i).utc))),
+    h('div', { class: 'grp' }, h('div', { class: 'avs' },
+      others.map((o) => h('button', { class: 'av1', onclick: set(() => { S.me = o.id; }) }, face(o, false, true), '#' + o.no)),
+      h('button', { class: 'av1', onclick: () => {} }, h('span', { class: 'face', style: { background: 'var(--card)', color: 'var(--sub)' } }, icon('plus', 18)), '新建'))),
+    h('div', { class: 'grp' }, h('div', { class: 'tiles' }, tile('mail', '导入邮箱', go('m-insts', { importing: true })), tile('layers', '管理', go('m-insts')), tile('gear', '设置', go('m-set')), tile('power', '关闭实例', () => {}))));
+}
+function mInstsLite(ctx) {
+  return [h('h2', {}, icon('layers'), '实例', h('span', { class: 'sub' }, D.insts.length), h('span', { class: 'grow' }), ibtn('mail', '导入邮箱', set(() => { S.importing = true; })), ibtn('plus', '新建伪装实例', () => {}, 'on')),
+    D.insts.map((i) => { const x = exitsNow(i); return h('div', { class: 'card lt' + (i.id === S.me ? ' cur' : ''), style: { '--c': i.color, cursor: 'pointer' }, onclick: (e) => { if (e.target.closest('button')) return; S.drawer = i.id; render(); } },
+      face(i, false, true), h('span', { class: 'nm el' }, `#${i.no}  ${nameOf(i)}`), x ? h('span', { class: dcls(x.d) }, dtxt(x.d)) : h('span', { class: 'sub' }, '直连'),
+      i.running ? ibtn('stop', '关闭（数据保留）', () => {}) : ibtn('play', '打开', () => {})); }),
+    h('div', { class: 'sub', style: { padding: '4px 2px' } }, '点卡片：账号与密码、颜色、删除。长按拖动排序。')];
+}
+function mLinesLite(ctx) {
+  const tabs = [['exit', '出口', D.exits], ['entry', '入口', D.entries], ['other', '其它', D.others]];
+  const cur = tabs.find((t) => t[0] === S.libTab)[2];
+  const inUse = (a) => D.insts.filter((i) => i.proxy && ((S.libTab === 'exit' && !i.autoExit && i.exit === a) || (S.libTab === 'entry' && !i.autoEntry && i.entry === a)));
+  return [h('h2', {}, icon('link'), '订阅', h('span', { class: 'sub' }, D.subs.length), h('span', { class: 'grow' }), ibtn('plus', '添加订阅', set(() => { S.addSub = !S.addSub; }), 'on')),
+    S.addSub && h('div', { class: 'frm' }, h('input', { class: 'grow', placeholder: '订阅地址 https://…（类型自动识别）' }), h('button', { class: 'btn pri', onclick: set(() => { S.addSub = false; }) }, '添加')),
+    D.subs.map((s) => { const on = S.open === s.id; return h('div', { class: 'card lt' + (on ? ' open' : ''), style: { cursor: 'pointer' }, onclick: (e) => { if (e.target.closest('.more')) return; openTg(s.id)(); } },
+      h('span', { class: 'nm el' }, s.name), subTags(s)[0], h('span', { class: 'row', style: { gap: '3px' } }, D.insts.filter((i) => i.sub === s.id).map((i) => h('span', { class: 'dot', style: { '--c': i.color } }))), h('span', { class: 'sub' }, `${s.alive}/${s.total}`), icon(on ? 'chev' : 'chevR', 15),
+      on && h('div', { class: 'more' }, h('span', { class: 'sub grow' }, `${s.age}刷新`), h('button', { class: 'btn' }, icon('bolt', 15), '测延迟'), h('button', { class: 'btn' }, icon('refresh', 15), '刷新'), ibtn('trash', '删除订阅', () => {}, 'danger'))); }),
+    h('h3', {}, icon('globe'), '地址库', h('span', { class: 'grow' }), ibtn('bolt', '全部测延迟', () => {}), ibtn('plus', '导入地址', set(() => { S.adding = !S.adding; }), 'on')),
+    h('div', { style: { marginBottom: '8px' } }, h('span', { class: 'sg' }, tabs.map(([k, t, l]) => h('button', { class: S.libTab === k ? 'on' : '', onclick: set(() => { S.libTab = k; S.open = null; }) }, t, ' ', l.length)))),
+    S.adding && h('div', { style: { marginBottom: '10px' } }, h('textarea', { rows: 3, placeholder: '每行一条：IP、IP:端口、域名、列表网址\n优选还是反代不用区分，自动识别' }),
+      h('div', { class: 'row', style: { marginTop: '6px', justifyContent: 'flex-end' } }, h('button', { class: 'btn', onclick: set(() => { S.adding = false; }) }, '取消'), h('button', { class: 'btn pri', onclick: set(() => { S.adding = false; }) }, '导入'))),
+    cur.map((x) => { const on = S.open === x.a; return h('div', { class: 'card lt' + (on ? ' open' : ''), style: { cursor: 'pointer' }, onclick: (e) => { if (e.target.closest('.more')) return; openTg(x.a)(); } },
+      flag(x.cc), h('span', { class: 'mono el grow', style: { minWidth: 0 } }, x.a), inUse(x.a).map((i) => h('span', { class: 'dot', style: { '--c': i.color }, title: `#${i.no} 在用` })), h('span', { class: dcls(x.d) }, dtxt(x.d)),
+      on && h('div', { class: 'more' }, h('input', { class: 'grow', value: x.note || '', placeholder: '备注' }), x.t && x.d > 0 && tyI(x.t), x.s && x.d > 0 && ring(x.s),
+        x.dom && h('select', { title: '域名重新解析的间隔' }, [1, 3, 6, 12, 24].map((n) => h('option', { selected: n === 3 }, `每 ${n} 小时解析`))), ibtn('trash', '删除', () => {}, 'danger'))); })];
+}
+function mExtLite(ctx) {
+  return [h('h2', {}, icon('puzzle'), '扩展', h('span', { class: 'sub' }, '全部实例共用'), h('span', { class: 'grow' }), ibtn('search', '去 Firefox 扩展商店', () => {}), ibtn('plus', '添加扩展', set(() => { S.adding = !S.adding; }), 'on')),
+    S.adding && h('div', { class: 'frm' }, h('input', { class: 'grow', placeholder: '粘贴扩展商店网址或扩展 ID' }), h('button', { class: 'btn pri', onclick: set(() => { S.adding = false; }) }, '添加')),
+    D.exts.map((x) => { const on = S.open === x.n; return h('div', { class: 'card lt' + (on ? ' open' : ''), style: { cursor: 'pointer' }, onclick: (e) => { if (e.target.closest('.more,.tg')) return; openTg(x.n)(); } },
+      h('span', { class: 'face', style: { '--c': x.c, borderRadius: '8px' } }, x.n[0]), h('span', { class: 'nm el' }, x.n), tg(x.on, () => { x.on = !x.on; render(); }, '启用 / 停用'),
+      on && h('div', { class: 'more' }, pill(x.scope, [['all', '全部实例'], ['sel', '指定实例']], (v) => { x.scope = v; render(); }), pill(x.data, [['shared', '共享'], ['isolated', '独立']], (v) => { x.data = v; render(); }), h('span', { class: 'grow' }), ibtn('gear', '扩展的设置页', () => {}), ibtn('trash', '移除', () => {}, 'danger'))); })];
+}
+function setupLite(st, ker, got, alertBox, why) {
+  const cur = st.all ? ['好了', 100, ''] : st.start ? ['正在启动', 100, ''] : st.verified ? ['下载代理内核', st.miho, 'mihomo · 22 MB'] : st.verify ? ['校验内核', 100, 'SHA-256'] : ['下载浏览器内核', st.pct, `${ker[0]} · ${got} / ${ker[1]} MB`];
+  const n = st.all ? 5 : st.start ? 4 : st.verified ? 3 : st.verify ? 2 : 1;
+  return h('div', { class: 'su', style: { paddingTop: '90px' } },
+    h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', textAlign: 'center' } },
+      h('span', { class: 'face big', style: { '--c': '#1A73E8' } }, icon('mask', 30)), h('div', { style: { fontSize: '18px', fontWeight: 700 } }, 'MaskTab'),
+      h('div', { style: { fontWeight: 600, marginTop: '18px' } }, cur[0], st.all ? '' : `  ${cur[1]}%`), h('div', { class: 'sub' }, cur[2] || '\u00a0')),
+    h('div', { class: 'pb', style: { margin: '10px 8px 0' } }, h('i', { style: { width: cur[1] + '%', background: st.blocked ? 'var(--bad)' : null } })),
+    !st.verify && !st.verified && h('div', { class: 'via', style: { justifyContent: 'center', marginTop: '10px' } }, st.tried.map(([v, r]) => h('span', { class: r === 'ok' ? 'ok' : 'x', title: why[r] || '' }, VIA[v])), st.cur && h('span', { class: 'cur' }, h('span', { class: 'spin' }, icon('refresh', 12)), VIA[st.cur])),
+    alertBox,
+    h('div', { class: 'row', style: { justifyContent: 'center', gap: '6px', marginTop: '22px' } }, [1, 2, 3, 4].map((k) => h('i', { style: { width: k === n ? '18px' : '6px', height: '6px', borderRadius: '9px', background: k <= n ? 'var(--accent)' : 'var(--line)', transition: 'width .2s' } }))),
+    st.all && h('div', { class: 'row', style: { justifyContent: 'center', marginTop: '18px' } }, h('button', { class: 'btn pri', onclick: go('newtab') }, '进入 MaskTab')));
+}
+
 // ===== 小工具（与产品里的 ui.js 同一套：h() 只写 textContent） =====
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -341,11 +499,11 @@ const D = {
   vault: [{ site: '*', user: 'alice@gmail.com', src: '导入', tip: '邮箱账号（任意站点登录时可用）' }, { site: 'GitHub', user: 'alice', src: '自动记住' }, { site: 'X', user: '@alice_k', src: '自动记住' }, { site: 'Discord', user: 'alice@gmail.com', src: '手动' }],
   set: { search: 'https://www.bing.com/search?q=%s', restore: true, subHours: 6, delayUrl: 'https://www.gstatic.com/generate_204', tzDef: 'cf', exitPick: 'unused', path: 'query', ipq: true, tun: '', extData: 'shared', via: 'auto', mirror: '', ports: '7890, 18080' },
 };
-const S = { screen: 'panel', dev: 'both', theme: 'light', me: 'a', pv: 'main', fpOpen: false, subOpen: false, adding: false, flt: '', sort: 'delay', resOnly: false, kindFlt: '', drawer: null, importing: false, libTab: 'exit', addSub: false,
+const S = { screen: 'panel', dev: 'both', theme: 'light', me: 'a', pv: 'main', fpOpen: false, subOpen: false, adding: false, flt: '', sort: 'delay', resOnly: false, kindFlt: '', drawer: null, importing: false, libTab: 'exit', addSub: false, lite: true, pcLite: false, open: null, fpMore: false, advPc: true, advM: false,
   su: { sc: 'mirror', t: 0, proxyOn: false, on: true } };
 const me = () => D.insts.find((i) => i.id === S.me);
 const subOf = (i) => D.subs.find((s) => s.id === i.sub);
-const exitOf = (i) => D.exits.find((e) => e.a === i.exit) || D.exits.filter((e) => e.cc === i.region && e.d > 0).sort((a, b) => a.d - b.d)[0];
+const exitOf = (i) => D.exits.find((e) => e.a === i.exit) || D.exits.filter((e) => (!i.region || e.cc === i.region) && e.d > 0).sort((a, b) => a.d - b.d)[0];
 const entryOf = (i) => D.entries.find((e) => e.a === i.entry) || D.entries[1];
 // 当前实例两路出口（普通网站 / CF 网站）
 function exitsNow(i) {
@@ -361,7 +519,7 @@ function ident(i) {
   const a = TZ[cc] || ['Asia/Shanghai', 'UTC+8', 'zh-CN'];
   return { tz: i.fp.tz === 'fixed' ? i.fp.tzFixed || 'Asia/Shanghai' : a[0], utc: i.fp.tz === 'fixed' ? 'UTC+8' : a[1], lang: i.fp.lang === 'fixed' ? i.fp.langFixed || 'zh-CN' : a[2] };
 }
-const go = (screen, extra) => () => { Object.assign(S, { adding: false, flt: '', kindFlt: '', resOnly: false, importing: false, addSub: false }, extra || {}); S.screen = screen; render(); };
+const go = (screen, extra) => () => { Object.assign(S, { adding: false, flt: '', kindFlt: '', resOnly: false, importing: false, addSub: false, open: null }, extra || {}); S.screen = screen; render(); };
 const set = (fn) => () => { fn(); render(); };
 
 // ===== 实例头像 =====
@@ -374,12 +532,13 @@ const nameOf = (i) => i.name || '伪装实例';
 // ===== 节点与出口面板（电脑：点工具栏按钮弹出；手机：整页。同一份） =====
 function panel(ctx) {
   const i = me(), sub = subOf(i);
-  const v = { main: pMain, region: pRegion, exit: pExit, entry: pEntry }[S.pv] || pMain;
+  const v = (ctx.lite ? { main: pMainLite, region: pRegion, exit: pExitLite, entry: pEntryLite } : { main: pMain, region: pRegion, exit: pExit, entry: pEntry })[S.pv] || pMain;
   return h('div', { class: 'pn', style: { '--c': i.color } }, v(ctx, i, sub));
 }
 function pMain(ctx, i, sub) {
   const x = exitsNow(i), id = ident(i), et = sub.kind === 'edgetunnel';
   const mism = x && x.n.cc !== x.cf.cc;
+  const xd = x ? x.d : ((exitOf(i) || {}).d || 0);
   const out = [];
   out.push(h('div', { class: 'head' },
     ctx.dev === 'm' && ibtn('chevL', '返回', go('menu')),
@@ -411,8 +570,8 @@ function pMain(ctx, i, sub) {
       h('div', { class: 'ln' },
         h('div', { class: 't' }, icon('swap', 15), h('span', { title: '出口 = 反代（ProxyIP）：决定 Cloudflare 上的网站看到哪个 IP' }, '出口'), h('span', { class: 'grow' }), tg(i.autoExit, () => { i.autoExit = !i.autoExit; if (!i.autoExit) i.exit = (exitOf(i) || D.exits[5]).a; render(); }, '自动 = 只定国家，程序在这个国家里挑、不通自动换；手动 = 钉死一个 IP'), '自动'),
         i.autoExit
-          ? h('div', { class: 'c' }, h('button', { class: 'row', title: '选出口国家', onclick: go('region', { pv: 'region' }) }, flag(i.region), CN[i.region] || '不限', icon('chev', 15)), h('span', { class: 'grow' }), h('span', { class: dcls(x.d) }, dtxt(x.d)), h('button', { class: 'btn', title: '在这个国家里换一个出口 IP' }, icon('shuffle', 15), '换一个'))
-          : h('button', { class: 'c', title: '选一个出口 IP', onclick: go('exit', { pv: 'exit' }) }, flag((exitOf(i) || {}).cc), h('span', { class: 'mono grow el' }, i.exit), h('span', { class: dcls(x.d) }, dtxt(x.d)), icon('chevR', 16))),
+          ? h('div', { class: 'c' }, h('button', { class: 'row', title: '选出口国家', onclick: go('region', { pv: 'region' }) }, flag(i.region), CN[i.region] || '不限', icon('chev', 15)), h('span', { class: 'grow' }), h('span', { class: dcls(xd) }, dtxt(xd)), h('button', { class: 'btn', title: '在这个国家里换一个出口 IP' }, icon('shuffle', 15), '换一个'))
+          : h('button', { class: 'c', title: '选一个出口 IP', onclick: go('exit', { pv: 'exit' }) }, flag((exitOf(i) || {}).cc), h('span', { class: 'mono grow el' }, i.exit), h('span', { class: dcls(xd) }, dtxt(xd)), icon('chevR', 16))),
       h('div', { class: 'ln' },
         h('div', { class: 't' }, icon('enter', 15), h('span', { title: '入口 = 优选 IP：你的设备连到 Cloudflare 的哪个地址' }, '入口'), h('span', { class: 'grow' }), tg(i.autoEntry, () => { i.autoEntry = !i.autoEntry; if (!i.entry) i.entry = D.entries[1].a; render(); }, '自动 = 跟着出口（同一台机器能当入口就用它，否则挑延迟最低的）；手动 = 钉死一个'), '自动'),
         h('button', { class: 'c', disabled: i.autoEntry, title: i.autoEntry ? '自动挑的入口' : '选一个入口', onclick: go('entry', { pv: 'entry' }) }, flag(entryOf(i).cc), h('span', { class: 'mono grow el' }, entryOf(i).a), entryOf(i).k === 'rp' && h('span', { class: 'sub', title: '这个入口本身是反代' }, icon('swap', 14)), h('span', { class: dcls(entryOf(i).d) }, dtxt(entryOf(i).d)), !i.autoEntry && icon('chevR', 16))),
@@ -429,6 +588,7 @@ const subTags = (s) => [h('span', { class: 'tag', title: s.kind === 'edgetunnel'
 
 // 指纹与时区：两端字段相同；系统能力不同的项标出来
 function fpForm(ctx, i, id) {
+  if (ctx.lite) return fpLite(ctx, i, id);
   const f = i.fp, m = ctx.dev === 'm';
   const sel = (val, opts) => h('select', {}, opts.map((o) => h('option', { selected: o === val }, o)));
   return h('div', { class: 'fp' },
@@ -451,9 +611,9 @@ const tools = () => [ibtn('down', '测下载速度（当前筛出来的前几个
 const addBox = () => S.adding && h('div', { class: 'addbox' },
   h('textarea', { rows: 3, placeholder: '粘贴地址：IP、IP:端口、域名，后面可加 #备注；CSV 也行\n或者贴列表的网址：https://…/ip.txt\n是优选还是反代不用区分，探测后自动识别' }),
   h('div', { class: 'row', style: { marginTop: '6px' } }, h('span', { class: 'sub grow' }, '添加后自动探测延迟和出口'), h('button', { class: 'btn', onclick: set(() => { S.adding = false; }) }, '取消'), h('button', { class: 'btn pri', onclick: set(() => { S.adding = false; }) }, icon('check', 16), '添加')));
-function chips(items) {
+function chips(items, pre) {
   const m = new Map(); items.filter((x) => x.d > 0).forEach((x) => m.set(x.cc, (m.get(x.cc) || 0) + 1));
-  return h('div', { class: 'chips' }, h('button', { class: 'chip' + (S.flt ? '' : ' on'), onclick: set(() => { S.flt = ''; }) }, '全部 ', items.filter((x) => x.d > 0).length),
+  return h('div', { class: 'chips' }, pre, h('button', { class: 'chip' + (S.flt ? '' : ' on'), onclick: set(() => { S.flt = ''; }) }, '全部 ', items.filter((x) => x.d > 0).length),
     [...m].sort((a, b) => b[1] - a[1]).map(([cc, n]) => h('button', { class: 'chip' + (S.flt === cc ? ' on' : ''), title: CN[cc], onclick: set(() => { S.flt = S.flt === cc ? '' : cc; }) }, flag(cc), n)));
 }
 const sortSeg = (keys) => h('span', { class: 'sg' }, keys.map(([k, t]) => h('button', { class: S.sort === k ? 'on' : '', onclick: set(() => { S.sort = k; }) }, t)));
@@ -497,6 +657,7 @@ function pRegion(ctx, i) {
 
 // ===== 实例菜单（点头像） =====
 function menu(ctx) {
+  if (ctx.lite) return menuLite(ctx);
   const i = me(), x = exitsNow(i), others = D.insts.filter((o) => o.id !== i.id);
   const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic), h('span', { class: 'grow' }, label), k != null && h('span', { class: 'k' }, k));
   return h('div', { class: 'mn', style: { '--c': i.color } },
@@ -513,7 +674,7 @@ function menu(ctx) {
 // ===== 管理页：实例 / 订阅与地址 / 扩展 / 设置（电脑左侧图标栏，手机底部标签栏，同一份） =====
 const MT = [['m-insts', 'layers', '实例'], ['m-lines', 'list', '订阅与地址'], ['m-ext', 'puzzle', '扩展'], ['m-set', 'gear', '设置']];
 function manager(ctx) {
-  const page = { 'm-insts': mInsts, 'm-lines': mLines, 'm-ext': mExt, 'm-set': mSet }[S.screen] || mInsts;
+  const page = (ctx.lite ? { 'm-insts': mInstsLite, 'm-lines': mLinesLite, 'm-ext': mExtLite, 'm-set': mSet } : { 'm-insts': mInsts, 'm-lines': mLines, 'm-ext': mExt, 'm-set': mSet })[S.screen] || mInsts;
   return h('div', { class: 'mg', style: { '--c': me().color } },
     h('div', { class: 'rail' }, MT.map(([id, ic, label]) => h('button', { class: 'ib' + (S.screen === id ? ' on' : ''), title: label, onclick: go(id) }, icon(ic, 22), h('span', { class: 'lb' }, label)))),
     h('div', { class: 'body', 'data-sk': 'mg' }, page(ctx)),
@@ -580,34 +741,37 @@ function mExt(ctx) {
       tg(x.on, () => { x.on = !x.on; render(); }, '启用 / 停用'), ibtn('gear', '扩展的设置页', () => {}), ibtn('trash', '移除', () => {}, 'danger')))];
 }
 function mSet(ctx) {
-  const s = D.set, m = ctx.dev === 'm';
+  const s = D.set, m = ctx.dev === 'm', lite = ctx.lite, advKey = m ? 'advM' : 'advPc';
   const r = (ic, label, ...ctl) => h('div', { class: 'r' }, icon(ic), h('span', {}, label), h('span', { class: 'ctl' }, ctl));
   const P2 = (k, opts) => pill(s[k], opts, (v) => { s[k] = v; render(); });
-  const ker = m ? ['GeckoView（Firefox）', '160.0', '95 MB'] : ['Chromium', '148.0.7778.215', '190 MB'];
-  return [h('h2', {}, icon('gear'), '设置', h('span', { class: 'sub' }, '全局：改一处，全部实例一起改')),
-    h('h3', {}, '通用'),
-    h('div', { class: 'set' }, r('search', '搜索地址（%s 为关键词）', h('input', { class: 'grow', value: s.search })), r('undo', '启动时恢复上次的实例', P2('restore', [[true, '开'], [false, '关']])), r('key', '默认密码', h('span', { class: 'sub' }, '已设置'), ibtn('edit', '修改默认密码', () => {}), h('span', { class: 'sub' }, m ? '加密保存在本机（系统密钥库）' : '加密保存在本机（系统凭据保护）'))),
-    h('h3', {}, '节点与出口'),
-    h('div', { class: 'set' }, r('refresh', '订阅过期时间（小时）', h('input', { type: 'number', value: s.subHours, style: { width: '80px' } })), r('bolt', '测速地址', h('input', { class: 'grow', value: s.delayUrl })),
-      r('clock', '时区默认跟随', P2('tzDef', [['cf', 'CF 站点出口'], ['n', '其他站点出口']])), r('globe', '手动模式下新实例的出口', P2('exitPick', [['unused', '自动挑未占用的'], ['none', '不指定']])),
-      r('swap', 'ProxyIP 的 path 写法', P2('path', [['query', '?proxyip=', '/?proxyip=值&其余参数（默认）'], ['segment', '/proxyip=', '/proxyip=值?其余参数（备选）']])),
-      r('home', '查出口 IP 的类型和纯净度', P2('ipq', [[true, '开', '把出口 IP 发给第三方查询住宅 / 机房和纯净度；结果存 7 天'], [false, '关']])),
-      r('shield', '不受本机 TUN / 系统代理影响', m ? [h('span', { class: 'sub' }, '手机上不需要'), only('仅电脑')] : [P2('tun', [['', '自动绑定物理网卡'], ['off', '关']]), h('span', { class: 'sub' }, '当前：以太网 · 192.168.1.23')])),
-    h('h3', {}, '扩展'),
-    h('div', { class: 'set' }, r('puzzle', '新扩展的数据模式', P2('extData', [['shared', '共享'], ['isolated', '独立']]))),
+  const ker = m ? ['GeckoView', '160.0', '95 MB'] : ['Chromium', '148.0.7778.215', '190 MB'];
+  return [h('h2', {}, icon('gear'), '设置', h('span', { class: 'sub' }, lite ? '全部实例共用' : '全局：改一处，全部实例一起改')),
+    h('div', { class: 'set' }, r('search', '搜索地址', h('input', { class: 'grow', value: s.search, title: '%s 为关键词' })), r('undo', '启动时恢复上次的实例', P2('restore', [[true, '开'], [false, '关']])),
+      r('key', '默认密码', h('span', { class: 'sub' }, '已设置'), ibtn('edit', '修改默认密码', () => {}), !lite && h('span', { class: 'sub' }, m ? '加密保存在本机（系统密钥库）' : '加密保存在本机（系统凭据保护）')),
+      r('refresh', '订阅多久刷新一次', h('input', { type: 'number', value: s.subHours, style: { width: '70px' } }), h('span', { class: 'sub' }, '小时')),
+      r('home', '查出口的类型和纯净度', P2('ipq', [[true, '开', '把出口 IP 发给第三方查询住宅 / 机房和纯净度；结果存 7 天'], [false, '关']]))),
     h('h3', {}, '组件与更新', h('span', { class: 'tag', style: { color: 'var(--good)', borderColor: 'var(--good)' } }, '新')),
-    h('div', { class: 'sub', style: { margin: '-2px 0 8px' } }, '安装包里不带内核：内核是单独的组件，第一次启动时下载，以后只在内核版本变了才重新下。更新 MaskTab 本身用的就是那个小安装包。'),
+    !lite && h('div', { class: 'sub', style: { margin: '-2px 0 8px' } }, '安装包里不带内核：内核是单独的组件，第一次启动时下载，以后只在内核版本变了才重新下。更新 MaskTab 本身用的就是那个小安装包。'),
     h('div', { class: 'set' },
-      r('finger', '浏览器内核', h('span', {}, ker[0], ' ', h('b', {}, ker[1])), h('span', { class: 'sub good row' }, icon('ok', 14), `已安装 · ${ker[2]}`), h('button', { class: 'btn', title: '看有没有新的内核版本' }, icon('refresh', 15), '检查更新'), ibtn('down', '重新下载', go('setup')), ibtn('folder', '从文件导入（没网时用：先在别处下好内核包）', () => {})),
-      r('shield', '代理内核', h('span', {}, 'mihomo ', h('b', {}, 'v1.19.34')), h('span', { class: 'sub good row' }, icon('ok', 14), '运行中 · 22 MB'), ibtn('down', '重新下载', go('setup'))),
-      r('mask', 'MaskTab 本体', h('span', {}, h('b', {}, '0.2.0')), h('span', { class: 'sub' }, m ? '安装包不含内核（预计 20～45 MB）' : '安装包几 MB（不含内核）'), h('button', { class: 'btn' }, icon('refresh', 15), '检查更新')),
-      r('down', '下载途径', P2('via', [['auto', '自动', '直连 → 本机代理 → 镜像，哪条通走哪条'], ['mirror', '只用镜像'], ['proxy', '只用本机代理']]), h('span', { class: 'sub' }, '下载完一律校验 SHA-256，镜像给的文件不对就丢弃')),
-      r('link', '镜像地址前缀', h('input', { class: 'grow', value: s.mirror, placeholder: '留空用内置的几个镜像，例如 https://ghfast.top/' })),
-      r('server', '本机代理端口', h('input', { value: s.ports, style: { width: '130px' } }), h('span', { class: 'sub' }, '下载不动时依次试这些端口；都没开会提示你打开代理'))),
-    h('h3', {}, '同步', h('span', { class: 'tag' }, '规划中')),
-    h('div', { class: 'set' }, r('sync', '电脑和手机同步', h('span', { class: 'sub' }, '未开启'), h('button', { class: 'btn', disabled: true }, '设置同步'))),
-    h('h3', {}, '关于'),
-    h('div', { class: 'set' }, r('info', '诊断信息', h('button', { class: 'btn', onclick: go('diag') }, '查看'), h('span', { class: 'sub' }, m ? '也可以长按右上角头像打开' : '反馈问题时把这段贴给开发者')),
+      r('finger', '浏览器内核', h('span', {}, ker[0], ' ', h('b', {}, ker[1])), h('span', { class: 'sub good row' }, icon('ok', 14), lite ? '已安装' : `已安装 · ${ker[2]}`), h('span', { class: 'grow' }), ibtn('refresh', '检查内核更新', () => {}), !lite && ibtn('down', '重新下载', go('setup')), !lite && ibtn('folder', '从文件导入（没网时用：先在别处下好内核包）', () => {})),
+      r('shield', '代理内核', h('span', {}, 'mihomo ', h('b', {}, 'v1.19.34')), h('span', { class: 'sub good row' }, icon('ok', 14), '运行中'), h('span', { class: 'grow' }), !lite && ibtn('down', '重新下载', go('setup'))),
+      r('mask', 'MaskTab', h('span', {}, h('b', {}, '0.2.0')), !lite && h('span', { class: 'sub' }, '安装包不含内核'), h('span', { class: 'grow' }), ibtn('refresh', '检查更新', () => {})),
+      r('server', '下载用的代理端口', h('input', { value: s.ports, style: { width: '120px' } }), !lite && h('span', { class: 'sub' }, '下载不动时依次试这些端口；都没开会提示你打开代理'))),
+    h('div', { style: { margin: '14px 0 8px' } }, fold(S[advKey], '高级', set(() => { S[advKey] = !S[advKey]; }))),
+    S[advKey] && h('div', { class: 'set' },
+      r('bolt', '测速地址', h('input', { class: 'grow', value: s.delayUrl })),
+      r('clock', '时区默认跟随', P2('tzDef', [['cf', 'CF 站点出口'], ['n', '其他站点出口']])),
+      r('globe', '手动模式下新实例的出口', P2('exitPick', [['unused', '自动挑未占用的'], ['none', '不指定']])),
+      r('swap', 'ProxyIP 的 path 写法', P2('path', [['query', '?proxyip=', '/?proxyip=值&其余参数（默认）'], ['segment', '/proxyip=', '/proxyip=值?其余参数（备选）']])),
+      r('puzzle', '新扩展的数据模式', P2('extData', [['shared', '共享'], ['isolated', '独立']])),
+      r('down', '内核下载途径', P2('via', [['auto', '自动', '直连 → 本机代理 → 镜像，哪条通走哪条'], ['mirror', '只用镜像'], ['proxy', '只用代理']]), !lite && h('span', { class: 'sub' }, '下载完一律校验 SHA-256')),
+      r('link', '镜像地址前缀', h('input', { class: 'grow', value: s.mirror, placeholder: '留空用内置镜像，例如 https://ghfast.top/' })),
+      lite && r('folder', '内核', h('button', { class: 'btn', onclick: go('setup') }, icon('down', 15), '重新下载'), h('button', { class: 'btn' }, icon('folder', 15), '从文件导入')),
+      !m && r('shield', '不受本机 TUN / 系统代理影响', P2('tun', [['', '自动绑定物理网卡'], ['off', '关']]), h('span', { class: 'sub' }, '当前：以太网 · 192.168.1.23'), only('仅电脑')),
+      m && !lite && r('shield', '不受本机 TUN / 系统代理影响', h('span', { class: 'sub' }, '手机上不需要'), only('仅电脑'))),
+    h('div', { class: 'set', style: { marginTop: '14px' } },
+      r('sync', '电脑和手机同步', h('span', { class: 'tag' }, '规划中')),
+      r('info', '诊断信息', h('button', { class: 'btn', onclick: go('diag') }, '查看')),
       !m && r('power', '退出 MaskTab', ibtn('power', '关闭全部实例并退出（下次启动会恢复）', () => {}, 'danger'), only('仅电脑')))];
 }
 
@@ -640,6 +804,11 @@ function setup(ctx) {
   const why = { stall: '25 秒没有数据', bad: '连不上', none: '端口没有在监听' };
   const k1 = st.done ? 'ok' : st.blocked ? 'bad' : 'run';
   const got = Math.round(ker[1] * st.pct / 100);
+  const alertBox = st.blocked && h('div', { class: 'alert' }, h('b', {}, icon('warn', 16), '内核下载不下来'),
+        h('div', {}, '直连和镜像都不通，本机 ', h('b', { style: { display: 'inline' } }, '7890'), ' 和 ', h('b', { style: { display: 'inline' } }, '18080'), ' 端口上也没有代理在运行。已下好 ' + got + ' MB。'),
+        h('div', { style: { margin: '4px 0 10px' } }, '请打开你的代理软件（端口 7890 或 18080），然后点“重试”。已经下好的部分会保留，接着下。'),
+        h('div', { class: 'row', style: { flexWrap: 'wrap' } }, h('button', { class: 'btn pri', onclick: set(() => { u.t = 0; u.on = true; u.px = u.proxyOn; }) }, icon('refresh', 16), '重试'), h('button', { class: 'btn', title: '换一个镜像地址前缀' }, icon('link', 16), '换镜像'), h('button', { class: 'btn', title: '代理用的是别的端口' }, icon('server', 16), '改端口'), h('button', { class: 'btn', title: '没网时用：先在别处下好内核包，再选它' }, icon('folder', 16), '从文件导入')));
+  if (ctx.lite) return setupLite(st, ker, got, alertBox, why);
   return h('div', { class: 'su' },
     h('div', { class: 'logo' }, h('span', { class: 'face', style: { '--c': '#1A73E8' } }, icon('mask', 18)), 'MaskTab'),
     h('div', { class: 'sub', style: { marginBottom: '10px' } }, '第一次启动要准备两个组件。安装包里不带它们，所以安装包很小；以后更新 MaskTab 也不用重新下。'),
@@ -649,10 +818,7 @@ function setup(ctx) {
       h('div', { class: 'pb' }, h('i', { style: { width: st.pct + '%' } })),
       h('div', { class: 'via' }, st.tried.map(([v, r]) => h('span', { class: r === 'ok' ? 'ok' : 'x', title: why[r] || '' }, VIA[v])), st.cur && h('span', { class: 'cur' }, h('span', { class: 'spin' }, icon('refresh', 12)), VIA[st.cur]),
         st.cur && st.tried.filter(([, r]) => r !== 'ok').slice(-1).map(([v, r]) => h('span', { style: { border: 0, textDecoration: 'none' } }, `${VIA[v]}：${why[r]}，换下一条`))),
-      st.blocked && h('div', { class: 'alert' }, h('b', {}, icon('warn', 16), '内核下载不下来'),
-        h('div', {}, '直连和镜像都不通，本机 ', h('b', { style: { display: 'inline' } }, '7890'), ' 和 ', h('b', { style: { display: 'inline' } }, '18080'), ' 端口上也没有代理在运行。已下好 ' + got + ' MB。'),
-        h('div', { style: { margin: '4px 0 10px' } }, '请打开你的代理软件（端口 7890 或 18080），然后点“重试”。已经下好的部分会保留，接着下。'),
-        h('div', { class: 'row', style: { flexWrap: 'wrap' } }, h('button', { class: 'btn pri', onclick: set(() => { u.t = 0; u.on = true; u.px = u.proxyOn; }) }, icon('refresh', 16), '重试'), h('button', { class: 'btn', title: '换一个镜像地址前缀' }, icon('link', 16), '换镜像'), h('button', { class: 'btn', title: '代理用的是别的端口' }, icon('server', 16), '改端口'), h('button', { class: 'btn', title: '没网时用：先在别处下好内核包，再选它' }, icon('folder', 16), '从文件导入')))),
+      alertBox),
     step(st.verified ? 'ok' : st.verify ? 'run' : 'wait', '校验并解压', h('div', { class: 'sub' }, st.verified ? 'SHA-256 一致' : '下载完校验 SHA-256，镜像给的文件不对就丢弃重下')),
     step(st.miho >= 100 ? 'ok' : st.miho > 0 || st.verified ? 'run' : 'wait', '下载代理内核 · mihomo v1.19.34', st.verified && h('div', { class: 'pb', style: { marginTop: '6px' } }, h('i', { style: { width: st.miho + '%' } })), !st.verified && h('div', { class: 'sub' }, '22 MB，途径同上')),
     step(st.all ? 'ok' : st.start ? 'run' : 'wait', '启动', h('div', { class: 'sub' }, st.all ? '好了。' : '加载内置扩展、启动代理内核、打开实例')),
@@ -689,11 +855,11 @@ function pcFrame() {
       h('span', { class: 'tb', title: '扩展' }, icon('puzzle', 17)),
       h('button', { class: 'tb' + (s === 'menu' ? ' on' : ''), title: '实例菜单', onclick: go(s === 'menu' ? 'newtab' : 'menu') }, h('span', { class: 'av' }, i.no)), h('span', { class: 'tb' }, icon('more', 17))),
     h('div', { class: 'view' }, mgr ? h('div', { class: 'full' }, manager(ctx)) : h('div', { class: 'full' }, newtab(ctx)),
-      POP[s] === 'menu' && h('div', { class: 'pop menu', 'data-sk': 'pcm' }, menu(ctx)), POP[s] === 'panel' && h('div', { class: 'pop', 'data-sk': 'pcp' }, panel(ctx)),
+      POP[s] === 'menu' && h('div', { class: 'pop menu', 'data-sk': 'pcm' }, menu(ctx)), POP[s] === 'panel' && h('div', { class: 'pop', 'data-sk': 'pcp' }, panel({ dev: 'pc', lite: S.pcLite })),
       s === 'diag' && h('div', { class: 'dim' }, diag(ctx))));
 }
 function phFrame() {
-  const i = me(), ctx = { dev: 'm' }, s = S.screen, mgr = s.startsWith('m-');
+  const i = me(), ctx = { dev: 'm', lite: S.lite }, s = S.screen, mgr = s.startsWith('m-');
   const bar = s === 'newtab' || s === 'diag';
   return h('div', { class: 'ph' }, h('div', { class: 'scr', style: { '--c': i.color } },
     h('div', { class: 'st' }, h('span', {}, '9:41'), h('span', { class: 'row', style: { gap: '4px' } }, icon('shield', 13), '5G')),
@@ -724,16 +890,30 @@ const NOTES = {
   'm-set': ['设置 · 组件与更新', [['', '设置项两端对齐、同样分组；只有一端有的项用灰色小标签标出。'], ['new', '“组件与更新”：内核版本、检查更新、重新下载、从文件导入；下载途径、镜像前缀、本机代理端口（默认 7890, 18080）。']]],
   diag: ['诊断信息', [['', '手机已有（0.1.13），电脑补上同样的窗口。新增一段“组件下载”记录。']]],
 };
+const LITE = {
+  setup: '只显示当前这一步和一根进度条；出问题时的提示和按钮与电脑相同。',
+  menu: '顶部一行；其它实例变成一排头像，点头像就切换；底部四个图标。',
+  panel: '两路出口各一行（相同时只有一行）；订阅、出口、入口各一行；底部按钮去掉（菜单里有）。',
+  fp: '常用的三项直接显示，其余收进“更多”。',
+  exit: '一行一个地址，类型用图标表示；排序是一个按钮，点一下换一种；测下载合并进“下载”排序。',
+  entry: '一行一个地址；优选 / 反代的筛选和国家排在同一行。',
+  'm-insts': '卡片只留头像、名称、延迟、开关；其余点开卡片看。',
+  'm-lines': '订阅和地址都是一行，点一下才展开操作；输入框点“+”才出现。',
+  'm-ext': '一行一个扩展，只留开关；范围和数据模式点开看。',
+  'm-set': '不常改的收进“高级”。这一组两端都有：电脑默认展开，手机默认收起。',
+};
 function shell() {
   const [title, items] = NOTES[S.screen];
   const su = S.screen === 'setup';
   return h('div', { class: 'shell' },
-    h('div', { class: 'sh-top' }, h('b', {}, 'MaskTab 双端统一界面 · demo'), h('span', { class: 'sub grow' }, '假数据，可以点。左边选页面；电脑和手机画的是同一份界面。'),
+    h('div', { class: 'sh-top' }, h('b', {}, 'MaskTab 双端统一界面 · demo'), h('span', { class: 'sub grow' }, '假数据，可以点。左边选页面。'),
+      S.dev !== 'm' && h('span', { class: 'seg', title: '电脑上的节点面板要不要也用精简版' }, [[false, '电脑面板原样'], [true, '电脑面板同手机']].map(([k, t]) => h('button', { class: S.pcLite === k ? 'on' : '', onclick: set(() => { S.pcLite = k; }) }, t))),
+      S.dev !== 'pc' && h('span', { class: 'seg', title: '手机界面的密度' }, [[true, '手机精简'], [false, '手机与电脑相同']].map(([k, t]) => h('button', { class: S.lite === k ? 'on' : '', onclick: set(() => { S.lite = k; }) }, t))),
       h('span', { class: 'seg' }, [['both', '并排'], ['pc', '电脑'], ['m', '手机']].map(([k, t]) => h('button', { class: S.dev === k ? 'on' : '', onclick: set(() => { S.dev = k; }) }, t))),
       h('button', { class: 'btn', title: '浅色 / 深色', onclick: set(() => { S.theme = S.theme === 'light' ? 'dark' : 'light'; }) }, icon('moon', 15), S.theme === 'light' ? '深色' : '浅色')),
     h('div', { class: 'sh-side' }, SCREENS.map(([g, l]) => [h('h4', {}, g), l.map(([id, t]) => h('button', { class: 's' + (S.screen === id ? ' on' : ''), onclick: go(id, id === 'fp' ? { pv: 'main', fpOpen: true } : id === 'panel' ? { pv: 'main', fpOpen: false } : ['exit', 'entry', 'region'].includes(id) ? { pv: id, me: id === 'region' || id === 'exit' ? 'a' : S.me } : id === 'm-insts' ? { drawer: null } : {}) }, t))])),
     h('div', { class: 'sh-main', 'data-sk': 'main' },
-      h('div', { class: 'note' }, h('b', {}, title), h('ul', {}, items.map(([k, t]) => h('li', {}, h('span', { class: 'tag' + (k ? ' new' : '') }, k ? '新增' : '统一'), t))),
+      h('div', { class: 'note' }, h('b', {}, title), h('ul', {}, items.map(([k, t]) => h('li', {}, h('span', { class: 'tag' + (k ? ' new' : '') }, k ? '新增' : '统一'), t)), S.lite && LITE[S.screen] && h('li', {}, h('span', { class: 'tag lt' }, '手机精简'), LITE[S.screen])),
         su && h('div', { class: 'demo-ctl' }, h('span', { class: 'sub' }, '演示情形：'), h('span', { class: 'seg' }, [['ok', '直连正常'], ['mirror', '直连不通 → 镜像'], ['blocked', '全都不通 → 提示开代理']].map(([k, t]) => h('button', { class: S.su.sc === k ? 'on' : '', onclick: set(() => { S.su = { sc: k, t: 0, proxyOn: false, px: false, on: true }; }) }, t))),
           h('button', { class: 'btn', onclick: set(() => { S.su.t = 0; S.su.on = true; S.su.px = false; }) }, icon('refresh', 14), '重播'),
           S.su.sc === 'blocked' && h('button', { class: 'btn' + (S.su.proxyOn ? ' soft' : ''), onclick: set(() => { S.su.proxyOn = !S.su.proxyOn; }) }, icon('server', 14), S.su.proxyOn ? '已模拟：7890 代理开着，现在点窗口里的“重试”' : '模拟：我打开了 7890 代理'))),

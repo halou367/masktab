@@ -79,11 +79,11 @@ const D = {
   vault: [{ site: '*', user: 'alice@gmail.com', src: '导入', tip: '邮箱账号（任意站点登录时可用）' }, { site: 'GitHub', user: 'alice', src: '自动记住' }, { site: 'X', user: '@alice_k', src: '自动记住' }, { site: 'Discord', user: 'alice@gmail.com', src: '手动' }],
   set: { search: 'https://www.bing.com/search?q=%s', restore: true, subHours: 6, delayUrl: 'https://www.gstatic.com/generate_204', tzDef: 'cf', exitPick: 'unused', path: 'query', ipq: true, tun: '', extData: 'shared', via: 'auto', mirror: '', ports: '7890, 18080' },
 };
-const S = { screen: 'panel', dev: 'both', theme: 'light', me: 'a', pv: 'main', fpOpen: false, subOpen: false, adding: false, flt: '', sort: 'delay', resOnly: false, kindFlt: '', drawer: null, importing: false, libTab: 'exit', addSub: false,
+const S = { screen: 'panel', dev: 'both', theme: 'light', me: 'a', pv: 'main', fpOpen: false, subOpen: false, adding: false, flt: '', sort: 'delay', resOnly: false, kindFlt: '', drawer: null, importing: false, libTab: 'exit', addSub: false, lite: true, pcLite: false, open: null, fpMore: false, advPc: true, advM: false,
   su: { sc: 'mirror', t: 0, proxyOn: false, on: true } };
 const me = () => D.insts.find((i) => i.id === S.me);
 const subOf = (i) => D.subs.find((s) => s.id === i.sub);
-const exitOf = (i) => D.exits.find((e) => e.a === i.exit) || D.exits.filter((e) => e.cc === i.region && e.d > 0).sort((a, b) => a.d - b.d)[0];
+const exitOf = (i) => D.exits.find((e) => e.a === i.exit) || D.exits.filter((e) => (!i.region || e.cc === i.region) && e.d > 0).sort((a, b) => a.d - b.d)[0];
 const entryOf = (i) => D.entries.find((e) => e.a === i.entry) || D.entries[1];
 // 当前实例两路出口（普通网站 / CF 网站）
 function exitsNow(i) {
@@ -99,7 +99,7 @@ function ident(i) {
   const a = TZ[cc] || ['Asia/Shanghai', 'UTC+8', 'zh-CN'];
   return { tz: i.fp.tz === 'fixed' ? i.fp.tzFixed || 'Asia/Shanghai' : a[0], utc: i.fp.tz === 'fixed' ? 'UTC+8' : a[1], lang: i.fp.lang === 'fixed' ? i.fp.langFixed || 'zh-CN' : a[2] };
 }
-const go = (screen, extra) => () => { Object.assign(S, { adding: false, flt: '', kindFlt: '', resOnly: false, importing: false, addSub: false }, extra || {}); S.screen = screen; render(); };
+const go = (screen, extra) => () => { Object.assign(S, { adding: false, flt: '', kindFlt: '', resOnly: false, importing: false, addSub: false, open: null }, extra || {}); S.screen = screen; render(); };
 const set = (fn) => () => { fn(); render(); };
 
 // ===== 实例头像 =====
@@ -112,12 +112,13 @@ const nameOf = (i) => i.name || '伪装实例';
 // ===== 节点与出口面板（电脑：点工具栏按钮弹出；手机：整页。同一份） =====
 function panel(ctx) {
   const i = me(), sub = subOf(i);
-  const v = { main: pMain, region: pRegion, exit: pExit, entry: pEntry }[S.pv] || pMain;
+  const v = (ctx.lite ? { main: pMainLite, region: pRegion, exit: pExitLite, entry: pEntryLite } : { main: pMain, region: pRegion, exit: pExit, entry: pEntry })[S.pv] || pMain;
   return h('div', { class: 'pn', style: { '--c': i.color } }, v(ctx, i, sub));
 }
 function pMain(ctx, i, sub) {
   const x = exitsNow(i), id = ident(i), et = sub.kind === 'edgetunnel';
   const mism = x && x.n.cc !== x.cf.cc;
+  const xd = x ? x.d : ((exitOf(i) || {}).d || 0);
   const out = [];
   out.push(h('div', { class: 'head' },
     ctx.dev === 'm' && ibtn('chevL', '返回', go('menu')),
@@ -149,8 +150,8 @@ function pMain(ctx, i, sub) {
       h('div', { class: 'ln' },
         h('div', { class: 't' }, icon('swap', 15), h('span', { title: '出口 = 反代（ProxyIP）：决定 Cloudflare 上的网站看到哪个 IP' }, '出口'), h('span', { class: 'grow' }), tg(i.autoExit, () => { i.autoExit = !i.autoExit; if (!i.autoExit) i.exit = (exitOf(i) || D.exits[5]).a; render(); }, '自动 = 只定国家，程序在这个国家里挑、不通自动换；手动 = 钉死一个 IP'), '自动'),
         i.autoExit
-          ? h('div', { class: 'c' }, h('button', { class: 'row', title: '选出口国家', onclick: go('region', { pv: 'region' }) }, flag(i.region), CN[i.region] || '不限', icon('chev', 15)), h('span', { class: 'grow' }), h('span', { class: dcls(x.d) }, dtxt(x.d)), h('button', { class: 'btn', title: '在这个国家里换一个出口 IP' }, icon('shuffle', 15), '换一个'))
-          : h('button', { class: 'c', title: '选一个出口 IP', onclick: go('exit', { pv: 'exit' }) }, flag((exitOf(i) || {}).cc), h('span', { class: 'mono grow el' }, i.exit), h('span', { class: dcls(x.d) }, dtxt(x.d)), icon('chevR', 16))),
+          ? h('div', { class: 'c' }, h('button', { class: 'row', title: '选出口国家', onclick: go('region', { pv: 'region' }) }, flag(i.region), CN[i.region] || '不限', icon('chev', 15)), h('span', { class: 'grow' }), h('span', { class: dcls(xd) }, dtxt(xd)), h('button', { class: 'btn', title: '在这个国家里换一个出口 IP' }, icon('shuffle', 15), '换一个'))
+          : h('button', { class: 'c', title: '选一个出口 IP', onclick: go('exit', { pv: 'exit' }) }, flag((exitOf(i) || {}).cc), h('span', { class: 'mono grow el' }, i.exit), h('span', { class: dcls(xd) }, dtxt(xd)), icon('chevR', 16))),
       h('div', { class: 'ln' },
         h('div', { class: 't' }, icon('enter', 15), h('span', { title: '入口 = 优选 IP：你的设备连到 Cloudflare 的哪个地址' }, '入口'), h('span', { class: 'grow' }), tg(i.autoEntry, () => { i.autoEntry = !i.autoEntry; if (!i.entry) i.entry = D.entries[1].a; render(); }, '自动 = 跟着出口（同一台机器能当入口就用它，否则挑延迟最低的）；手动 = 钉死一个'), '自动'),
         h('button', { class: 'c', disabled: i.autoEntry, title: i.autoEntry ? '自动挑的入口' : '选一个入口', onclick: go('entry', { pv: 'entry' }) }, flag(entryOf(i).cc), h('span', { class: 'mono grow el' }, entryOf(i).a), entryOf(i).k === 'rp' && h('span', { class: 'sub', title: '这个入口本身是反代' }, icon('swap', 14)), h('span', { class: dcls(entryOf(i).d) }, dtxt(entryOf(i).d)), !i.autoEntry && icon('chevR', 16))),
@@ -167,6 +168,7 @@ const subTags = (s) => [h('span', { class: 'tag', title: s.kind === 'edgetunnel'
 
 // 指纹与时区：两端字段相同；系统能力不同的项标出来
 function fpForm(ctx, i, id) {
+  if (ctx.lite) return fpLite(ctx, i, id);
   const f = i.fp, m = ctx.dev === 'm';
   const sel = (val, opts) => h('select', {}, opts.map((o) => h('option', { selected: o === val }, o)));
   return h('div', { class: 'fp' },
@@ -189,9 +191,9 @@ const tools = () => [ibtn('down', '测下载速度（当前筛出来的前几个
 const addBox = () => S.adding && h('div', { class: 'addbox' },
   h('textarea', { rows: 3, placeholder: '粘贴地址：IP、IP:端口、域名，后面可加 #备注；CSV 也行\n或者贴列表的网址：https://…/ip.txt\n是优选还是反代不用区分，探测后自动识别' }),
   h('div', { class: 'row', style: { marginTop: '6px' } }, h('span', { class: 'sub grow' }, '添加后自动探测延迟和出口'), h('button', { class: 'btn', onclick: set(() => { S.adding = false; }) }, '取消'), h('button', { class: 'btn pri', onclick: set(() => { S.adding = false; }) }, icon('check', 16), '添加')));
-function chips(items) {
+function chips(items, pre) {
   const m = new Map(); items.filter((x) => x.d > 0).forEach((x) => m.set(x.cc, (m.get(x.cc) || 0) + 1));
-  return h('div', { class: 'chips' }, h('button', { class: 'chip' + (S.flt ? '' : ' on'), onclick: set(() => { S.flt = ''; }) }, '全部 ', items.filter((x) => x.d > 0).length),
+  return h('div', { class: 'chips' }, pre, h('button', { class: 'chip' + (S.flt ? '' : ' on'), onclick: set(() => { S.flt = ''; }) }, '全部 ', items.filter((x) => x.d > 0).length),
     [...m].sort((a, b) => b[1] - a[1]).map(([cc, n]) => h('button', { class: 'chip' + (S.flt === cc ? ' on' : ''), title: CN[cc], onclick: set(() => { S.flt = S.flt === cc ? '' : cc; }) }, flag(cc), n)));
 }
 const sortSeg = (keys) => h('span', { class: 'sg' }, keys.map(([k, t]) => h('button', { class: S.sort === k ? 'on' : '', onclick: set(() => { S.sort = k; }) }, t)));
@@ -235,6 +237,7 @@ function pRegion(ctx, i) {
 
 // ===== 实例菜单（点头像） =====
 function menu(ctx) {
+  if (ctx.lite) return menuLite(ctx);
   const i = me(), x = exitsNow(i), others = D.insts.filter((o) => o.id !== i.id);
   const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic), h('span', { class: 'grow' }, label), k != null && h('span', { class: 'k' }, k));
   return h('div', { class: 'mn', style: { '--c': i.color } },
@@ -251,7 +254,7 @@ function menu(ctx) {
 // ===== 管理页：实例 / 订阅与地址 / 扩展 / 设置（电脑左侧图标栏，手机底部标签栏，同一份） =====
 const MT = [['m-insts', 'layers', '实例'], ['m-lines', 'list', '订阅与地址'], ['m-ext', 'puzzle', '扩展'], ['m-set', 'gear', '设置']];
 function manager(ctx) {
-  const page = { 'm-insts': mInsts, 'm-lines': mLines, 'm-ext': mExt, 'm-set': mSet }[S.screen] || mInsts;
+  const page = (ctx.lite ? { 'm-insts': mInstsLite, 'm-lines': mLinesLite, 'm-ext': mExtLite, 'm-set': mSet } : { 'm-insts': mInsts, 'm-lines': mLines, 'm-ext': mExt, 'm-set': mSet })[S.screen] || mInsts;
   return h('div', { class: 'mg', style: { '--c': me().color } },
     h('div', { class: 'rail' }, MT.map(([id, ic, label]) => h('button', { class: 'ib' + (S.screen === id ? ' on' : ''), title: label, onclick: go(id) }, icon(ic, 22), h('span', { class: 'lb' }, label)))),
     h('div', { class: 'body', 'data-sk': 'mg' }, page(ctx)),
@@ -318,34 +321,37 @@ function mExt(ctx) {
       tg(x.on, () => { x.on = !x.on; render(); }, '启用 / 停用'), ibtn('gear', '扩展的设置页', () => {}), ibtn('trash', '移除', () => {}, 'danger')))];
 }
 function mSet(ctx) {
-  const s = D.set, m = ctx.dev === 'm';
+  const s = D.set, m = ctx.dev === 'm', lite = ctx.lite, advKey = m ? 'advM' : 'advPc';
   const r = (ic, label, ...ctl) => h('div', { class: 'r' }, icon(ic), h('span', {}, label), h('span', { class: 'ctl' }, ctl));
   const P2 = (k, opts) => pill(s[k], opts, (v) => { s[k] = v; render(); });
-  const ker = m ? ['GeckoView（Firefox）', '160.0', '95 MB'] : ['Chromium', '148.0.7778.215', '190 MB'];
-  return [h('h2', {}, icon('gear'), '设置', h('span', { class: 'sub' }, '全局：改一处，全部实例一起改')),
-    h('h3', {}, '通用'),
-    h('div', { class: 'set' }, r('search', '搜索地址（%s 为关键词）', h('input', { class: 'grow', value: s.search })), r('undo', '启动时恢复上次的实例', P2('restore', [[true, '开'], [false, '关']])), r('key', '默认密码', h('span', { class: 'sub' }, '已设置'), ibtn('edit', '修改默认密码', () => {}), h('span', { class: 'sub' }, m ? '加密保存在本机（系统密钥库）' : '加密保存在本机（系统凭据保护）'))),
-    h('h3', {}, '节点与出口'),
-    h('div', { class: 'set' }, r('refresh', '订阅过期时间（小时）', h('input', { type: 'number', value: s.subHours, style: { width: '80px' } })), r('bolt', '测速地址', h('input', { class: 'grow', value: s.delayUrl })),
-      r('clock', '时区默认跟随', P2('tzDef', [['cf', 'CF 站点出口'], ['n', '其他站点出口']])), r('globe', '手动模式下新实例的出口', P2('exitPick', [['unused', '自动挑未占用的'], ['none', '不指定']])),
-      r('swap', 'ProxyIP 的 path 写法', P2('path', [['query', '?proxyip=', '/?proxyip=值&其余参数（默认）'], ['segment', '/proxyip=', '/proxyip=值?其余参数（备选）']])),
-      r('home', '查出口 IP 的类型和纯净度', P2('ipq', [[true, '开', '把出口 IP 发给第三方查询住宅 / 机房和纯净度；结果存 7 天'], [false, '关']])),
-      r('shield', '不受本机 TUN / 系统代理影响', m ? [h('span', { class: 'sub' }, '手机上不需要'), only('仅电脑')] : [P2('tun', [['', '自动绑定物理网卡'], ['off', '关']]), h('span', { class: 'sub' }, '当前：以太网 · 192.168.1.23')])),
-    h('h3', {}, '扩展'),
-    h('div', { class: 'set' }, r('puzzle', '新扩展的数据模式', P2('extData', [['shared', '共享'], ['isolated', '独立']]))),
+  const ker = m ? ['GeckoView', '160.0', '95 MB'] : ['Chromium', '148.0.7778.215', '190 MB'];
+  return [h('h2', {}, icon('gear'), '设置', h('span', { class: 'sub' }, lite ? '全部实例共用' : '全局：改一处，全部实例一起改')),
+    h('div', { class: 'set' }, r('search', '搜索地址', h('input', { class: 'grow', value: s.search, title: '%s 为关键词' })), r('undo', '启动时恢复上次的实例', P2('restore', [[true, '开'], [false, '关']])),
+      r('key', '默认密码', h('span', { class: 'sub' }, '已设置'), ibtn('edit', '修改默认密码', () => {}), !lite && h('span', { class: 'sub' }, m ? '加密保存在本机（系统密钥库）' : '加密保存在本机（系统凭据保护）')),
+      r('refresh', '订阅多久刷新一次', h('input', { type: 'number', value: s.subHours, style: { width: '70px' } }), h('span', { class: 'sub' }, '小时')),
+      r('home', '查出口的类型和纯净度', P2('ipq', [[true, '开', '把出口 IP 发给第三方查询住宅 / 机房和纯净度；结果存 7 天'], [false, '关']]))),
     h('h3', {}, '组件与更新', h('span', { class: 'tag', style: { color: 'var(--good)', borderColor: 'var(--good)' } }, '新')),
-    h('div', { class: 'sub', style: { margin: '-2px 0 8px' } }, '安装包里不带内核：内核是单独的组件，第一次启动时下载，以后只在内核版本变了才重新下。更新 MaskTab 本身用的就是那个小安装包。'),
+    !lite && h('div', { class: 'sub', style: { margin: '-2px 0 8px' } }, '安装包里不带内核：内核是单独的组件，第一次启动时下载，以后只在内核版本变了才重新下。更新 MaskTab 本身用的就是那个小安装包。'),
     h('div', { class: 'set' },
-      r('finger', '浏览器内核', h('span', {}, ker[0], ' ', h('b', {}, ker[1])), h('span', { class: 'sub good row' }, icon('ok', 14), `已安装 · ${ker[2]}`), h('button', { class: 'btn', title: '看有没有新的内核版本' }, icon('refresh', 15), '检查更新'), ibtn('down', '重新下载', go('setup')), ibtn('folder', '从文件导入（没网时用：先在别处下好内核包）', () => {})),
-      r('shield', '代理内核', h('span', {}, 'mihomo ', h('b', {}, 'v1.19.34')), h('span', { class: 'sub good row' }, icon('ok', 14), '运行中 · 22 MB'), ibtn('down', '重新下载', go('setup'))),
-      r('mask', 'MaskTab 本体', h('span', {}, h('b', {}, '0.2.0')), h('span', { class: 'sub' }, m ? '安装包不含内核（预计 20～45 MB）' : '安装包几 MB（不含内核）'), h('button', { class: 'btn' }, icon('refresh', 15), '检查更新')),
-      r('down', '下载途径', P2('via', [['auto', '自动', '直连 → 本机代理 → 镜像，哪条通走哪条'], ['mirror', '只用镜像'], ['proxy', '只用本机代理']]), h('span', { class: 'sub' }, '下载完一律校验 SHA-256，镜像给的文件不对就丢弃')),
-      r('link', '镜像地址前缀', h('input', { class: 'grow', value: s.mirror, placeholder: '留空用内置的几个镜像，例如 https://ghfast.top/' })),
-      r('server', '本机代理端口', h('input', { value: s.ports, style: { width: '130px' } }), h('span', { class: 'sub' }, '下载不动时依次试这些端口；都没开会提示你打开代理'))),
-    h('h3', {}, '同步', h('span', { class: 'tag' }, '规划中')),
-    h('div', { class: 'set' }, r('sync', '电脑和手机同步', h('span', { class: 'sub' }, '未开启'), h('button', { class: 'btn', disabled: true }, '设置同步'))),
-    h('h3', {}, '关于'),
-    h('div', { class: 'set' }, r('info', '诊断信息', h('button', { class: 'btn', onclick: go('diag') }, '查看'), h('span', { class: 'sub' }, m ? '也可以长按右上角头像打开' : '反馈问题时把这段贴给开发者')),
+      r('finger', '浏览器内核', h('span', {}, ker[0], ' ', h('b', {}, ker[1])), h('span', { class: 'sub good row' }, icon('ok', 14), lite ? '已安装' : `已安装 · ${ker[2]}`), h('span', { class: 'grow' }), ibtn('refresh', '检查内核更新', () => {}), !lite && ibtn('down', '重新下载', go('setup')), !lite && ibtn('folder', '从文件导入（没网时用：先在别处下好内核包）', () => {})),
+      r('shield', '代理内核', h('span', {}, 'mihomo ', h('b', {}, 'v1.19.34')), h('span', { class: 'sub good row' }, icon('ok', 14), '运行中'), h('span', { class: 'grow' }), !lite && ibtn('down', '重新下载', go('setup'))),
+      r('mask', 'MaskTab', h('span', {}, h('b', {}, '0.2.0')), !lite && h('span', { class: 'sub' }, '安装包不含内核'), h('span', { class: 'grow' }), ibtn('refresh', '检查更新', () => {})),
+      r('server', '下载用的代理端口', h('input', { value: s.ports, style: { width: '120px' } }), !lite && h('span', { class: 'sub' }, '下载不动时依次试这些端口；都没开会提示你打开代理'))),
+    h('div', { style: { margin: '14px 0 8px' } }, fold(S[advKey], '高级', set(() => { S[advKey] = !S[advKey]; }))),
+    S[advKey] && h('div', { class: 'set' },
+      r('bolt', '测速地址', h('input', { class: 'grow', value: s.delayUrl })),
+      r('clock', '时区默认跟随', P2('tzDef', [['cf', 'CF 站点出口'], ['n', '其他站点出口']])),
+      r('globe', '手动模式下新实例的出口', P2('exitPick', [['unused', '自动挑未占用的'], ['none', '不指定']])),
+      r('swap', 'ProxyIP 的 path 写法', P2('path', [['query', '?proxyip=', '/?proxyip=值&其余参数（默认）'], ['segment', '/proxyip=', '/proxyip=值?其余参数（备选）']])),
+      r('puzzle', '新扩展的数据模式', P2('extData', [['shared', '共享'], ['isolated', '独立']])),
+      r('down', '内核下载途径', P2('via', [['auto', '自动', '直连 → 本机代理 → 镜像，哪条通走哪条'], ['mirror', '只用镜像'], ['proxy', '只用代理']]), !lite && h('span', { class: 'sub' }, '下载完一律校验 SHA-256')),
+      r('link', '镜像地址前缀', h('input', { class: 'grow', value: s.mirror, placeholder: '留空用内置镜像，例如 https://ghfast.top/' })),
+      lite && r('folder', '内核', h('button', { class: 'btn', onclick: go('setup') }, icon('down', 15), '重新下载'), h('button', { class: 'btn' }, icon('folder', 15), '从文件导入')),
+      !m && r('shield', '不受本机 TUN / 系统代理影响', P2('tun', [['', '自动绑定物理网卡'], ['off', '关']]), h('span', { class: 'sub' }, '当前：以太网 · 192.168.1.23'), only('仅电脑')),
+      m && !lite && r('shield', '不受本机 TUN / 系统代理影响', h('span', { class: 'sub' }, '手机上不需要'), only('仅电脑'))),
+    h('div', { class: 'set', style: { marginTop: '14px' } },
+      r('sync', '电脑和手机同步', h('span', { class: 'tag' }, '规划中')),
+      r('info', '诊断信息', h('button', { class: 'btn', onclick: go('diag') }, '查看')),
       !m && r('power', '退出 MaskTab', ibtn('power', '关闭全部实例并退出（下次启动会恢复）', () => {}, 'danger'), only('仅电脑')))];
 }
 
@@ -378,6 +384,11 @@ function setup(ctx) {
   const why = { stall: '25 秒没有数据', bad: '连不上', none: '端口没有在监听' };
   const k1 = st.done ? 'ok' : st.blocked ? 'bad' : 'run';
   const got = Math.round(ker[1] * st.pct / 100);
+  const alertBox = st.blocked && h('div', { class: 'alert' }, h('b', {}, icon('warn', 16), '内核下载不下来'),
+        h('div', {}, '直连和镜像都不通，本机 ', h('b', { style: { display: 'inline' } }, '7890'), ' 和 ', h('b', { style: { display: 'inline' } }, '18080'), ' 端口上也没有代理在运行。已下好 ' + got + ' MB。'),
+        h('div', { style: { margin: '4px 0 10px' } }, '请打开你的代理软件（端口 7890 或 18080），然后点“重试”。已经下好的部分会保留，接着下。'),
+        h('div', { class: 'row', style: { flexWrap: 'wrap' } }, h('button', { class: 'btn pri', onclick: set(() => { u.t = 0; u.on = true; u.px = u.proxyOn; }) }, icon('refresh', 16), '重试'), h('button', { class: 'btn', title: '换一个镜像地址前缀' }, icon('link', 16), '换镜像'), h('button', { class: 'btn', title: '代理用的是别的端口' }, icon('server', 16), '改端口'), h('button', { class: 'btn', title: '没网时用：先在别处下好内核包，再选它' }, icon('folder', 16), '从文件导入')));
+  if (ctx.lite) return setupLite(st, ker, got, alertBox, why);
   return h('div', { class: 'su' },
     h('div', { class: 'logo' }, h('span', { class: 'face', style: { '--c': '#1A73E8' } }, icon('mask', 18)), 'MaskTab'),
     h('div', { class: 'sub', style: { marginBottom: '10px' } }, '第一次启动要准备两个组件。安装包里不带它们，所以安装包很小；以后更新 MaskTab 也不用重新下。'),
@@ -387,10 +398,7 @@ function setup(ctx) {
       h('div', { class: 'pb' }, h('i', { style: { width: st.pct + '%' } })),
       h('div', { class: 'via' }, st.tried.map(([v, r]) => h('span', { class: r === 'ok' ? 'ok' : 'x', title: why[r] || '' }, VIA[v])), st.cur && h('span', { class: 'cur' }, h('span', { class: 'spin' }, icon('refresh', 12)), VIA[st.cur]),
         st.cur && st.tried.filter(([, r]) => r !== 'ok').slice(-1).map(([v, r]) => h('span', { style: { border: 0, textDecoration: 'none' } }, `${VIA[v]}：${why[r]}，换下一条`))),
-      st.blocked && h('div', { class: 'alert' }, h('b', {}, icon('warn', 16), '内核下载不下来'),
-        h('div', {}, '直连和镜像都不通，本机 ', h('b', { style: { display: 'inline' } }, '7890'), ' 和 ', h('b', { style: { display: 'inline' } }, '18080'), ' 端口上也没有代理在运行。已下好 ' + got + ' MB。'),
-        h('div', { style: { margin: '4px 0 10px' } }, '请打开你的代理软件（端口 7890 或 18080），然后点“重试”。已经下好的部分会保留，接着下。'),
-        h('div', { class: 'row', style: { flexWrap: 'wrap' } }, h('button', { class: 'btn pri', onclick: set(() => { u.t = 0; u.on = true; u.px = u.proxyOn; }) }, icon('refresh', 16), '重试'), h('button', { class: 'btn', title: '换一个镜像地址前缀' }, icon('link', 16), '换镜像'), h('button', { class: 'btn', title: '代理用的是别的端口' }, icon('server', 16), '改端口'), h('button', { class: 'btn', title: '没网时用：先在别处下好内核包，再选它' }, icon('folder', 16), '从文件导入')))),
+      alertBox),
     step(st.verified ? 'ok' : st.verify ? 'run' : 'wait', '校验并解压', h('div', { class: 'sub' }, st.verified ? 'SHA-256 一致' : '下载完校验 SHA-256，镜像给的文件不对就丢弃重下')),
     step(st.miho >= 100 ? 'ok' : st.miho > 0 || st.verified ? 'run' : 'wait', '下载代理内核 · mihomo v1.19.34', st.verified && h('div', { class: 'pb', style: { marginTop: '6px' } }, h('i', { style: { width: st.miho + '%' } })), !st.verified && h('div', { class: 'sub' }, '22 MB，途径同上')),
     step(st.all ? 'ok' : st.start ? 'run' : 'wait', '启动', h('div', { class: 'sub' }, st.all ? '好了。' : '加载内置扩展、启动代理内核、打开实例')),
@@ -427,11 +435,11 @@ function pcFrame() {
       h('span', { class: 'tb', title: '扩展' }, icon('puzzle', 17)),
       h('button', { class: 'tb' + (s === 'menu' ? ' on' : ''), title: '实例菜单', onclick: go(s === 'menu' ? 'newtab' : 'menu') }, h('span', { class: 'av' }, i.no)), h('span', { class: 'tb' }, icon('more', 17))),
     h('div', { class: 'view' }, mgr ? h('div', { class: 'full' }, manager(ctx)) : h('div', { class: 'full' }, newtab(ctx)),
-      POP[s] === 'menu' && h('div', { class: 'pop menu', 'data-sk': 'pcm' }, menu(ctx)), POP[s] === 'panel' && h('div', { class: 'pop', 'data-sk': 'pcp' }, panel(ctx)),
+      POP[s] === 'menu' && h('div', { class: 'pop menu', 'data-sk': 'pcm' }, menu(ctx)), POP[s] === 'panel' && h('div', { class: 'pop', 'data-sk': 'pcp' }, panel({ dev: 'pc', lite: S.pcLite })),
       s === 'diag' && h('div', { class: 'dim' }, diag(ctx))));
 }
 function phFrame() {
-  const i = me(), ctx = { dev: 'm' }, s = S.screen, mgr = s.startsWith('m-');
+  const i = me(), ctx = { dev: 'm', lite: S.lite }, s = S.screen, mgr = s.startsWith('m-');
   const bar = s === 'newtab' || s === 'diag';
   return h('div', { class: 'ph' }, h('div', { class: 'scr', style: { '--c': i.color } },
     h('div', { class: 'st' }, h('span', {}, '9:41'), h('span', { class: 'row', style: { gap: '4px' } }, icon('shield', 13), '5G')),
@@ -462,16 +470,30 @@ const NOTES = {
   'm-set': ['设置 · 组件与更新', [['', '设置项两端对齐、同样分组；只有一端有的项用灰色小标签标出。'], ['new', '“组件与更新”：内核版本、检查更新、重新下载、从文件导入；下载途径、镜像前缀、本机代理端口（默认 7890, 18080）。']]],
   diag: ['诊断信息', [['', '手机已有（0.1.13），电脑补上同样的窗口。新增一段“组件下载”记录。']]],
 };
+const LITE = {
+  setup: '只显示当前这一步和一根进度条；出问题时的提示和按钮与电脑相同。',
+  menu: '顶部一行；其它实例变成一排头像，点头像就切换；底部四个图标。',
+  panel: '两路出口各一行（相同时只有一行）；订阅、出口、入口各一行；底部按钮去掉（菜单里有）。',
+  fp: '常用的三项直接显示，其余收进“更多”。',
+  exit: '一行一个地址，类型用图标表示；排序是一个按钮，点一下换一种；测下载合并进“下载”排序。',
+  entry: '一行一个地址；优选 / 反代的筛选和国家排在同一行。',
+  'm-insts': '卡片只留头像、名称、延迟、开关；其余点开卡片看。',
+  'm-lines': '订阅和地址都是一行，点一下才展开操作；输入框点“+”才出现。',
+  'm-ext': '一行一个扩展，只留开关；范围和数据模式点开看。',
+  'm-set': '不常改的收进“高级”。这一组两端都有：电脑默认展开，手机默认收起。',
+};
 function shell() {
   const [title, items] = NOTES[S.screen];
   const su = S.screen === 'setup';
   return h('div', { class: 'shell' },
-    h('div', { class: 'sh-top' }, h('b', {}, 'MaskTab 双端统一界面 · demo'), h('span', { class: 'sub grow' }, '假数据，可以点。左边选页面；电脑和手机画的是同一份界面。'),
+    h('div', { class: 'sh-top' }, h('b', {}, 'MaskTab 双端统一界面 · demo'), h('span', { class: 'sub grow' }, '假数据，可以点。左边选页面。'),
+      S.dev !== 'm' && h('span', { class: 'seg', title: '电脑上的节点面板要不要也用精简版' }, [[false, '电脑面板原样'], [true, '电脑面板同手机']].map(([k, t]) => h('button', { class: S.pcLite === k ? 'on' : '', onclick: set(() => { S.pcLite = k; }) }, t))),
+      S.dev !== 'pc' && h('span', { class: 'seg', title: '手机界面的密度' }, [[true, '手机精简'], [false, '手机与电脑相同']].map(([k, t]) => h('button', { class: S.lite === k ? 'on' : '', onclick: set(() => { S.lite = k; }) }, t))),
       h('span', { class: 'seg' }, [['both', '并排'], ['pc', '电脑'], ['m', '手机']].map(([k, t]) => h('button', { class: S.dev === k ? 'on' : '', onclick: set(() => { S.dev = k; }) }, t))),
       h('button', { class: 'btn', title: '浅色 / 深色', onclick: set(() => { S.theme = S.theme === 'light' ? 'dark' : 'light'; }) }, icon('moon', 15), S.theme === 'light' ? '深色' : '浅色')),
     h('div', { class: 'sh-side' }, SCREENS.map(([g, l]) => [h('h4', {}, g), l.map(([id, t]) => h('button', { class: 's' + (S.screen === id ? ' on' : ''), onclick: go(id, id === 'fp' ? { pv: 'main', fpOpen: true } : id === 'panel' ? { pv: 'main', fpOpen: false } : ['exit', 'entry', 'region'].includes(id) ? { pv: id, me: id === 'region' || id === 'exit' ? 'a' : S.me } : id === 'm-insts' ? { drawer: null } : {}) }, t))])),
     h('div', { class: 'sh-main', 'data-sk': 'main' },
-      h('div', { class: 'note' }, h('b', {}, title), h('ul', {}, items.map(([k, t]) => h('li', {}, h('span', { class: 'tag' + (k ? ' new' : '') }, k ? '新增' : '统一'), t))),
+      h('div', { class: 'note' }, h('b', {}, title), h('ul', {}, items.map(([k, t]) => h('li', {}, h('span', { class: 'tag' + (k ? ' new' : '') }, k ? '新增' : '统一'), t)), S.lite && LITE[S.screen] && h('li', {}, h('span', { class: 'tag lt' }, '手机精简'), LITE[S.screen])),
         su && h('div', { class: 'demo-ctl' }, h('span', { class: 'sub' }, '演示情形：'), h('span', { class: 'seg' }, [['ok', '直连正常'], ['mirror', '直连不通 → 镜像'], ['blocked', '全都不通 → 提示开代理']].map(([k, t]) => h('button', { class: S.su.sc === k ? 'on' : '', onclick: set(() => { S.su = { sc: k, t: 0, proxyOn: false, px: false, on: true }; }) }, t))),
           h('button', { class: 'btn', onclick: set(() => { S.su.t = 0; S.su.on = true; S.su.px = false; }) }, icon('refresh', 14), '重播'),
           S.su.sc === 'blocked' && h('button', { class: 'btn' + (S.su.proxyOn ? ' soft' : ''), onclick: set(() => { S.su.proxyOn = !S.su.proxyOn; }) }, icon('server', 14), S.su.proxyOn ? '已模拟：7890 代理开着，现在点窗口里的“重试”' : '模拟：我打开了 7890 代理'))),

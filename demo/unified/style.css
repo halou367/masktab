@@ -17,7 +17,7 @@ textarea{resize:vertical;width:100%}
 
 /* ===== demo 外壳（不属于产品界面） ===== */
 .shell{display:grid;grid-template-columns:232px 1fr;grid-template-rows:auto 1fr;height:100vh}
-.sh-top{grid-column:1/3;display:flex;align-items:center;gap:12px;padding:8px 14px;background:var(--bg);border-bottom:1px solid var(--line)}
+.sh-top{grid-column:1/3;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 14px;background:var(--bg);border-bottom:1px solid var(--line)}
 .sh-top b{font-size:14px}
 .sh-side{background:var(--bg);border-right:1px solid var(--line);overflow:auto;padding:8px}
 .sh-side h4{margin:10px 8px 4px;font-size:11px;color:var(--sub);font-weight:600;letter-spacing:.04em}
@@ -196,3 +196,20 @@ textarea{resize:vertical;width:100%}
   .it{padding:10px 14px}.mi{height:46px;font-size:14.5px}
   .pn .head{padding:12px 14px 8px}
 }
+
+/* ===== 手机精简版用到的几个部件 ===== */
+.box.lite>*+*{border-top:1px solid var(--line)}
+.ln1{display:flex;align-items:center;gap:8px;padding:4px 10px 4px 12px;min-height:48px;font-size:14px}
+.ln1 .lb{display:inline-flex;align-items:center;gap:4px;color:var(--sub);font-size:12px;width:52px;flex:none}
+.avs{display:flex;gap:16px;padding:10px 16px;overflow-x:auto;scrollbar-width:none}
+.av1{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;color:var(--sub);flex:none}
+.tiles{display:flex;justify-content:space-around;padding:6px 8px 10px}
+.tile{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:var(--sub);padding:8px 6px;border-radius:12px;min-width:68px}
+.tile:hover{background:var(--hover)}
+.card.lt{padding:9px 10px;flex-wrap:nowrap;min-height:50px}.card.lt.open{flex-wrap:wrap}
+.card.lt .nm{flex:1 1 0;max-width:none;min-width:0}
+.card .more{flex:1 1 100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:8px;margin-top:2px;cursor:default}
+.fold{display:inline-flex;align-items:center;gap:6px;color:var(--sub);font-weight:600;font-size:13px;padding:4px 2px}
+.note .tag.lt{background:#fef7e0;color:#b06000}[data-theme=dark] .note .tag.lt{background:#3a3320;color:#fdd663}
+.xc .v .mono{font-size:14px}
+.it>.ring{min-width:40px}

@@ -3,7 +3,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 css=open('style.css',encoding='utf8').read()
 icons=open('icons.js',encoding='utf8').read()
 flags=open('flags.json',encoding='utf8').read()
-app=open('app.js',encoding='utf8').read()
+app=open('lite.js',encoding='utf8').read()+'\n'+open('app.js',encoding='utf8').read()
 tz=['Asia/Shanghai','Asia/Tokyo','Asia/Seoul','Asia/Hong_Kong','Asia/Singapore','America/Los_Angeles','America/New_York','America/Vancouver','Europe/London','Europe/Berlin']
 html=f'''<!doctype html>
 <html lang="zh-CN" data-theme="light">
