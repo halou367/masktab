@@ -11,7 +11,18 @@ ACT=$PKG/.MainActivity
 mkdir -p "$OUT"
 echo "running" > "$OUT/result.txt"
 A() { timeout "${T:-60}" adb "$@"; }
-shot() { timeout 30 adb exec-out screencap -p > "$OUT/$1.png"; echo "截图 $1"; }
+# 截图；截不出来（30 秒没回、文件是空的）说明系统卡住了：记一次失败，并趁还能连上时留下现场
+shot() {
+  timeout 30 adb exec-out screencap -p > "$OUT/$1.png"
+  if [ -s "$OUT/$1.png" ]; then echo "截图 $1"; return 0; fi
+  echo "失败：截图 $1 截不出来（系统没有响应）"; fail=1
+  if [ ! -f "$OUT/hang-top.txt" ]; then
+    timeout 25 adb shell top -b -n 1 -m 25 > "$OUT/hang-top.txt" 2>&1
+    timeout 25 adb shell dumpsys activity lastanr > "$OUT/hang-lastanr.txt" 2>&1
+    timeout 25 adb shell dumpsys window windows 2>/dev/null | grep -E "mCurrentFocus|mFocusedApp|Window #" | head -20 > "$OUT/hang-windows.txt"
+  fi
+  return 1
+}
 fail=0
 BGPIDS=()
 # 退出时收掉后台起的节点服务端与 HTTP 服务、端口转发，写结果
@@ -26,6 +37,9 @@ trap finish EXIT
 
 A logcat -G 16M || true
 A logcat -c
+# 全程把 logcat 边跑边写到文件：模拟器或应用卡死时，事后的 logcat -d 可能已经取不回来（run 43570179240 就是这样，卡死后什么日志都没留下）
+adb logcat -v threadtime > "$OUT/logcat-live.txt" 2>/dev/null &
+BGPIDS+=($!)
 T=300 A install -r -g "$APK" || { echo "安装失败"; fail=1; exit 1; }
 A shell settings put system screen_off_timeout 1800000
 # 模拟器很慢，系统桌面常弹“没有响应”挡住截图：关掉错误对话框，并停掉桌面
@@ -62,8 +76,8 @@ A shell input keyevent KEYCODE_BACK; sleep 1
 # 5b. 真点击：点工具栏头像 → 在菜单里点每一项，页面要真的打开并就绪。用户在真机上反馈的就是这条路
 #     （账号与密码、节点与出口、指纹与时区、新建实例、导入邮箱、管理实例，点了白屏或闪退），所以每一项都点一遍。
 #     头像坐标按 pixel_6（1080x2400）量的：(904,202)；菜单里的项按无障碍标签找位置。
-ready() { A logcat -d | grep -c "MaskTab 页面就绪 $1"; }
-count() { A logcat -d | grep -c "$1"; }
+ready() { grep -c "MaskTab 页面就绪 $1" "$OUT/logcat-live.txt"; }
+count() { grep -c "$1" "$OUT/logcat-live.txt"; }
 PID0=$(A shell pidof $PKG | tr -d '\r')
 # 按无障碍标签（content-desc / text，以给定文字开头）找到控件并点它的中心；找不到返回 1
 OFFMODE=half
@@ -117,7 +131,6 @@ else
 fi
 tapflow fp "指纹与时区" fp
 tapflow acct "账号与密码" "instances/"
-tapflow import "导入邮箱" "instances/import"
 tapflow manage "管理实例" "instances 有状态"
 # 新建实例：菜单收起、切到新实例、开出它的新标签页
 if openmenu; then
@@ -149,6 +162,11 @@ for k in 1 2 3 4 5 6 7 8; do sleep 1; A logcat -d -s MaskTab:I | grep -q "诊断
 sleep 1; shot t-diag
 if A logcat -d -s MaskTab:I | grep -q "诊断信息已收集"; then echo "通过：诊断信息窗口"; else echo "失败：诊断信息没有收集出来"; fail=1; fi
 A shell input keyevent KEYCODE_BACK; sleep 2
+# 导入邮箱放在这一段最后：run 43570179240 里点开它之后整个模拟器不响应了（原因待查），放最后不挡住前面几项的结果
+tapflow import "导入邮箱" "instances/import"
+sleep 3; shot t-import-later
+closepanel
+if A shell pidof $PKG > /dev/null; then echo "通过：导入邮箱页开过之后应用还在"; else echo "失败：导入邮箱页开过之后应用不在了"; fail=1; fi
 # 5c. 整页之间直接换（设置 → 节点 → 指纹）：同一个页面里换路由
 n0=$(ready fp)
 A shell am start -n $ACT --es mt_open settings; sleep 6; shot t-nav-1settings
