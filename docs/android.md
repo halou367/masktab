@@ -84,9 +84,9 @@ android/
   画布 `getImageData` / `toDataURL` / `toBlob` 加位置相关的最低位噪声；`AudioBuffer.getChannelData` 幂等噪声；`hardwareConcurrency` 4/6/8；`screen.availHeight` 少 0–32 像素；
   `navigator.language(s)`；时区：`getTimezoneOffset`、本地时间各分量、`toString` 系列、`toLocale*`、`Intl.DateTimeFormat`（没指定时区的格式化器）。
   `deviceMemory` 火狐本来不暴露。时区与语言默认跟随出口，可在“指纹与时区”里固定。`Accept-Language` 请求头由后台按实例改写。
-- 注入时机：后台按容器 `contentScripts.register({cookieStoreId})` 注册带参数的同步脚本（CI 模拟器里注册成功）；注册失败时自动改为 `fp-boot.js` 异步注入，新标签页上会提示“指纹异步注入”。
+- 注入时机（第二版改过，决策 A-7）：每个网页和内嵌框架在 `document_start` 由 `fp-boot.js` **同步**向后台要本标签页所属实例的参数——发一条消息（后台据此认出标签页 → 实例）加一个同步请求（后台把参数放在跳转地址里交回），拿到立刻装上，早于网页自己的脚本。每个页面多花约 10–40 毫秒（沙箱桌面火狐实测）。同步没拿到时退回异步（向 app 要），这时页面最早的脚本可能看到真实值；日志 `MaskTab 指纹参数 <域名> #<编号> 同步|异步|没装上` 能看出走的哪条路。
 - Gecko 偏好（`geckoview-config.yaml`）：`privacy.fingerprintingProtection`、WebRTC 只走代理且不暴露本机地址、关闭 Service Worker（见下文限制）、关闭内核自带的记住密码。
-- 沙箱实测（Chromium 普通页面环境，不是火狐内容脚本环境）：同种子两次画布读回一致、开启后与原值不同；不同种子参数不同；时区 / 语言改写生效。**在 GeckoView 内容脚本里的效果没有验证。**
+- 验证：沙箱里真火狐 160 装上整个内置扩展，两个实例各开自检页 `android/scripts/fpcheck.html`，各拿到各的时区 / 语言；CI 模拟器（GeckoView）里同样的检查见“验证情况”。**真机没有验证。**
 
 ### 密码库与自动填写
 

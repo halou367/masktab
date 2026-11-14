@@ -161,8 +161,9 @@ Y
 {"instances":[
  {"id":"p1","no":1,"name":"经代理","color":"#1A73E8","order":1,"node":"auto","seed":1234567,"tz":"","lang":"","createdAt":1},
  {"id":"p2","no":2,"name":"坏节点","color":"#D93025","order":2,"node":"不存在的节点","seed":7654321,"tz":"","lang":"","createdAt":2},
- {"id":"p3","no":3,"name":"指纹自检","color":"#188038","order":3,"node":"DIRECT","seed":111,"tz":"Asia/Tokyo","lang":"ja-JP","createdAt":3}],
- "subUrl":"http://10.0.2.2:18080/sub.yaml","searchUrl":"https://www.bing.com/search?q=%s","current":"p1","nextNo":4}
+ {"id":"p3","no":3,"name":"指纹自检甲","color":"#188038","order":3,"node":"DIRECT","seed":111,"tz":"Asia/Tokyo","lang":"ja-JP","createdAt":3},
+ {"id":"p4","no":4,"name":"指纹自检乙","color":"#F9AB00","order":4,"node":"DIRECT","seed":222,"tz":"Europe/Berlin","lang":"de-DE","createdAt":4}],
+ "subUrl":"http://10.0.2.2:18080/sub.yaml","searchUrl":"https://www.bing.com/search?q=%s","current":"p1","nextNo":5}
 Y
   A shell am force-stop $PKG; A shell am force-stop com.google.android.apps.nexuslauncher || true; sleep 1
   # 状态文件：先 adb push 到 /data/local/tmp，再 run-as cp 进 app 目录（不用 stdin 管道，那种写法可能一直等输入）
@@ -209,12 +210,20 @@ Y
     if A logcat -d -s MaskTab:I | grep -q "代理任务完成（含测速）"; then echo "通过：点“全部测速”后后台任务跑完"; else echo "失败：点了“全部测速”但后台任务没有跑完"; fail=1; fi
   else echo "跳过：没找到“全部测速”按钮的位置（无障碍信息里没有）"; fi
   A shell input keyevent KEYCODE_BACK; sleep 2
-  # 指纹自检：实例 #3（直连，时区 Asia/Tokyo、语言 ja-JP）里打开自检页，逐项调用被改过的接口（画布、音频、时间、Intl…），有一项抛错或值不对就失败。
-  # 以前 fp.js 在真内核里会让 toDataURL / getImageData / Intl…resolvedOptions() 抛 Permission denied，用到这些接口的网站直接白屏，example.com 这种静态页测不出来。
-  A shell am start -n $ACT --es mt_inst p3; sleep 4
-  A shell am start -a android.intent.action.VIEW -d "http://10.0.2.2:18080/fpcheck.html?tz=Asia/Tokyo\&off=-540\&lang=ja-JP" -n $ACT
-  for k in $(seq 1 12); do sleep 2; A logcat -d | grep -q "MTFPCHECK" && break; done
-  sleep 1; shot 13-fpcheck
+  # 指纹自检：两个直连实例（#3 东京 / 日语，#4 柏林 / 德语）各打开一次自检页，页面的第一段脚本就逐项调用被改过的接口
+  # （画布、音频、时间、Intl、语言…），有一项抛错、值不对、或者拿到的是别的实例的时区 / 语言，就失败。
+  # 这一项抓到过两个真问题：fp.js 在真内核里让画布等接口抛 Permission denied；按容器注册脚本在 GeckoView 里不分实例（A-7）。
+  fpcheck() { # 实例id 查询串 截图名
+    local n0 k
+    n0=$(A logcat -d | grep -c "MTFPCHECK")
+    A shell am start -n $ACT --es mt_inst "$1"; sleep 4
+    A shell am start -a android.intent.action.VIEW -d "http://10.0.2.2:18080/fpcheck.html?$2" -n $ACT
+    for k in $(seq 1 12); do sleep 2; [ "$(A logcat -d | grep -c "MTFPCHECK")" -gt "$n0" ] && break; done
+    sleep 1; shot "$3"
+  }
+  fpcheck p3 "tz=Asia/Tokyo\\&off=-540\\&lang=ja-JP" 13-fpcheck-tokyo
+  fpcheck p4 "tz=Europe/Berlin\\&off=-60\\&lang=de-DE" 14-fpcheck-berlin
+  fpcheck p3 "tz=Asia/Tokyo\\&off=-540\\&lang=ja-JP\\&again=1" 15-fpcheck-tokyo-again
   A shell am start -n $ACT --es mt_inst p1; sleep 3
   A logcat -d > "$OUT/logcat-proxy.txt"
   A logcat -d -s MaskTab:V GeckoConsole:V > "$OUT/logcat-proxy-masktab.txt" || true
@@ -225,8 +234,10 @@ Y
   chk "加载订阅：2 1 个节点" "订阅加载到 1 个节点"
   chk "网络检测：2 #1 出口" "实例 #1 经节点探到出口"
   chk "MaskTab 指纹参数 example.com #1" "实例 #1 打开网页"
-  chk "MTFPCHECK pass" "指纹自检页全部通过（画布 / 音频 / 时区 / 语言 / 函数外观）"
-  grep "MTFPCHECK" "$L" | sed 's/.*MTFPCHECK/MTFPCHECK/' | cut -c1-600 | head -3
+  grep "MTFPCHECK" "$L" | sed 's/.*MTFPCHECK/MTFPCHECK/' | cut -c1-600 | head -6
+  n=$(grep -c "MTFPCHECK pass .*tz=Asia/Tokyo off=-540 lang=ja-JP" "$L"); m=$(grep -c "MTFPCHECK pass .*tz=Europe/Berlin off=-60 lang=de-DE" "$L"); bad=$(grep -c "MTFPCHECK fail" "$L")
+  if [ "$n" -ge 2 ] && [ "$m" -ge 1 ] && [ "$bad" -eq 0 ]; then echo "通过：指纹自检（#3 东京两次、#4 柏林一次，各用各的参数；画布 / 音频 / 时区 / 语言 / 函数外观都对）"
+  else echo "失败：指纹自检（东京通过 $n 次，应为 2；柏林通过 $m 次，应为 1；失败 $bad 次）"; fail=1; fi
   if grep -q "页面报错：" "$L"; then echo "失败：内置页面有报错："; grep "页面报错：" "$L" | cut -c1-240 | head -5; fail=1; fi
   if grep -q "代理任务出错" "$L"; then echo "失败：代理后台任务出错"; fail=1; fi
   chk "加载失败 https://example.com/\? 实例 p2\|加载失败 https://example.com 实例 p2" "实例 #2（节点不存在）打不开网页，没有直连"

@@ -372,7 +372,7 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
   所以后台直接从 cookieStoreId 认实例（`tabs.get(tabId).cookieStoreId`，不用 `details.cookieStoreId`，见 bug 1948114）。
 - 兜底：app 开的每个标签先进扩展自己的引导页 `newtab.html#inst=<id>&go=<网址>` 登记，再跳网址（扩展页不走代理，第一跳不漏）；
   网页内容脚本的原生消息由会话自己的 MessageDelegate 接收（app 按会话知道实例），再告诉后台。网页伪造不了这两条。
-- 指纹脚本按容器 `contentScripts.register({cookieStoreId})` 同步注入。CI 里实测这个调用被接受（日志“指纹脚本已按容器注册 firefox-container-mt-…”）；失败时自动改异步注入（`fp-boot.js`）。
+- ~~指纹脚本按容器 `contentScripts.register({cookieStoreId})` 同步注入。~~ **这条是错的，已废弃，见 A-7**：调用被接受不等于按容器生效。
 - GeckoView 的坑：会话里打开的扩展页面（以及内容脚本）发的原生消息只交给**这个会话**的 MessageDelegate，没设就一直挂着不回；回复不能是 JSONObject（报 “Invalid event data for callback”），一律回 JSON 字符串。
 
 ### A-6 安卓内置页面：耗时操作全部后台化，页面永远有内容（2026-11-14）
@@ -386,6 +386,20 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - **做法**：见 `docs/android.md`“界面”一节。节点“自动”改成有粘性：当前节点还通就不换，避免每次测速都换出口 IP。
 - **没有确认的**：模拟器里旧版从菜单点进这两页是能打开的（没有复现用户的白屏），所以无法证明上面几条就是用户手机上的全部原因；真机 edgetunnel 订阅对 `clash.meta` UA 返回什么也没验证。为此加了“诊断信息”。
 - **顺带**：固定调试签名，后续版本可以覆盖安装。
+
+### A-7 指纹参数改为“消息 + 同步请求”交给内容脚本，废弃按容器注册（2026-11-14）
+
+- **问题（第一版就有，第二版的 CI 自检页抓到）**：`contentScripts.register({cookieStoreId: "firefox-container-mt-<id>"})` 在 GeckoView 里不分实例。
+  安卓上 Gecko 把 cookieStoreId 的后缀当数字解析（`ext-toolkit.js` 里 `parseInt`，注释写着 Bug 1643740），`mt-<id>` 得到 NaN，匹配条件退化成“默认容器”；
+  而 GeckoView 的会话隔离用的是另一个属性（`geckoViewSessionContextId`），所有标签页的 userContextId 都是 0——于是每份注册的脚本对**所有**标签页生效，谁注册得早谁赢。
+  后果：所有实例的网页用的是同一个实例的种子、时区和语言（Cookie 和代理分流不受影响，那两样不靠这个）。
+  CI 里的表现：实例 #3（东京）的自检页有一次拿到的是实例 #2 的参数（时区 UTC、语言 en-US）。
+- **做法**：`fp-boot.js` 在 `document_start` 发消息 `{t:'fp:who', n}`（消息自带来源标签页，后台按标签页认实例，和代理分流用的是同一张表），
+  紧接着发同步请求 `https://fp.masktab.invalid/<扩展内部编号>/<n>`；后台 `webRequest.onBeforeRequest` 把两者对上，跳转到 `fpcfg.json?c=<参数>`，内容脚本读跳转后的地址。
+  请求不出网（域名不存在，且在发出前就被跳转）。网页不知道扩展内部编号，自己发这个请求只会被取消。
+- **为什么不只用请求**：内容脚本发的请求在 webRequest 里 `tabId` 是 -1，认不出标签页（沙箱桌面火狐实测）。
+- **代价**：每个页面 / 框架多一次同步往返（桌面实测 10–40 毫秒）；消息 400 毫秒没到就放弃，退回异步。
+- **证据**：沙箱真火狐 160 + 整个内置扩展，两个实例交替开自检页各拿各的参数；CI 模拟器结果见 PROGRESS。真机没验证。
 
 ### A-5 安卓版的构建方式
 

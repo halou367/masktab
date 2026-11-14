@@ -13,9 +13,7 @@ let searchUrl = '';
 const tabInst = new Map(); // tabId → 实例 id
 const tabCs = new Map();   // tabId → cookieStoreId
 const csInst = new Map();  // cookieStoreId（容器）→ 实例 id
-const regs = new Map();    // cookieStoreId → {key, reg}
 const pending = new Map(); // 两步登录暂存：`${tabId}|${主域名}` → {u, at}
-let regBroken = '';        // contentScripts.register 不支持按容器注册时记下原因，之后不再试
 
 // app 的回复是 JSON 字符串（GeckoView 不直接回传 JSONObject）
 const parse = (r) => (typeof r === 'string' ? JSON.parse(r) : r);
@@ -34,9 +32,8 @@ function applyState(s) {
   for (const x of s.insts) m[x.id] = x;
   insts = m;
   if (s.searchUrl) searchUrl = s.searchUrl;
-  // 每个实例的容器都先注册好指纹脚本：实例的第一个网页也能在页面脚本之前装上
-  for (const id of Object.keys(m)) { csInst.set(csOf(id), id); registerFp(csOf(id), id); }
-  for (const [cs, id] of csInst) if (!m[id]) { csInst.delete(cs); regs.get(cs)?.reg?.unregister(); regs.delete(cs); }
+  for (const id of Object.keys(m)) csInst.set(csOf(id), id);
+  for (const [cs, id] of csInst) if (!m[id]) csInst.delete(cs);
 }
 function connect() {
   try {
@@ -72,7 +69,7 @@ function bind(tab, id) {
   tabInst.set(tab.id, id);
   if (tab.cookieStoreId) {
     tabCs.set(tab.id, tab.cookieStoreId);
-    if (isContainer(tab.cookieStoreId)) { csInst.set(tab.cookieStoreId, id); return registerFp(tab.cookieStoreId, id); }
+    if (isContainer(tab.cookieStoreId)) csInst.set(tab.cookieStoreId, id);
   }
 }
 browser.tabs.onCreated.addListener((t) => { if (t.openerTabId != null && tabInst.has(t.openerTabId) && !tabInst.has(t.id)) tabInst.set(t.id, tabInst.get(t.openerTabId)); });
@@ -90,6 +87,9 @@ function routeFor(id) {
   return { type: 'socks', host: '127.0.0.1', port: x.port, proxyDNS: true, failoverTimeout: 1 };
 }
 browser.proxy.onRequest.addListener(async (d) => {
+  // 取指纹参数的同步请求（见下面“指纹参数”一节）：发出前就被跳转到扩展内部，不出网；这里指到一个没人听的本机端口，
+  // 这样内核不会替它查 DNS（不让“fp.masktab.invalid”出现在本地网络的 DNS 记录里），万一没被跳转也是立刻失败。
+  if (d.url.startsWith('https://fp.masktab.invalid/')) return BLOCK;
   await ready;
   let id = await instOfTab(d.tabId);
   if (!id) id = idOfCs(d.cookieStoreId) || (isContainer(d.cookieStoreId) && csInst.get(d.cookieStoreId)) || null;
@@ -113,30 +113,45 @@ browser.webRequest.onBeforeSendHeaders.addListener(async (d) => {
   return { requestHeaders: hs };
 }, { urls: ['<all_urls>'] }, ['blocking', 'requestHeaders']);
 
-// ---------- 指纹脚本按容器注册 ----------
-function fpCfg(id) { const x = insts[id]; return x ? { id: x.id, seed: x.seed, tz: x.tz || '', lang: x.lang || '' } : null; }
-async function registerFp(cs, id) {
-  if (regBroken || !browser.contentScripts?.register) return;
-  const cfg = fpCfg(id);
-  if (!cfg) return;
-  const key = JSON.stringify(cfg);
-  const old = regs.get(cs);
-  if (old && old.key === key) return;
-  regs.set(cs, { key, reg: null });
-  try {
-    const reg = await browser.contentScripts.register({
-      js: [{ file: 'fp.js' }, { code: `window.MTFP && window.MTFP.run(window, ${key});` }],
-      matches: ['<all_urls>'], runAt: 'document_start', allFrames: true, matchAboutBlank: true, cookieStoreId: cs,
-    });
-    if (regs.get(cs)?.key === key) regs.set(cs, { key, reg }); else reg.unregister();
-    console.info('MaskTab 指纹脚本已按容器注册', cs);
-    old?.reg?.unregister();
-  } catch (e) {
-    regBroken = String(e?.message || e);
-    regs.delete(cs);
-    console.warn('按容器注册指纹脚本失败，改用异步注入', regBroken);
-  }
+// ---------- 指纹参数：网页脚本运行之前同步交给内容脚本 ----------
+// 内容脚本（fp-boot.js）在 document_start 做两件事：
+//   1. 发一条消息 {t:'fp:who', n:<随机数>}——消息带着“来自哪个标签页”，这里据此认出实例；
+//   2. 紧接着发一个同步请求到 https://fp.masktab.invalid/<扩展内部编号>/<同一个随机数>。
+// 这里把两者对上，把参数放在跳转地址里（跳到扩展自己的 fpcfg.json?c=…），内容脚本读跳转后的地址就拿到了。
+// 全程同步，早于网页自己的任何脚本。请求本身认不出标签页（内容脚本发的请求 tabId 是 -1），所以要靠那条消息。
+// 地址里的扩展内部编号每次安装随机，网页不知道：网页自己发这个请求拿不到任何东西。
+//
+// 以前的做法是 contentScripts.register 按 cookieStoreId 给每个实例注册一份脚本，在 GeckoView 里是错的：
+// 安卓上 cookieStoreId 被当成数字解析（"firefox-container-mt-xx" → NaN → 0），等于每份脚本对所有标签页都生效，
+// 谁先注册谁赢，结果所有实例用的是同一个实例的种子和时区（CI 的指纹自检页抓到的，见 docs/decisions.md A-7）。
+function fpCfg(id) { const x = insts[id]; return x ? { id: x.id, no: x.no, seed: x.seed, tz: x.tz || '', lang: x.lang || '' } : null; }
+const FP_KEY = new URL(browser.runtime.getURL('')).host;
+const FP_WAIT = 400; // 毫秒：消息一直没到就不等了，内容脚本改走异步兜底
+const fpWho = new Map(); // 随机数 → {id（实例，可能为 null）, at} 或 {wait: 回调}
+function fpAnnounce(n, id) {
+  const w = fpWho.get(n);
+  if (w?.wait) { fpWho.delete(n); w.wait(id); return; }
+  fpWho.set(n, { id, at: Date.now() });
+  if (fpWho.size > 200) for (const [k, v] of fpWho) if (!v.wait && Date.now() - v.at > 5000) fpWho.delete(k);
 }
+browser.webRequest.onBeforeRequest.addListener(async (d) => {
+  try {
+    const seg = new URL(d.url).pathname.split('/');
+    if (seg[1] !== FP_KEY || !seg[2]) return { cancel: true };
+    const n = seg[2];
+    let id = null;
+    const got = fpWho.get(n);
+    if (got && !got.wait) { fpWho.delete(n); id = got.id; } else {
+      id = await new Promise((res) => {
+        fpWho.set(n, { wait: res });
+        setTimeout(() => { if (fpWho.get(n)?.wait === res) { fpWho.delete(n); res(null); } }, FP_WAIT);
+      });
+    }
+    return { redirectUrl: browser.runtime.getURL('fpcfg.json') + '?c=' + encodeURIComponent(JSON.stringify((id && fpCfg(id)) || {})) };
+  } catch (e) {
+    return { cancel: true };
+  }
+}, { urls: ['https://fp.masktab.invalid/*'] }, ['blocking']);
 
 // ---------- 消息 ----------
 function siteOfSender(s) {
@@ -172,7 +187,7 @@ browser.runtime.onMessage.addListener((m, sender) => {
   if (t === 'bind' && sender.tab) {
     return ready.then(() => bind(sender.tab, String(m.inst))).then(() => {
       console.info('MaskTab 标签页登记', sender.tab.id, sender.tab.cookieStoreId, '→', m.inst);
-      return { ok: true, cs: sender.tab.cookieStoreId, reg: regBroken ? 'async' : 'sync' };
+      return { ok: true, cs: sender.tab.cookieStoreId, reg: 'sync' };
     });
   }
   // 内容脚本拿到 app 给的实例参数后登记（会话决定实例，网页伪造不了）
@@ -181,6 +196,7 @@ browser.runtime.onMessage.addListener((m, sender) => {
     return Promise.resolve(true);
   }
   if (t === 'fp:cfg' && sender.tab) return instOfTab(sender.tab.id).then((id) => (id ? fpCfg(id) : null));
+  if (t === 'fp:who' && sender.tab && typeof m.n === 'string') { ready.then(() => instOfTab(sender.tab.id)).then((id) => fpAnnounce(m.n, id), () => fpAnnounce(m.n, null)); return; }
   if (t.startsWith('vault:')) return vaultMsg(m, sender).then((r) => ({ ok: true, r }), (e) => ({ ok: false, error: e.message }));
   if (t === 'search') return Promise.resolve(searchUrl);
 });
