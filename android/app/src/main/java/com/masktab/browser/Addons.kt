@@ -66,7 +66,7 @@ object Addons {
                 "disable" -> c.disable(e, WebExtensionController.EnableSource.USER)
                 "remove" -> c.uninstall(e)
                 "action" -> { val a = Core.actions[id] ?: return@list done("这个扩展没有工具栏按钮"); a.click(); GeckoResult.fromValue(null) }
-                "options" -> { e.metaData.optionsPageUrl?.let { Core.openTab(Core.store.current, it, raw = true) }; GeckoResult.fromValue(null) }
+                "options" -> { e.metaData.optionsPageUrl?.let { Core.openTab(Host.current, it, raw = true) }; GeckoResult.fromValue(null) }
                 else -> return@list done("未知操作")
             }
             r.accept({ if (op == "remove") Core.actions.remove(id); done(null) }, { err -> done(err?.message ?: "失败") })

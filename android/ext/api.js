@@ -1,7 +1,8 @@
-// 安卓版的 api.js：桌面版走核心服务的本地 HTTP 接口，这里改走 GeckoView 原生消息（app 里的 Bridge）。
-// 导出的名字与桌面版相同，menu.js、instances.js 不用改。
-// 每个请求都有时限（默认 20 秒）：app 那头万一不回话，页面报“没有回应”而不是一直空白 / 转圈。
-export async function api(method, path, body, timeout = 20000) {
+// 安卓版的 api.js：桌面版直接请求核心服务的本地 HTTP 接口，这里改走 GeckoView 原生消息——
+// app 里的 Bridge 把请求原样转给同一个核心服务（决策 D-4），所以路径、参数、返回值和桌面版完全一样。
+// 导出的名字与桌面版相同，共用的页面（menu.js、instances.js、panel.js、pages.js）不用改。
+// 每个请求都有时限（读 20 秒；改东西 95 秒，拉订阅、选线要等核心服务办完）：app 那头万一不回话，页面报“没有回应”而不是一直空白 / 转圈。
+export async function api(method, path, body, timeout = method === 'GET' ? 20000 : 95000) {
   let r, timer;
   try {
     r = await Promise.race([
@@ -15,18 +16,4 @@ export async function api(method, path, body, timeout = 20000) {
   return r.data;
 }
 export const config = async () => ({});
-export const fmtBytes = (n) => {
-  if (!n) return '0 B';
-  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
-  return (n / 1024 ** i).toFixed(i ? 1 : 0) + ' ' + u[i];
-};
-// 实例当前用于展示的出口（国旗、时区来源）。安卓版只有一路出口，cf 与 direct 是同一个。
-export function shownExit(inst) {
-  const p = inst?.rt?.probe;
-  if (!p) return null;
-  return p.cf || p.direct || null;
-}
-export const mismatch = () => false;
-export const RESTART_WHY = { timezone: '出口时区已变化', fingerprint: '指纹 / 语言设置已改' };
-export function noticeText(n) { return n || ''; }
+export { fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText } from './common.js';

@@ -12,6 +12,9 @@ func (a *App) refreshBind() string {
 	a.mu.Lock()
 	want := a.Settings.BindIface
 	a.mu.Unlock()
+	if a.hosted() { // 手机上没有"本机 TUN 接管"的问题，应用也没有绑定网卡的权限
+		want = "off"
+	}
 	var it netx.Iface
 	switch want {
 	case "off":

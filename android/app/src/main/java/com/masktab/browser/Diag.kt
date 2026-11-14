@@ -141,8 +141,8 @@ object Diag {
         if (jc.exists()) sb.append("—— 上次 Java 崩溃 ——\n").append(try { jc.readText().take(5000) } catch (e: Exception) { "读不到" }).append('\n')
         sb.append("—— 日志尾部 ——\n").append(logTail(120)).append('\n')
         var t = sb.toString()
-        val sub = try { Core.store.subUrl } catch (e: Throwable) { "" }
-        if (sub.isNotEmpty()) t = t.replace(sub, "<订阅地址>")
+        // 订阅地址里通常带令牌：整条网址只留域名
+        t = t.replace(Regex("(https?://[^/\\s\"'?]+)[/?][^\\s\"']{12,}"), "$1/…")
         return t.take(24000)
     }
 }

@@ -3,6 +3,7 @@ package com.masktab.browser
 import android.app.Activity
 import android.app.Dialog
 import android.content.Intent
+import org.json.JSONObject
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
@@ -91,13 +92,13 @@ class MainActivity : Activity(), CoreUi {
         handleIntent(intent)
     }
 
-    /** 测试用的启动参数（CI 截图）：mt_open=menu|instances|…打开对应页面，close 收起，diag 打开诊断窗口；mt_inst=<实例id> 切换实例；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
+    /** 测试用的启动参数（CI 截图）：mt_open=menu|instances|…打开对应页面，close 收起，diag 打开诊断窗口；mt_inst=<实例id 或 #编号> 切换实例；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
     private fun handleIntent(i: Intent?) {
         if (i == null || !Core.started) return
-        if (i.action == Intent.ACTION_VIEW && i.data != null) { closeSheet(); Core.openTab(Core.store.current, i.dataString); return }
+        if (i.action == Intent.ACTION_VIEW && i.data != null) { closeSheet(); Core.openTab(Host.current, i.dataString); return }
         if (i.getBooleanExtra("mt_hold", false)) return
         if (hold) { hold = false; hideStartup() }
-        i.getStringExtra("mt_inst")?.let { id -> closeSheet(); Core.switchTo(id) }
+        i.getStringExtra("mt_inst")?.let { v -> closeSheet(); Core.switchTo(if (v.startsWith("#")) Host.insts.firstOrNull { it.no == v.drop(1).toIntOrNull() }?.id ?: v else v) }
         i.getStringExtra("mt_open")?.let { r -> when (r) { "diag" -> showDiag(); "close" -> closeSheet(); else -> openSheet(r, r != "menu") } }
         i.removeExtra("mt_open")
         i.removeExtra("mt_inst")
@@ -198,16 +199,16 @@ class MainActivity : Activity(), CoreUi {
         val q = input.trim()
         if (q.isEmpty()) return
         val isUrl = Regex("^[a-z][a-z0-9+.-]*://", RegexOption.IGNORE_CASE).containsMatchIn(q) || (Regex("^[^\\s]+\\.[^\\s]{2,}$").matches(q))
-        val target = if (isUrl) (if (q.contains("://")) q else "https://$q") else Core.store.searchUrl.replace("%s", java.net.URLEncoder.encode(q, "UTF-8"))
+        val target = if (isUrl) (if (q.contains("://")) q else "https://$q") else Host.searchUrl.replace("%s", java.net.URLEncoder.encode(q, "UTF-8"))
         val t = Core.curTab()
-        if (t == null) Core.openTab(Core.store.current, target) else t.session.loadUri(target)
+        if (t == null) Core.openTab(Host.current, target) else t.session.loadUri(target)
         url.clearFocus()
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(url.windowToken, 0)
         gecko.requestFocus()
     }
 
     override fun onTabsChanged() {
-        val i = Core.store.cur()
+        val i = Host.cur() ?: return
         val t = Core.curTab()
         // 正显示内置页面时不动 GeckoView 里的会话（关掉页面时再换回标签页）
         if (!panelOn && t != null && shown !== t.session) {
@@ -219,7 +220,7 @@ class MainActivity : Activity(), CoreUi {
             shown = t.session
         }
         tabCount.count = Core.tabsOf(i.id).size
-        avatar.set(parseColor(i.color), i.no.toString(), flagBitmap(this, Core.store.rtOf(i.id).exit?.country.takeUnless { i.direct }))
+        avatar.set(parseColor(i.color), i.no.toString(), flagBitmap(this, i.country.takeIf { i.on && it.isNotEmpty() }))
         avatar.contentDescription = "实例 #${i.no} ${i.name}"
         t?.let { onTabUpdated(it) }
     }
@@ -251,39 +252,36 @@ class MainActivity : Activity(), CoreUi {
             bg {
                 var s = System.currentTimeMillis()
                 pace(t0)
-                val store = Core.store
-                // mihomo
-                if (store.subUrl.isEmpty()) {
-                    step(2, 3, "还没有订阅，全部实例直连"); step(3, 3, "在“节点与出口”里填订阅地址")
-                } else {
-                    step(2, 1)
-                    val ok = Core.mihomo.start(store)
-                    pace(s)
-                    step(2, if (ok) 2 else 4, if (ok) "mihomo ${Core.mihomo.version}" else Core.mihomo.lastError)
-                    s = System.currentTimeMillis()
-                    step(3, 1)
-                    if (ok) {
-                        // 等节点、选节点；“自动”实例手上的节点不通时在这里把全部节点测一遍（进度显示在这一步），再挑一个通的
-                        Core.job.busy = true
-                        val n = try { Core.loadSub(fetch = false, test = null) { msg -> step(3, 1, msg) } } catch (e: Exception) { logw("加载订阅出错", e); 0 } finally { Core.job.busy = false; Core.job.phase = "" }
-                        pace(s)
-                        val good = Core.mihomo.nodes().count { it.good }
-                        step(3, if (n > 0) 2 else 4, if (n > 0) "$n 个节点" + (if (good > 0) "，测过可用 $good 个" else "") else Core.job.error.ifEmpty { "订阅没有拉到节点" })
-                    } else { Core.job.error = Core.mihomo.lastError; step(3, 3) }
-                }
-                // 网络检测：当前实例的出口
+                // 核心服务（和电脑版同一份代码，连同它管的 mihomo）
+                step(2, 1)
+                if (!CoreProc.start()) { step(2, 4, CoreProc.lastError); step(3, 3); step(4, 3); return@bg }
+                Host.waitFor(15000) { Host.mihomoOk || Host.coreError.isNotEmpty() }
+                Legacy.migrate(this@MainActivity)?.let { msg -> Host.refresh(); toast(msg) }
+                pace(s)
+                step(2, if (Host.mihomoOk) 2 else 4, if (Host.mihomoOk) "mihomo ${Host.mihomoVersion}" else Host.coreError.ifEmpty { "mihomo 没有起来" })
+                // 订阅
+                s = System.currentTimeMillis()
+                if (Host.subs.isEmpty()) step(3, 3, "还没有订阅，全部实例直连") else { pace(s); step(3, if (Host.nodeCount > 0) 2 else 4, if (Host.nodeCount > 0) "${Host.nodeCount} 个节点" else "订阅里还没有节点") }
+                // 网络检测：启动当前实例（选线、写配置、探出口）
                 s = System.currentTimeMillis()
                 step(4, 1)
-                val i = store.cur()
-                val (ex, ms) = Probe.exit(i, Core.mihomo.running)
-                val rt = store.rtOf(i.id)
-                if (ex != null) { rt.exit = ex; rt.latency = ms }
+                if (Host.insts.isEmpty()) try { CoreProc.json("POST", "/api/instances", JSONObject()) } catch (e: Exception) { logw("新建第一个实例失败：${e.message}") }
+                Host.refresh()
+                val cur = Host.cur()
+                if (cur != null) {
+                    Host.saveCurrent(cur.id)
+                    try { CoreProc.json("POST", "/api/instances/${cur.id}/launch") } catch (e: Exception) { logw("启动实例失败：${e.message}") }
+                    Host.waitFor(25000) { Host.get(cur.id)?.let { it.running && !it.starting && (it.country.isNotEmpty() || it.error.isNotEmpty()) } ?: true }
+                }
+                val i = Host.cur()
                 pace(s)
-                step(4, if (ex != null) 2 else 4, if (ex != null) "#${i.no} 出口 ${ex.country} · ${ex.ip}" + (if (i.direct) "（直连）" else "") else "连不上外网")
+                step(4, if (i != null && i.country.isNotEmpty()) 2 else 4,
+                    if (i == null) "没有实例" else if (i.country.isNotEmpty()) "#${i.no} 出口 ${i.country} · ${i.ip}" + (if (!i.on) "（直连）" else "") else i.error.ifEmpty { if (i.running) "出口还没探出来" else "实例没有启动好" })
                 Thread.sleep(500)
                 ui {
                     logi("启动完成，用时 ${System.currentTimeMillis() - t0} 毫秒")
                     Core.started = true
+                    Host.watch()
                     Core.pushState()
                     Core.restoreTabs()
                     if (!hold) hideStartup()
@@ -310,7 +308,7 @@ class MainActivity : Activity(), CoreUi {
         s.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
                 // 菜单 / 管理页里点到的外部链接在当前实例的新标签页打开
-                if (request.uri.startsWith("http")) { val u = request.uri; mainHandler.post { closeSheet(); Core.openTab(Core.store.current, u) }; return GeckoResult.deny() }
+                if (request.uri.startsWith("http")) { val u = request.uri; mainHandler.post { closeSheet(); Core.openTab(Host.current, u) }; return GeckoResult.deny() }
                 return null
             }
             override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
@@ -454,7 +452,7 @@ class MainActivity : Activity(), CoreUi {
     // ---------- 标签页列表 ----------
 
     private fun showTabs() {
-        val i = Core.store.cur()
+        val i = Host.cur() ?: return
         val d = Dialog(this, android.R.style.Theme_Material_Light_NoActionBar)
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.parseColor("#F8F9FA")) }
         val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(10), dp(8), dp(10)) }
@@ -511,7 +509,7 @@ class MainActivity : Activity(), CoreUi {
         pm.setOnMenuItemClickListener {
             val t = Core.curTab()
             when (it.itemId) {
-                1 -> Core.openTab(Core.store.current)
+                1 -> Core.openTab(Host.current)
                 2 -> t?.session?.goForward()
                 3 -> t?.session?.reload()
                 4 -> openSheet("instances", true)

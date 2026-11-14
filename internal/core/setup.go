@@ -63,6 +63,18 @@ func (a *App) EnsureTools(onDownload func()) error {
 	a.setupMu.Lock()
 	defer a.setupMu.Unlock()
 	a.ensureCore()
+	if a.hosted() { // 浏览器内核在宿主手里，不用准备
+		a.mu.Lock()
+		first := a.kernelExe == ""
+		a.kernelExe = "host"
+		a.setup.Stage, a.setup.Error = "ready", ""
+		a.bumpLocked("state", "")
+		a.mu.Unlock()
+		if first {
+			close(a.kernelUp)
+		}
+		return nil
+	}
 	return a.ensureKernel(onDownload)
 }
 
@@ -85,6 +97,12 @@ func (a *App) ensureCore() {
 		log.Print(msg)
 	}
 	bin := firstFile(filepath.Join(a.ExeDir, kernel.MihomoName()), a.p("core", kernel.MihomoName()))
+	if a.hosted() { // mihomo 随宿主的安装包来，不下载
+		if bin = firstFile(a.Host.Mihomo); bin == "" {
+			fail("没有找到代理内核 mihomo（" + a.Host.Mihomo + "）")
+			return
+		}
+	}
 	if bin == "" {
 		a.setupNote("没有找到代理内核 mihomo，开始下载")
 		var err error
@@ -105,7 +123,7 @@ func (a *App) ensureCore() {
 		_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)
 		go func() { _ = a.applyConfig() }()
 	}
-	if _, err := c.WriteConfig(proxy.Generate(proxy.Input{ControlPort: c.Port, Secret: c.Secret, Interface: a.refreshBind()})); err != nil {
+	if _, err := c.WriteConfig(proxy.Generate(proxy.Input{ControlPort: c.Port, Secret: c.Secret, Interface: a.refreshBind(), Hosted: a.hosted()})); err != nil {
 		fail("写入代理配置失败：" + err.Error())
 		return
 	}

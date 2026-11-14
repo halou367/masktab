@@ -21,6 +21,17 @@
 - 升级内核版本或 mihomo 版本只改 `internal/kernel/fetch.go`：版本常量，以及 `KernelAsset` / `MihomoAsset` 里各平台的大小与 SHA-256（取自上游发布页的 digest）。改完必须跑冒烟测试（原因见 decisions K-1、D-1）。
 - 没在 Windows 上实际看到的东西，不要在文档里写成“已验证”。CI 的 Windows 冒烟测试和截图算证据，其余都要标注。
 
+## 两端一份代码（decisions D-4）
+
+电脑和手机用的是**同一个核心服务**（`cmd/masktab` + `internal/…`，手机上以 `-host android` 作为 app 的子进程运行）和**同一批页面文件**。改功能时只改一处：
+
+- 逻辑（实例、订阅、选线、探测、密码库、接口）→ 改 Go。不要在 `android/…/*.kt` 里再实现一遍；Kotlin 只管浏览器外壳（标签页、工具栏、GeckoView、把请求转给核心服务）。
+- 节点面板 → `companion/ext/panel.js` + `panel.css`；订阅与出口、设置 → `pages.js`；实例管理 → `instances.js`；实例菜单 → `menu.js`；自动填写 → `autofill.js`；两端共用的小函数 → `common.js`。
+  `companion/ext/popup.js`、`app.js` 和 `android/ext/main.js` 只是外壳，不要往里写功能。
+- 两端确实不同的地方（内核做不到的）用状态里的 `kernel.caps` / `host` 判断后显示或隐藏，写在共用文件里，不要分叉成两份。
+- 共用文件里的类名、请求路径改了，两端一起受影响：跑 `android/scripts/preview-pages.mjs`（CI 也跑），它拿同一份状态画两端的面板并比对内容。
+- 核心服务状态（`GET /api/state`）的形状改了，重新抓一份 `android/scripts/fixture-state.json`（做法见 docs/android.md“本机联调”）。
+
 ## 每次推送都要做
 
 1. `go vet ./... && go test ./...` 通过。

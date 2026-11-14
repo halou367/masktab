@@ -19,7 +19,16 @@ on:
       - 'companion/ext/menu.js'
       - 'companion/ext/instances.js'
       - 'companion/ext/autofill.js'
+      - 'companion/ext/common.js'
+      - 'companion/ext/panel.js'
+      - 'companion/ext/panel.css'
+      - 'companion/ext/pages.js'
       - 'companion/ext/assets/flags/**'
+      # 核心服务（和电脑版同一份 Go 代码）也打进 APK，决策 D-4
+      - 'cmd/masktab/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/android.yml'
   workflow_dispatch:
   workflow_call:
@@ -49,11 +58,33 @@ jobs:
           "$SDKM" --list_installed | grep -E "platforms|build-tools" || true
       - name: 下载并校验 mihomo
         run: bash android/scripts/fetch-mihomo.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 编译核心服务（和电脑版同一份代码，NDK 链接）
+        run: bash android/scripts/build-core.sh "0.1.${GITHUB_RUN_NUMBER}"
       - name: 检查内置扩展脚本语法
         run: |
-          for f in android/ext/*.js companion/ext/menu.js companion/ext/instances.js companion/ext/autofill.js companion/ext/ui.js companion/ext/sites.js; do
+          for f in android/ext/*.js companion/ext/menu.js companion/ext/instances.js companion/ext/autofill.js companion/ext/ui.js companion/ext/sites.js companion/ext/common.js companion/ext/panel.js companion/ext/pages.js; do
             node --check "$f" 2>/dev/null || node --input-type=module --check < "$f" || { echo "语法错误：$f"; exit 1; }
           done
+      # 两端一致性检查：同一份核心服务状态，分别画电脑版的工具栏弹窗和手机的页面，节点面板的内容必须一样；
+      # 顺带把手机的每一页点一遍（菜单、面板、三个列表、四个标签）。
+      - name: 两端界面一致性检查
+        run: |
+          mkdir -p /tmp/ext /tmp/pw
+          cp -r companion/ext/{ui.js,ui.css,sites.js,menu.js,instances.js,autofill.js,common.js,panel.js,panel.css,pages.js,assets} /tmp/ext/
+          cp -r android/ext/* /tmp/ext/
+          cp android/scripts/preview-pages.mjs android/scripts/fixture-state.json /tmp/pw/
+          cd /tmp/pw && npm init -y > /dev/null && npm i playwright@1.65.1 > /dev/null && npx playwright install --with-deps chromium > /dev/null
+          node preview-pages.mjs /tmp/ext /tmp/ppout "$GITHUB_WORKSPACE/companion/ext" | grep -v '^[ {}]'
+          test "${PIPESTATUS[0]}" = 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preview-pages
+          path: /tmp/ppout
+          if-no-files-found: ignore
       - name: 构建
         working-directory: android
         run: gradle assembleDebug --stacktrace --no-daemon
@@ -64,7 +95,9 @@ jobs:
           cp android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk out/MaskTab-android-arm64-v8a.apk
           cp android/app/build/outputs/apk/debug/app-x86_64-debug.apk out/MaskTab-android-x86_64.apk
           ls -la out
-          unzip -l out/MaskTab-android-arm64-v8a.apk | grep -E "libmihomo|libxul|assets/ext/(manifest|background|fp)" || true
+          unzip -l out/MaskTab-android-arm64-v8a.apk | grep -E "libmihomo|libmasktab|libxul|assets/ext/(manifest|background|fp|panel|pages|common)" || true
+          unzip -l out/MaskTab-android-arm64-v8a.apk | grep -q "lib/arm64-v8a/libmasktab.so" || { echo "APK 里没有核心服务"; exit 1; }
+          unzip -l out/MaskTab-android-x86_64.apk | grep -q "lib/x86_64/libmasktab.so" || { echo "x86_64 APK 里没有核心服务"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: MaskTab-android-arm64-v8a

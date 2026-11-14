@@ -1,14 +1,15 @@
 // 在没有安卓环境的地方预览内置扩展页面：用 Playwright 的 Chromium 打开 app.html / newtab.html，
 // 把 GeckoView 原生消息换成一个假的 Bridge（数据写死），截图并检查页面上有没有脚本错误；顺带检查 fp.js 的伪装效果。
-// 用法：node android/scripts/preview-pages.mjs <合成好的扩展目录> <截图输出目录>
-//   合成扩展目录：companion/ext 里的 ui.js ui.css sites.js menu.js instances.js autofill.js assets/ + android/ext/*
+// 用法：node android/scripts/preview-pages.mjs <合成好的扩展目录> <截图输出目录> [电脑版扩展目录]
+//   合成扩展目录：companion/ext 里的 ui.js ui.css sites.js menu.js instances.js autofill.js common.js panel.js panel.css pages.js assets/ + android/ext/*
+//   给了第三个参数（companion/ext）：再用同一份状态把电脑版的工具栏弹窗画一遍，检查两端的节点面板内容一致。
 // 需要 playwright（npm i playwright && npx playwright install chromium）。
 import { chromium } from 'playwright';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const [dir, out] = process.argv.slice(2);
+const [dir, out, desk] = process.argv.slice(2);
 fs.mkdirSync(out, { recursive: true });
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json' };
 const srv = http.createServer((q, r) => {
@@ -18,50 +19,40 @@ const srv = http.createServer((q, r) => {
 }).listen(0);
 const base = `http://127.0.0.1:${srv.address().port}/`;
 
-// 假的 app：形状与 Bridge.kt 的回复相同
-const mock = () => {
-  const ex = (ip, c, city, org, tz) => ({ ip, country: c, city, org, timezone: tz });
-  const inst = (id, no, name, color, node, exit, sites, count, cur) => ({
-    id, no, name, color, kind: 'persistent', node, seed: 123456789 * no, tzSet: '', langSet: '', ua: 'Mozilla/5.0 (Android 14; Mobile; rv:160.0) Gecko/160.0 Firefox/160.0',
-    tz: { source: 'exit-cf', effective: exit?.timezone || '', lang: 'en-US' }, proxy: { state: node === 'DIRECT' ? 'off' : 'on' },
-    rt: { running: cur || no === 2, starting: false, tabs: cur ? 2 : 0, current: cur, latency: exit ? 180 + no * 40 : 0, probing: false, error: null, probe: exit ? { cf: exit, direct: exit } : null, launchedTz: exit?.timezone, needRestart: [] },
-    acct: { sites, count, cookies: [{ d: 'google.com', n: 23 }, { d: 'github.com', n: 9 }, { d: 'jd.com', n: 14 }, { d: 'reddit.com', n: 6 }, { d: 'doubleclick.net', n: 3 }], cookieN: 55 },
-  });
-  const insts = [
-    inst('a1', 1, 'alice@gmail.com', '#1A73E8', 'auto', ex('104.28.12.3', 'US', 'Los Angeles', 'Cloudflare', 'America/Los_Angeles'), ['accounts.google.com', 'github.com', 'x.com', 'discord.com'], 4, true),
-    inst('b2', 2, 'bob@outlook.com', '#D93025', 'JP-东京-01', ex('45.76.1.9', 'JP', 'Tokyo', 'Vultr', 'Asia/Tokyo'), ['login.live.com', 'chatgpt.com'], 2, false),
-    inst('c3', 3, '', '#F9AB00', 'DIRECT', ex('223.104.3.7', 'CN', 'Shanghai', 'China Mobile', 'Asia/Shanghai'), [], 0, false),
-  ];
-  const state = { me: insts[0], instances: insts, palette: ['#1A73E8', '#D93025', '#F9AB00', '#188038', '#D01884', '#A142F4'], launchSteps: ['准备内核', '加载内置扩展', '启动 mihomo', '加载订阅', '网络检测'],
-    vault: { hasDefault: true, rules: [{ site: 'https://passport.jd.com', host: 'passport.jd.com', kinds: ['phone', 'pass'], by: 1, at: 1 }, { site: 'https://arena.ai', host: 'arena.ai', kinds: ['email', 'pass'], by: 2, at: 1 }] }, settings: { searchUrl: 'https://www.bing.com/search?q=%s', subUrl: 'https://sub.example.com/clash' }, proxy: { running: true, installed: true }, current: 'a1', platform: 'android' };
-  const nodes = { sub: { url: state.settings.subUrl, running: true, version: 'v1.19.34', loaded: true }, inst: { id: 'a1', node: 'auto', now: 'US-洛杉矶-02' },
-    nodes: [['US-洛杉矶-02', 'vless', 156], ['JP-东京-01', 'trojan', 88], ['SG-新加坡', 'ss', 0], ['HK-香港-03', 'vmess', 61]].map(([name, type, delay]) => ({ name, type, delay, alive: delay > 0 })) };
-  const vault = { items: [{ id: 'v1', inst: 'a1', site: '*', user: 'alice@gmail.com', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'a1', site: 'https://github.com', user: 'alice', pass: 'gh-secret', src: 'saved' }], hasDefault: true };
+// 假的 app：只顶替“把请求送到核心服务”这一段。状态不是手写的——fixture-state.json 是本机联调时从真的核心服务
+// （宿主模式，和安卓版里跑的是同一个程序）GET /api/state 抓下来的，形状原样；只把延迟、IP、纯净度这些数值改成了截图里好看的。
+// 核心服务的状态改了形状，就重新抓一份（见 docs/android.md“本机联调”）。
+const fixture = JSON.parse(fs.readFileSync(new URL('./fixture-state.json', import.meta.url), 'utf8'));
+const mock = (state) => {
+  const vault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' }], hasDefault: true };
   const addons = [{ id: 'ublock0@raymondhill.net', name: 'uBlock Origin', version: '1.62.0', enabled: true, desc: '高效的广告拦截器', action: true, options: true }];
   const reply = (m, p) => {
     const k = `${m} ${p.split('?')[0]}`;
     if (k === 'GET /api/state') return state;
-    if (k === 'GET /api/nodes') return nodes;
     if (k === 'GET /api/vault') return vault;
     if (k === 'GET /api/addons') return addons;
-    return null;
+    if (k === 'GET /api/diag') return { text: 'MaskTab 诊断信息（示例）' };
+    if (k === 'GET /api/events') return { seq: state.seq };
+    return { ok: true };
   };
   window.__calls = [];
   const rt = {
-    sendNativeMessage: async (app, msg) => { window.__calls.push(msg); return msg.t === 'hello' ? { id: 'a1', seed: 1, tz: 'Asia/Tokyo', lang: 'ja-JP' } : { data: reply(msg.m, msg.p) }; },
+    sendNativeMessage: async (app, msg) => { window.__calls.push(msg); return msg.t === 'hello' ? { id: 'p2', seed: 1, tz: 'Asia/Tokyo', lang: 'ja-JP' } : JSON.stringify({ data: reply(msg.m, msg.p) }); },
     sendMessage: async () => ({ ok: true, reg: 'sync' }),
   };
   window.browser = { runtime: rt };
-  window.chrome = { runtime: { sendMessage: (m, cb) => { cb && cb(null); return Promise.resolve(); }, lastError: null } };
+  // 电脑版的面板（第三个参数给了电脑版扩展目录时才用到）：chrome.* 只要这几样
+  window.chrome = { runtime: { sendMessage: (m, cb) => { cb && cb(null); return Promise.resolve(); }, lastError: null, getURL: (x) => new URL(x, location.href).href },
+    tabs: { create: (o) => { window.__calls.push({ m: 'TAB', p: o.url }); }, query: async () => [] } };
 };
 
 const br = await chromium.launch();
 const ctx = await br.newContext({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 2, userAgent: 'Mozilla/5.0 (Android 14; Mobile; rv:160.0) Gecko/160.0 Firefox/160.0', locale: 'zh-CN' });
-await ctx.addInitScript(mock);
+await ctx.addInitScript(mock, fixture);
 const errors = [];
-const shots = [['menu', 'app.html#menu', { width: 380, height: 700 }], ['node', 'app.html#node'], ['fp', 'app.html#fp'], ['nodelist', 'app.html#node/list'],
-  ['instances', 'app.html#instances'], ['drawer', 'app.html#instances/a1'], ['import', 'app.html#instances/import'],
-  ['subs', 'app.html#subs'], ['addons', 'app.html#addons'], ['settings', 'app.html#settings'], ['newtab', 'app.html'.replace('app', 'newtab') + '#inst=a1']];
+const shots = [['menu', 'app.html#menu', { width: 380, height: 700 }], ['node', 'app.html#node'], ['fp', 'app.html#fp'],
+  ['instances', 'app.html#instances'], ['drawer', 'app.html#instances/p2'], ['import', 'app.html#instances/import'],
+  ['exits', 'app.html#exits'], ['addons', 'app.html#addons'], ['settings', 'app.html#settings'], ['newtab', 'app.html'.replace('app', 'newtab') + '#inst=p2']];
 for (const [name, url, vp] of shots) {
   const pg = await ctx.newPage();
   if (vp) await pg.setViewportSize(vp);
@@ -83,9 +74,9 @@ const flow = [];
   await pg.waitForTimeout(500);
   // title = 页面顶上的标题：菜单是“#编号 名称”，管理页是 h2 的第一段文字，节点页是 #编号
   const info = () => pg.evaluate(() => ({ hash: location.hash.slice(1), cls: document.body.className, page: document.getElementById('root').dataset.page || '',
-    title: (document.querySelector('.who1 .t, .top h1, main.pg h2, .top.hd1 .no')?.childNodes[0]?.textContent || document.querySelector('main.pg h2')?.textContent || '').trim(),
+    title: (document.querySelector('.who1 .t, .top h1, main.pg h2, .np header .no, .np .pkh b')?.childNodes[0]?.textContent || document.querySelector('main.pg h2')?.textContent || '').trim(),
     h2: [...(document.querySelector('main.pg h2')?.childNodes || [])].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(''),
-    fp: !!document.querySelector('.fpf'), tab: document.querySelector('.tabs button.on')?.textContent || '', kids: document.getElementById('root').childElementCount }));
+    fp: !!document.querySelector('.np .fpbox'), np: document.getElementById('root').className, tab: document.querySelector('.tabs button.on')?.textContent || '', kids: document.getElementById('root').childElementCount }));
   const setHash = async (r) => { await pg.evaluate((x) => { location.hash = x; }, r); await pg.waitForTimeout(250); };
   const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${name}${ok ? '' : ' ' + JSON.stringify(got)}`); if (!ok) errors.push(`flow: ${name}`); };
   const back = () => pg.locator('#root button[title="返回"]').first().click();
@@ -93,8 +84,8 @@ const flow = [];
   check('idle 是空页面', i.kids === 0 && i.cls === 'pg-idle', i);
   // [菜单上的字, 选择器, 路由, 到了以后的检查]
   const items = [
-    ['账号与密码', 'button.mi', 'instances/a1', (x) => x.h2 === '实例' && x.tab === '实例'],
-    ['节点与出口', 'button.mi', 'node', (x) => x.page === 'node' && !x.fp],
+    ['账号与密码', 'button.mi', 'instances/p2', (x) => x.h2 === '实例' && x.tab === '实例'],
+    ['节点与出口', 'button.mi', 'node', (x) => x.page === 'node' && x.np === 'np' && !x.fp],
     ['指纹与时区', 'button.mi', 'fp', (x) => x.page === 'fp' && x.fp],
     ['导入邮箱', 'button.act1', 'instances/import', (x) => x.h2 === '实例'],
     ['管理', 'button.act1', 'instances', (x) => x.h2 === '实例' && x.tab === '实例'],
@@ -103,7 +94,7 @@ const flow = [];
   for (const [label, sel, route, ok] of items) {
     await setHash('menu');
     i = await info();
-    check(`菜单画出来（去 ${label} 之前）`, i.cls === 'menu' && i.title.startsWith('#1') && i.kids > 3, i);
+    check(`菜单画出来（去 ${label} 之前）`, i.cls === 'menu' && i.title.startsWith('#2') && i.kids > 3, i);
     await pg.locator(sel, { hasText: label }).first().click();
     await pg.waitForTimeout(300);
     i = await info();
@@ -122,21 +113,41 @@ const flow = [];
     check(`${label} 点返回回到菜单`, i.hash === 'menu' && i.cls === 'menu', i);
   }
   await pg.screenshot({ path: path.join(out, 'flow-menu.png') });
-  // 节点页：点“节点”一行 → 节点列表 → 点一个节点 → 发出 PUT node，回到节点页；再点返回回菜单
+  // 节点面板（和电脑版同一份 panel.js）：出口那一格点“换国家”→ 出口国家列表 → 点日本 → 发出 PATCH（region=JP、自动），回到面板
   await pg.locator('button.mi', { hasText: '节点与出口' }).first().click();
   await pg.waitForTimeout(400);
-  await pg.locator('.ln1', { hasText: '节点' }).locator('button.row').click();
+  const patched = () => pg.evaluate(() => window.__calls.filter((c) => c.m === 'PATCH' && c.p === '/api/instances/p2').pop()?.b?.proxy);
+  await pg.locator('.np button.v[aria-label="换国家"]').click();
   await pg.waitForTimeout(300);
   i = await info();
-  const rows = await pg.locator('button.it').count();
-  check('节点页 → 节点列表', i.hash === 'node/list' && i.title === '节点' && rows === 4, { ...i, rows });
-  await pg.screenshot({ path: path.join(out, 'flow-nodelist.png') });
+  let rows = await pg.locator('.np .r.g').count();
+  check('面板 → 出口国家列表', i.hash === 'node' && i.np === 'np pk' && i.title === '出口国家' && rows === 4, { ...i, rows }); // 三个国家 + “不限”
+  await pg.screenshot({ path: path.join(out, 'flow-region.png') });
   await pg.evaluate(() => { window.__calls.length = 0; });
-  await pg.locator('button.it', { hasText: 'JP-东京-01' }).click();
+  await pg.locator('.np .r.g', { hasText: '美国' }).click();
   await pg.waitForTimeout(400);
   i = await info();
-  const put = await pg.evaluate(() => window.__calls.find((c) => c.m === 'PUT' && /\/api\/instances\/a1\/node$/.test(c.p))?.b);
-  check('点一个节点：发出切换请求并回到节点页', i.hash === 'node' && put?.node === 'JP-东京-01', { ...i, put });
+  let px = await patched();
+  check('点一个国家：发出切换请求并回到面板', i.np === 'np' && px?.region === 'US' && px?.exitMode === 'auto' && px?.state === 'on', { ...i, px });
+  // 出口的“自动”关掉 = 手动：发出 exitMode=manual
+  await pg.evaluate(() => { window.__calls.length = 0; });
+  await pg.locator('.np .pick').first().locator('.tg').click();
+  await pg.waitForTimeout(300);
+  px = await patched();
+  check('出口的自动开关：发出 exitMode=manual', px?.exitMode === 'manual', { px });
+  // 线路那一行点开：列出订阅里的线路
+  await pg.locator('.np button.cur').click();
+  await pg.waitForTimeout(250);
+  const lines = await pg.locator('.np .lines button.sl').count();
+  check('点线路一行展开线路列表', lines >= 1, { lines });
+  await pg.locator('.np button.cur').click();
+  await pg.waitForTimeout(200);
+  // 代理总开关：发出 state=off
+  await pg.evaluate(() => { window.__calls.length = 0; });
+  await pg.locator('.np header .tg').click();
+  await pg.waitForTimeout(300);
+  px = await patched();
+  check('代理开关：发出 state=off', px?.state === 'off', { px });
   // “伪装”一行点开 / 收起指纹与时区
   await pg.locator('button.idr').click();
   await pg.waitForTimeout(200);
@@ -151,11 +162,11 @@ const flow = [];
   // 管理页底部四个标签：来回切换，返回仍回菜单
   await pg.locator('button.act1', { hasText: '管理' }).click();
   await pg.waitForTimeout(300);
-  for (const [t, r] of [['订阅', 'subs'], ['扩展', 'addons'], ['设置', 'settings'], ['实例', 'instances']]) {
+  for (const [t, r, h2] of [['订阅与出口', 'exits', '订阅'], ['扩展', 'addons', '扩展'], ['设置', 'settings', '设置'], ['实例', 'instances', '实例']]) {
     await pg.locator('.tabs button', { hasText: t }).click();
     await pg.waitForTimeout(350);
     i = await info();
-    check(`标签 → ${t}`, i.hash === r && i.h2 === t && i.tab === t, i);
+    check(`标签 → ${t}`, i.hash === r && i.h2 === h2 && i.tab === t, i);
   }
   await back();
   await pg.waitForTimeout(250);
@@ -183,11 +194,75 @@ const flow = [];
   check('直接打开的整页点返回 = 关闭', closed, await info());
   await pg.close();
 }
+// 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点面板比内容。
+// 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹表单里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
+if (desk) {
+  const dsrv = http.createServer((q, r) => {
+    const u = new URL(q.url, 'http://x');
+    if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2' })); return; }
+    if (u.pathname.startsWith('/api/')) {
+      const st = { ...fixture, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
+      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : { ok: true })); return;
+    }
+    const f = path.join(desk, decodeURIComponent(u.pathname));
+    if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); r.end(); return; }
+    r.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream' }); r.end(fs.readFileSync(f));
+  }).listen(0);
+  const dbase = `http://127.0.0.1:${dsrv.address().port}/`;
+  const dctx = await br.newContext({ viewport: { width: 320, height: 600 }, deviceScaleFactor: 2, locale: 'zh-CN' });
+  await dctx.addInitScript(mock, fixture);
+  const dp = await dctx.newPage();
+  dp.on('pageerror', (e) => errors.push(`电脑版弹窗: ${e.message}`));
+  dp.on('console', (m) => { if (m.type() === 'error' && !/events/.test(m.text())) errors.push(`电脑版弹窗: ${m.text()}`); });
+  await dp.goto(dbase + 'popup.html');
+  await dp.waitForTimeout(600);
+  const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${name}${ok ? '' : ' ' + JSON.stringify(got)}`); if (!ok) errors.push(`flow: ${name}`); };
+  check('电脑版：弹窗首页是实例菜单', await dp.evaluate(() => document.body.classList.contains('menu') && !!document.querySelector('.hero')), {});
+  await dp.screenshot({ path: path.join(out, 'desk-menu.png') });
+  await dp.locator('button.mi', { hasText: '节点与出口' }).click();
+  await dp.waitForTimeout(400);
+  await dp.screenshot({ path: path.join(out, 'desk-node.png'), fullPage: true });
+  // 面板上的文字（去掉会跳的流量数字、只有电脑有的快捷键提示）
+  const words = (p) => p.evaluate(() => [...document.querySelectorAll('.np header, .np .exit, .np .idr, .np .sec, .np .banner')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()).filter(Boolean));
+  const mp = await ctx.newPage();
+  await mp.goto(base + 'app.html#node');
+  await mp.waitForTimeout(600);
+  const a = await words(dp), b = await words(mp);
+  // 伪装那一行：设备名跟内核走（电脑 Linux/Windows，手机 Android），其余一样；只比别的块
+  const strip = (l) => l.filter((x) => !/UTC|Android|Windows|Linux|macOS/.test(x));
+  check('两端节点面板的内容一致（出口、订阅、出口 / 入口）', a.length > 2 && JSON.stringify(strip(a)) === JSON.stringify(strip(b)), { 电脑: a, 手机: b });
+  await dp.locator('.np button.v[aria-label="换国家"]').click();
+  await dp.waitForTimeout(300);
+  await mp.locator('.np button.v[aria-label="换国家"]').click();
+  await mp.waitForTimeout(300);
+  const rows = (p) => p.evaluate(() => [...document.querySelectorAll('.np .r')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
+  const ra = await rows(dp), rb = await rows(mp);
+  check('两端出口国家列表一致', ra.length === 4 && JSON.stringify(ra) === JSON.stringify(rb), { 电脑: ra, 手机: rb });
+  await dp.screenshot({ path: path.join(out, 'desk-region.png') });
+  await dp.locator('.np .pkh button[title="返回"]').click();
+  await dp.waitForTimeout(200);
+  await dp.locator('.np header button[title="返回实例菜单"]').click();
+  await dp.waitForTimeout(200);
+  check('电脑版：面板返回回到实例菜单', await dp.evaluate(() => document.body.classList.contains('menu')), {});
+  // 电脑版管理页：订阅与出口、设置两页和手机是同一份 pages.js
+  for (const [tab, name] of [['exits', '订阅'], ['settings', '设置']]) {
+    const ap = await dctx.newPage();
+    ap.on('pageerror', (e) => errors.push(`电脑版管理页 ${tab}: ${e.message}`));
+    await ap.setViewportSize({ width: 1100, height: 800 });
+    await ap.goto(dbase + 'app.html#' + tab);
+    await ap.waitForTimeout(500);
+    const h2 = await ap.evaluate(() => document.querySelector('main h2')?.textContent || '');
+    check(`电脑版管理页：${name}`, h2.includes(name), { h2 });
+    await ap.screenshot({ path: path.join(out, `desk-${tab}.png`), fullPage: true });
+    await ap.close();
+  }
+  await mp.close(); await dctx.close(); dsrv.close();
+}
 console.log(flow.join('\n'));
 
 // fp.js：在普通页面环境里直接改 window，检查各项是否生效、同种子稳定、不同种子不同
 const pg = await ctx.newPage();
-await pg.goto(base + 'newtab.html#inst=a1&go=about:blank');
+await pg.goto(base + 'newtab.html#inst=p2&go=about:blank');
 await pg.addScriptTag({ path: path.join(dir, 'fp.js') });
 const fp = await pg.evaluate(() => {
   const draw = () => { const c = document.createElement('canvas'); c.width = 120; c.height = 40; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 120, 40); x.fillStyle = '#069'; x.font = '16px sans-serif'; x.fillText('MaskTab 指纹', 4, 26); return c.toDataURL(); };

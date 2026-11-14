@@ -27,6 +27,9 @@ import (
 
 // Start 打开普通窗口 #0，并恢复上次未正常关闭的实例（F-INST-1、F-SESSION）。
 func (a *App) Start() {
+	if a.hosted() { // 开哪个实例由宿主决定
+		return
+	}
 	var st struct {
 		Running []string
 		Pids    map[string]int
@@ -95,6 +98,9 @@ func (a *App) Launch(id string) error {
 	r.Cut = "启动中" // 浏览器起来之前主通道一律 REJECT
 	if !portFree(in.Port) {
 		in.Port = freePort()
+		if p := hostPortBase + in.No; a.hosted() && portFree(p) { // 宿主模式：端口尽量固定成 21000 + 编号，好认也好查
+			in.Port = p
+		}
 		a.saveLocked("instances")
 	}
 	r.probePort = freePort()
@@ -115,6 +121,9 @@ func (a *App) Launch(id string) error {
 		return errors.New(msg)
 	}
 	var pr *model.ExitProbe
+	// 宿主模式（安卓版）：浏览器一直开着，实例“打不开”没有意义——没有可用出口时照样算运行着，只是断流（mihomo 那边是 REJECT），
+	// 原因记在 hostErr 里显示给用户；选好节点 / 订阅刷新好之后由平时的流程自己恢复。桌面版仍然按 F-INST-4 拒绝启动。
+	hostErr := ""
 	a.step(id, 2)
 	if a.coreOK {
 		a.refreshBind() // 本机网络可能变过（换了 Wi-Fi、开关了 TUN）：重新识别物理网卡，下一步写配置时生效
@@ -131,14 +140,14 @@ func (a *App) Launch(id string) error {
 		res := a.resolveLocked(in)
 		a.mu.Unlock()
 		if masked && state == "on" { // 出口探测完成、时区确定之前不得启动浏览器进程（F-INST-4）
-			if res.want == "REJECT" {
+			if res.want == "REJECT" && !a.hosted() {
 				return fail("没能打开：" + res.err)
 			}
 			tried := map[string]bool{}
 			var p model.ExitProbe
 			why := ""
 			a.step(id, 6)
-			for try := 0; try < 3; try++ {
+			for try := 0; try < 3 && res.want != "REJECT"; try++ {
 				start := time.Now()
 				p = probe.Run(pport, eps)
 				if p.Error == "" {
@@ -158,12 +167,18 @@ func (a *App) Launch(id string) error {
 					return fail(err.Error())
 				}
 			}
-			pr = &p
 			a.mu.Lock()
 			fixed := in.TZ.Mode == "fixed" && in.TZ.Fixed != ""
 			a.mu.Unlock()
-			if p.Error != "" && !fixed {
+			switch {
+			case res.want == "REJECT": // 只有宿主模式会走到这里
+				hostErr = res.err
+			case p.Error != "" && a.hosted():
+				hostErr = "代理不通（" + why + "）。请换一个节点或出口后再试。"
+			case p.Error != "" && !fixed:
 				return fail("没能打开：代理不通（" + why + "）。请换一个节点或出口后再试。")
+			default: // 探测成功；或者桌面版固定了时区、探测失败也照常启动（原来的行为）
+				pr = &p
 			}
 		}
 	}
@@ -188,6 +203,18 @@ func (a *App) Launch(id string) error {
 	}
 	if a.coreOK {
 		l.ProxyPort = in.Port
+	}
+	if a.hosted() { // 浏览器由宿主管：到这里代理、出口、时区都已就绪
+		in.LastUsedAt = now()
+		a.saveLocked("instances")
+		a.hostLaunched(id, in, r, tz)
+		if hostErr != "" {
+			r.Error = hostErr
+			a.bumpLocked("state", id)
+		}
+		a.mu.Unlock()
+		go a.refresh(id)
+		return nil
 	}
 	exts, extHash, shared := a.extsForLocked(in)
 	in.LastUsedAt = now()
@@ -304,6 +331,10 @@ func (a *App) watch(id string, cmd *exec.Cmd, logf *os.File) {
 
 // Stop 先礼后兵：先请进程正常退出（保证会话与 Cookie 落盘），超时再强杀。
 func (a *App) Stop(id string) {
+	if a.hosted() {
+		a.hostStop(id)
+		return
+	}
 	a.mu.Lock()
 	r := a.rtLocked(id)
 	cmd, done := r.cmd, r.done
@@ -320,7 +351,7 @@ func (a *App) Stop(id string) {
 	case <-done:
 		return
 	case <-time.After(4 * time.Second):
-		log.Printf("实例 %s 没有在 4 秒内自行关闭，改为结束进程", id[:8])
+		log.Printf("实例 %s 没有在 4 秒内自行关闭，改为结束进程", short(id))
 	}
 	terminate(cmd.Process.Pid, false)
 	select {

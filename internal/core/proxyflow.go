@@ -172,7 +172,7 @@ func (a *App) applyConfig() error {
 		return nil
 	}
 	a.mu.Lock()
-	in := proxy.Input{ControlPort: a.core.Port, Secret: a.core.Secret, Interface: a.bindIfaceLocked()}
+	in := proxy.Input{ControlPort: a.core.Port, Secret: a.core.Secret, Interface: a.bindIfaceLocked(), Hosted: a.hosted()}
 	wants := map[string]string{}
 	for _, inst := range a.Instances {
 		r := a.rt[inst.ID]
@@ -409,6 +409,8 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 		r.Cut, r.Error = "", want.err // 主策略组本就停在 REJECT
 	case pr.Error != "" && state == "on":
 		r.Cut, r.Error = "出口探测失败", pr.Error
+	case masked && r.Running && tz != r.LaunchedTZ && a.adapter.Caps().Live:
+		r.LaunchedTZ, r.Cut, r.Error = tz, "", "" // 宿主随时把新时区交给页面，不用重启
 	case masked && r.Running && tz != r.LaunchedTZ:
 		r.Cut = "出口时区已变化，需要重启该实例"
 		r.NeedRestart = append(r.NeedRestart, "timezone")

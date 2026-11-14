@@ -141,8 +141,8 @@ if openmenu; then
     if [ "$(count "新建实例 #")" -gt "$n0" ] && [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ]; then echo "通过：从菜单新建实例（建好并打开了它的新标签页）"; else echo "失败：从菜单新建实例（新建 $n0 -> $(count "新建实例 #")，新标签页 $t0 -> $(count "MaskTab 新标签页就绪")）"; fail=1; fi
   else echo "失败：菜单里没找到“新建伪装实例”"; fail=1; fi
 else echo "失败：点头像后菜单没有就绪（新建实例）"; fail=1; fi
-# 在菜单里切回实例 #1（点列表里的另一个实例）不单独测；用测试参数切回去，后面的检查都按实例 #1
-A shell am start -n $ACT --es mt_inst p1 > /dev/null; sleep 3
+# 在菜单里切回实例 #1（点列表里的另一个实例）不单独测；用测试参数切回去（实例 id 是核心服务编的，这里按编号 #1 找），后面的检查都按实例 #1
+A shell am start -n $ACT --es mt_inst '#1' > /dev/null; sleep 3
 # 反复开关：头像 → 菜单 → 某一页 → 关，连做 12 轮，不停顿等待。应用不能死、内置页面不能崩
 for k in $(seq 1 12); do
   A shell input tap 904 202; sleep 0.7
@@ -172,7 +172,7 @@ n0=$(ready addons)
 A shell am start -n $ACT --es mt_open addons > /dev/null; sleep 6; shot t-addons
 if [ "$(ready addons)" -gt "$n0" ]; then echo "通过：扩展页"; else echo "失败：扩展页没有就绪"; fail=1; fi
 closepanel
-# 在页面里打字：点节点页的订阅地址框（还没有订阅时它直接摆在“订阅”那一行下面），弹出键盘、输入、收起键盘。
+# 在页面里打字：点节点面板的订阅地址框（还没有订阅时它直接摆在“订阅”那一行下面），弹出键盘、输入、收起键盘。
 # 位置先按无障碍标签“订阅地址”找；找不到再按 pixel_6 上量出来的坐标点（preview-pages 的版面 × 2.625 + 状态栏）。
 # 键盘弹出会让 GeckoView 改大小，是另一条容易出问题的路。
 A shell am start -n $ACT --es mt_open node > /dev/null; sleep 5
@@ -207,6 +207,9 @@ A logcat -d -s MaskTab:V GeckoConsole:V > "$OUT/logcat-masktab.txt" || true
 A shell ls -la /data/app/ > /dev/null 2>&1 || true
 # 功能检查：扩展后台、各页面、新标签页都要在 logcat 里报“就绪”；原生消息不能有回传失败
 need() { if grep -q "$1" "$OUT/logcat.txt"; then echo "通过：$2"; else echo "失败：$2（logcat 里没有“$1”）"; fail=1; fi; }
+if A shell ps -A | grep -q libmasktab; then echo "通过：核心服务进程在运行（和电脑版同一个程序）"; else echo "失败：核心服务进程不在"; fail=1; fi
+A shell "run-as $PKG cat files/core/core.out" > "$OUT/core-out-1.txt" 2>&1 || true
+need "启动步骤 3 启动核心服务：2" "核心服务和 mihomo 启动"
 need "MaskTab 后台就绪" "扩展后台拿到 app 状态"
 need "MaskTab 新标签页就绪" "新标签页"
 need "MaskTab 页面就绪 menu 有状态" "头像菜单"
@@ -226,7 +229,9 @@ else
   echo "logcat 里没有崩溃"; rm -f "$OUT/crash.txt"
 fi
 
-# ---------- 第二轮：经代理（runner 上起一个 mihomo 当节点服务端，订阅由本机 HTTP 服务提供；模拟器里 10.0.2.2 = runner） ----------
+# ---------- 第二轮：旧数据迁移 + 经代理（runner 上起一个 mihomo 当节点服务端，订阅由本机 HTTP 服务提供；模拟器里 10.0.2.2 = runner） ----------
+# 这一轮放进去的是 0.1.41 及以前的数据格式（files/state.json，Kotlin 那一套写的），并把核心服务的数据清空：
+# 应用启动时要把旧数据搬进核心服务（Legacy.migrate → POST /api/host/import），实例编号、种子、固定时区、选的节点都得原样过来。
 # 实例 #1 用“自动”（应经节点出网），实例 #2 指定一个订阅里没有的节点（应断流：被 mihomo 拒绝，不能直连）。
 # 除了看 app 日志，还用 adb forward 从 runner 直接打两个实例在 mihomo 里的端口，并对照节点服务端日志：
 #   #1 的请求必须出现在节点服务端日志里（真的经节点），#2 的请求必须失败且不出现在节点服务端日志里。
@@ -264,18 +269,24 @@ Y
   A shell am force-stop $PKG; A shell am force-stop com.google.android.apps.nexuslauncher || true; sleep 1
   # 状态文件：先 adb push 到 /data/local/tmp，再 run-as cp 进 app 目录（不用 stdin 管道，那种写法可能一直等输入）
   A push $W/state.json /data/local/tmp/mt-state.json || return 1
-  A shell "run-as $PKG sh -c 'cp /data/local/tmp/mt-state.json files/state.json && rm -f files/tabs.json'" || { echo "run-as cp 失败"; return 1; }
+  A shell "run-as $PKG sh -c 'rm -rf files/core files/host.json files/tabs.json files/state.json.old; cp /data/local/tmp/mt-state.json files/state.json'" || { echo "run-as cp 失败"; return 1; }
   A shell rm -f /data/local/tmp/mt-state.json
   A shell "run-as $PKG cat files/state.json" | grep -q "不存在的节点" || { echo "状态文件没写进去"; return 1; }
   A logcat -c
   T=90 A shell am start -W -n $ACT --ez mt_hold true
-  for k in $(seq 1 40); do sleep 2; A logcat -d -s MaskTab:I | grep -q "启动完成" && break; done
+  for k in $(seq 1 50); do sleep 2; A logcat -d -s MaskTab:I | grep -q "启动完成" && break; done
   sleep 1; shot 8-proxy-startup
+  # 旧数据搬完：旧文件改名留底，核心服务里有 4 个实例
+  if A shell "run-as $PKG ls files" | grep -q "state.json.old"; then echo "通过：旧数据已搬进核心服务（state.json 改名留底）"; else echo "失败：旧数据没有搬（files 里没有 state.json.old）"; fail=1; fi
+  A shell "run-as $PKG cat files/core/config/instances.json" > "$OUT/core-instances.json" 2>&1 || true
+  for id in p1 p2 p3 p4; do grep -q "\"id\": *\"$id\"" "$OUT/core-instances.json" || { echo "失败：核心服务里没有旧实例 $id"; fail=1; }; done
+  if A shell ps -A | grep -q libmasktab; then echo "通过：核心服务进程在运行"; else echo "失败：核心服务进程不在"; fail=1; fi
 
   # 硬检查一：mihomo 进程在跑
   if A shell ps -A | grep -q libmihomo; then echo "通过：mihomo 进程在运行"; else echo "失败：mihomo 进程不在"; fail=1; fi
-  A shell "run-as $PKG cat files/mihomo/mihomo.log" > "$OUT/mihomo-device.log" 2>&1 || true
-  A shell "run-as $PKG cat files/mihomo/config.json" | grep -v '"secret"' > "$OUT/mihomo-config.json" 2>&1 || true
+  A shell "run-as $PKG cat files/core/core/mihomo.log" > "$OUT/mihomo-device.log" 2>&1 || true
+  A shell "run-as $PKG cat files/core/core/config.yaml" | grep -v '^secret' > "$OUT/mihomo-config.yaml" 2>&1 || true
+  A shell "run-as $PKG cat files/core/core.out" > "$OUT/core-out-2.txt" 2>&1 || true
   # 硬检查二：经实例 #1 端口出网，且请求真的到了节点服务端
   A forward tcp:31001 tcp:21001; A forward tcp:31002 tcp:21002
   local c1 rc1 c2 rc2
@@ -300,11 +311,11 @@ Y
   A shell am start -a android.intent.action.VIEW -d https://example.com -n $ACT
   sleep 12; shot 10-bad-node-blocked
   A shell am start -n $ACT --es mt_open node; sleep 6; shot 11-proxy-node-page
-  # 节点页里点“全部测速”：发出去就返回、后台测，页面不能卡住。按钮位置靠无障碍信息找（找不到就跳过这一项，不算失败）
-  if tap_desc "全部测速"; then
-    sleep 7; shot 12-proxy-node-tested
-    if A logcat -d -s MaskTab:I | grep -q "代理任务完成（含测速）"; then echo "通过：点“全部测速”后后台任务跑完"; else echo "失败：点了“全部测速”但后台任务没有跑完"; fail=1; fi
-  else echo "跳过：没找到“全部测速”按钮的位置（无障碍信息里没有）"; fi
+  # 节点面板里点“测延迟”（闪电）：请求转给核心服务，后台测，页面不能卡住。按钮位置靠无障碍信息找（找不到就跳过这一项，不算失败）
+  if tap_desc "测延迟"; then
+    sleep 8; shot 12-proxy-node-tested
+    if A logcat -d -s MaskTab:I | grep -q "接口 POST /api/subscriptions/.*/test → 200"; then echo "通过：点“测延迟”后请求到了核心服务"; else echo "失败：点了“测延迟”但核心服务没收到（坐标可能没点中，见截图 12）"; fail=1; fi
+  else echo "跳过：没找到“测延迟”按钮的位置（无障碍信息里没有）"; fi
   A shell input keyevent KEYCODE_BACK; sleep 2
   # 指纹自检：两个直连实例（#3 东京 / 日语，#4 柏林 / 德语）各打开一次自检页，页面的第一段脚本就逐项调用被改过的接口
   # （画布、音频、时间、Intl、语言…），有一项抛错、值不对、或者拿到的是别的实例的时区 / 语言，就失败。
@@ -321,12 +332,18 @@ Y
   fpcheck p4 "tz=Europe/Berlin\\&off=-60\\&lang=de-DE" 14-fpcheck-berlin
   fpcheck p3 "tz=Asia/Tokyo\\&off=-540\\&lang=ja-JP\\&again=1" 15-fpcheck-tokyo-again
   A shell am start -n $ACT --es mt_inst p1; sleep 3
+  # 订阅与出口、设置两页（和电脑版同一份 pages.js）在有订阅时也要画得出来
+  n0=$(ready exits); A shell am start -n $ACT --es mt_open exits > /dev/null; sleep 6; shot 16-exits
+  if [ "$(ready exits)" -gt "$n0" ]; then echo "通过：订阅与出口页"; else echo "失败：订阅与出口页没有就绪"; fail=1; fi
+  A shell am start -n $ACT --es mt_open settings > /dev/null; sleep 5; shot 17-settings
+  closepanel
   A logcat -d > "$OUT/logcat-proxy.txt"
   A logcat -d -s MaskTab:V GeckoConsole:V > "$OUT/logcat-proxy-masktab.txt" || true
   cp $W/server.log "$OUT/node-server.log" 2>/dev/null || true
   local L="$OUT/logcat-proxy.txt"
   chk() { if grep -q "$1" "$L"; then echo "通过：$2"; else echo "失败：$2（logcat 里没有“$1”）"; fail=1; fi; }
-  chk "启动 mihomo：2" "mihomo 启动"
+  chk "启动核心服务：2" "核心服务和 mihomo 启动"
+  chk "已搬入旧数据：4 个实例" "旧数据迁移（4 个实例）"
   chk "加载订阅：2 1 个节点" "订阅加载到 1 个节点"
   chk "网络检测：2 #1 出口" "实例 #1 经节点探到出口"
   chk "MaskTab 指纹参数 example.com #1" "实例 #1 打开网页"
@@ -335,7 +352,7 @@ Y
   if [ "$n" -ge 2 ] && [ "$m" -ge 1 ] && [ "$bad" -eq 0 ]; then echo "通过：指纹自检（#3 东京两次、#4 柏林一次，各用各的参数；画布 / 音频 / 时区 / 语言 / 函数外观都对）"
   else echo "失败：指纹自检（东京通过 $n 次，应为 2；柏林通过 $m 次，应为 1；失败 $bad 次）"; fail=1; fi
   if grep -q "页面报错：" "$L"; then echo "失败：内置页面有报错："; grep "页面报错：" "$L" | cut -c1-240 | head -5; fail=1; fi
-  if grep -q "代理任务出错" "$L"; then echo "失败：代理后台任务出错"; fail=1; fi
+  if grep -q "核心服务退出了\|核心服务没有响应\|核心服务没有回应" "$L"; then echo "失败：核心服务中途退出或不回话"; grep "核心服务退出了\|核心服务没有响应\|核心服务没有回应" "$L" | cut -c1-200 | head -3; fail=1; else echo "通过：核心服务全程在"; fi
   if grep -q "Killing GPU process" "$OUT/logcat-live.txt"; then echo "失败：GPU 进程卡死被杀过"; fail=1; fi
   chk "加载失败 https://example.com/\? 实例 p2\|加载失败 https://example.com 实例 p2" "实例 #2（节点不存在）打不开网页，没有直连"
   if grep -q "MaskTab 指纹参数 example.com #2" "$L"; then echo "失败：实例 #2 的网页加载成功了（应当断流）"; fail=1; else echo "通过：实例 #2 的网页没有加载成功"; fi

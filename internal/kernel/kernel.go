@@ -35,6 +35,11 @@ type Launch struct {
 type Caps struct {
 	Fingerprint bool `json:"fingerprint"` // 引擎级指纹
 	Timezone    bool `json:"timezone"`    // 可靠的时区开关
+	// 以下几项决定界面上显示哪些设置（同一份界面，电脑和手机按能力显示）。
+	Platform bool `json:"platform"` // 可以选伪装成哪种系统、哪个浏览器、几核
+	Spoof    bool `json:"spoof"`    // 伪装项可以逐项开关
+	ExtLib   bool `json:"extLib"`   // 有全局扩展库（Chrome 应用商店 / 本机文件）
+	Live     bool `json:"live"`     // 改时区、语言、指纹不用重启实例
 }
 
 type Adapter interface {
@@ -124,8 +129,10 @@ func extDataDirs(profileDir, extID string) []string {
 
 type fpChromium struct{}
 
-func (fpChromium) Name() string                      { return "fingerprint-chromium" }
-func (fpChromium) Caps() Caps                        { return Caps{Fingerprint: true, Timezone: true} }
+func (fpChromium) Name() string { return "fingerprint-chromium" }
+func (fpChromium) Caps() Caps {
+	return Caps{Fingerprint: true, Timezone: true, Platform: true, Spoof: true, ExtLib: true}
+}
 func (fpChromium) Env(Launch) []string               { return nil }
 func (fpChromium) PrefsPath(p string) string         { return filepath.Join(p, "Default", "Preferences") }
 func (fpChromium) ExtDataDirs(p, id string) []string { return extDataDirs(p, id) }
@@ -161,8 +168,10 @@ func (fpChromium) Args(l Launch) []string {
 
 type ungoogled struct{}
 
-func (ungoogled) Name() string                      { return "ungoogled" }
-func (ungoogled) Caps() Caps                        { return Caps{Fingerprint: false, Timezone: runtime.GOOS != "windows"} }
+func (ungoogled) Name() string { return "ungoogled" }
+func (ungoogled) Caps() Caps {
+	return Caps{Fingerprint: false, Timezone: runtime.GOOS != "windows", Platform: true, Spoof: true, ExtLib: true}
+}
 func (ungoogled) PrefsPath(p string) string         { return filepath.Join(p, "Default", "Preferences") }
 func (ungoogled) ExtDataDirs(p, id string) []string { return extDataDirs(p, id) }
 func (ungoogled) Env(l Launch) []string {

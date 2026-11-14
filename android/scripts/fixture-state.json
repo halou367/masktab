@@ -1,0 +1,572 @@
+{
+ "core": {
+  "error": "",
+  "ok": true,
+  "version": "v1.19.34"
+ },
+ "exits": [],
+ "extensions": [],
+ "host": "android",
+ "instances": [
+  {
+   "id": "p1",
+   "updatedAt": 1794656712150,
+   "no": 1,
+   "kind": "persistent",
+   "name": "alice@gmail.com",
+   "color": "#1A73E8",
+   "createdAt": 1794656712150,
+   "lastUsedAt": 1794656712208,
+   "port": 21001,
+   "proxy": {
+    "state": "off",
+    "auto": true,
+    "exitMode": "auto",
+    "entryMode": "auto",
+    "addressMode": "custom"
+   },
+   "fp": {
+    "seed": "p4cAAAdbzRVyzrtOnJZJYFqI9NkOeI6yaVKoKWrJyR8=",
+    "disableSpoofing": []
+   },
+   "tz": {
+    "mode": "auto",
+    "source": "exit-cf"
+   },
+   "locale": {
+    "mode": "follow-exit"
+   },
+   "rt": {
+    "running": true,
+    "starting": false,
+    "probe": null,
+    "latency": 0,
+    "want": "DIRECT",
+    "launchedTz": "",
+    "up": 0,
+    "down": 0,
+    "upRate": 0,
+    "downRate": 0,
+    "companionSeen": 1794656712208
+   },
+   "fpInfo": {
+    "seed": 663158784,
+    "seed64": 123456789,
+    "platform": "android",
+    "brand": "Firefox",
+    "cores": 6,
+    "tz": "",
+    "lang": ""
+   },
+   "acct": {
+    "sites": [],
+    "count": 0
+   }
+  },
+  {
+   "id": "p2",
+   "updatedAt": 1794656732926,
+   "no": 2,
+   "kind": "persistent",
+   "name": "carol@proton.me",
+   "color": "#D93025",
+   "createdAt": 1794656712150,
+   "lastUsedAt": 1794656712184,
+   "port": 21002,
+   "proxy": {
+    "state": "on",
+    "subscriptionId": "63be7064-6736-4b7f-a1dc-15a2f3817ae7",
+    "exitId": "a:104.18.32.47:443",
+    "auto": true,
+    "exitMode": "auto",
+    "entryMode": "auto",
+    "profile": "a500f7dabf",
+    "addressMode": "custom",
+    "addressId": "8a6dcd25-bc37-4dde-942d-205e75f7a588",
+    "host": "et.test",
+    "region": "JP"
+   },
+   "fp": {
+    "seed": "2qiAADreaLFshS+8OBK3mzGVYHQ3/uJrjPadZGhCdKg=",
+    "disableSpoofing": []
+   },
+   "tz": {
+    "mode": "auto",
+    "source": "exit-cf"
+   },
+   "locale": {
+    "mode": "follow-exit"
+   },
+   "rt": {
+    "running": true,
+    "starting": false,
+    "probe": {
+     "cf": {
+      "ip": "203.0.113.11",
+      "country": "JP",
+      "city": "Tokyo",
+      "timezone": "Asia/Tokyo",
+      "org": "NTT Communications"
+     },
+     "direct": {
+      "ip": "198.51.100.7",
+      "country": "JP",
+      "city": "Tokyo",
+      "timezone": "Asia/Tokyo",
+      "org": "Cloudflare WARP"
+     },
+     "at": 1794656724920
+    },
+    "latency": 108,
+    "want": "n-p2",
+    "launchedTz": "Asia/Tokyo",
+    "up": 0,
+    "down": 0,
+    "upRate": 0,
+    "downRate": 0,
+    "companionSeen": 1794656712184
+   },
+   "fpInfo": {
+    "seed": 1520992256,
+    "seed64": 987654321,
+    "platform": "android",
+    "brand": "Firefox",
+    "cores": 4,
+    "tz": "Asia/Tokyo",
+    "lang": "ja-JP"
+   },
+   "acct": {
+    "sites": [
+     "github.com",
+     "accounts.google.com",
+     "chatgpt.com"
+    ],
+    "count": 3
+   }
+  },
+  {
+   "id": "p3",
+   "updatedAt": 1794656758482,
+   "no": 3,
+   "kind": "persistent",
+   "color": "#F9AB00",
+   "createdAt": 1794656712150,
+   "lastUsedAt": 1794656712198,
+   "port": 21003,
+   "proxy": {
+    "state": "on",
+    "subscriptionId": "63be7064-6736-4b7f-a1dc-15a2f3817ae7",
+    "exitId": "a:104.21.5.9:443",
+    "auto": true,
+    "exitMode": "auto",
+    "entryMode": "auto",
+    "profile": "a500f7dabf",
+    "addressMode": "custom",
+    "addressId": "675cd697-d7a7-4f7b-8ea6-48969c46202f",
+    "host": "et.test"
+   },
+   "fp": {
+    "seed": "W7WAAAAAAAU6KQF5T8R+3oJri+SK2w2u/mTPvGrGiiQ=",
+    "disableSpoofing": []
+   },
+   "tz": {
+    "mode": "auto",
+    "source": "exit-cf"
+   },
+   "locale": {
+    "mode": "follow-exit"
+   },
+   "rt": {
+    "running": true,
+    "starting": false,
+    "probe": {
+     "cf": {
+      "ip": "203.0.113.22",
+      "country": "US",
+      "city": "Los Angeles",
+      "timezone": "America/Los_Angeles",
+      "org": "Comcast Cable"
+     },
+     "direct": {
+      "ip": "203.0.113.22",
+      "country": "US",
+      "city": "Los Angeles",
+      "timezone": "America/Los_Angeles",
+      "org": "Cloudflare WARP"
+     },
+     "at": 1794656758505
+    },
+    "latency": 176,
+    "want": "n-p3",
+    "launchedTz": "America/Los_Angeles",
+    "up": 0,
+    "down": 0,
+    "upRate": 0,
+    "downRate": 0,
+    "companionSeen": 1794656712198
+   },
+   "fpInfo": {
+    "seed": 1538621440,
+    "seed64": 5,
+    "platform": "android",
+    "brand": "Firefox",
+    "cores": 4,
+    "tz": "America/Los_Angeles",
+    "lang": "en-US"
+   },
+   "acct": {
+    "sites": [],
+    "count": 0
+   },
+   "name": "bob@outlook.com"
+  }
+ ],
+ "ipq": {
+  "203.0.113.11": {
+   "type": "res",
+   "score": 92
+  },
+  "203.0.113.22": {
+   "type": "dc",
+   "score": 61
+  },
+  "203.0.113.33": {
+   "type": "res",
+   "score": 84
+  },
+  "198.51.100.7": {
+   "type": "dc",
+   "score": 55
+  }
+ },
+ "kernel": {
+  "caps": {
+   "fingerprint": true,
+   "timezone": true,
+   "platform": false,
+   "spoof": false,
+   "extLib": false,
+   "live": true
+  },
+  "name": "GeckoView",
+  "path": "host",
+  "version": "160.0"
+ },
+ "launchSteps": [
+  "准备实例",
+  "检查本机网络",
+  "挑选线路",
+  "写入代理配置",
+  "连通检测",
+  "探测出口与时区",
+  "生成指纹与资料目录",
+  "启动浏览器"
+ ],
+ "me": {
+  "id": "p2",
+  "updatedAt": 1794656732926,
+  "no": 2,
+  "kind": "persistent",
+  "name": "carol@proton.me",
+  "color": "#D93025",
+  "createdAt": 1794656712150,
+  "lastUsedAt": 1794656712184,
+  "port": 21002,
+  "proxy": {
+   "state": "on",
+   "subscriptionId": "63be7064-6736-4b7f-a1dc-15a2f3817ae7",
+   "exitId": "a:104.18.32.47:443",
+   "auto": true,
+   "exitMode": "auto",
+   "entryMode": "auto",
+   "profile": "a500f7dabf",
+   "addressMode": "custom",
+   "addressId": "8a6dcd25-bc37-4dde-942d-205e75f7a588",
+   "host": "et.test",
+   "region": "JP"
+  },
+  "fp": {
+   "seed": "2qiAADreaLFshS+8OBK3mzGVYHQ3/uJrjPadZGhCdKg=",
+   "disableSpoofing": []
+  },
+  "tz": {
+   "mode": "auto",
+   "source": "exit-cf"
+  },
+  "locale": {
+   "mode": "follow-exit"
+  },
+  "rt": {
+   "running": true,
+   "starting": false,
+   "probe": {
+    "cf": {
+     "ip": "203.0.113.11",
+     "country": "JP",
+     "city": "Tokyo",
+     "timezone": "Asia/Tokyo",
+     "org": "NTT Communications"
+    },
+    "direct": {
+     "ip": "198.51.100.7",
+     "country": "JP",
+     "city": "Tokyo",
+     "timezone": "Asia/Tokyo",
+     "org": "Cloudflare WARP"
+    },
+    "at": 1794656724920
+   },
+   "latency": 108,
+   "want": "n-p2",
+   "launchedTz": "Asia/Tokyo",
+   "up": 0,
+   "down": 0,
+   "upRate": 0,
+   "downRate": 0,
+   "companionSeen": 1794656712184
+  },
+  "fpInfo": {
+   "seed": 1520992256,
+   "seed64": 987654321,
+   "platform": "android",
+   "brand": "Firefox",
+   "cores": 4,
+   "tz": "Asia/Tokyo",
+   "lang": "ja-JP"
+  },
+  "acct": {
+   "sites": [
+    "github.com",
+    "accounts.google.com",
+    "chatgpt.com"
+   ],
+   "count": 3
+  }
+ },
+ "net": {
+  "iface": "",
+  "ipv4": "",
+  "mode": "",
+  "tun": null
+ },
+ "palette": [
+  "#1A73E8",
+  "#D93025",
+  "#F9AB00",
+  "#188038",
+  "#D01884",
+  "#A142F4",
+  "#007B83",
+  "#FA903E",
+  "#5F6368",
+  "#3F51B5",
+  "#C2185B",
+  "#795548"
+ ],
+ "seq": 61,
+ "settings": {
+  "schemaVersion": 1,
+  "defaultSubscriptionId": "63be7064-6736-4b7f-a1dc-15a2f3817ae7",
+  "newExtData": "shared",
+  "addressModeDefault": "custom",
+  "exitPick": "unused",
+  "restoreOnStart": true,
+  "searchUrl": "https://www.bing.com/search?q=%s",
+  "kernel": "fingerprint-chromium",
+  "delayUrl": "https://www.gstatic.com/generate_204",
+  "pathTemplate": "query",
+  "subRefreshHours": 6,
+  "ipInfoEndpoints": [
+   "https://ipinfo.io/{ip}/json",
+   "https://ipwho.is/{ip}",
+   "http://ip-api.com/json/{ip}"
+  ],
+  "tzSourceDefault": "exit-cf"
+ },
+ "setup": {
+  "stage": "ready",
+  "done": 0,
+  "total": 0
+ },
+ "subscriptions": [
+  {
+   "id": "63be7064-6736-4b7f-a1dc-15a2f3817ae7",
+   "updatedAt": 1794656724753,
+   "name": "机场",
+   "url": "https://sub.example.com/sub?token=demo",
+   "kind": "edgetunnel",
+   "kindLocked": false,
+   "viaProxy": false,
+   "fetchedAt": 1794656724753,
+   "contentHash": "2025107bc4425473d4ace7433cba936fa6873b84",
+   "hosts": [
+    "et.test"
+   ],
+   "nodes": [
+    {
+     "id": "8a6dcd25-bc37-4dde-942d-205e75f7a588",
+     "server": "104.18.32.47",
+     "port": 443,
+     "label": "JP-东京",
+     "host": "et.test",
+     "type": "vless",
+     "from": "sub",
+     "delay": 88,
+     "exit": {
+      "ip": "",
+      "country": "JP",
+      "city": "Tokyo",
+      "org": "Cloudflare"
+     },
+     "kind": "proxy",
+     "colo": "NRT",
+     "tcp": 29,
+     "at": 1794656746406
+    },
+    {
+     "id": "675cd697-d7a7-4f7b-8ea6-48969c46202f",
+     "server": "104.21.5.9",
+     "port": 443,
+     "label": "US-洛杉矶",
+     "host": "et.test",
+     "type": "vless",
+     "from": "sub",
+     "delay": 156,
+     "exit": {
+      "ip": "",
+      "country": "US",
+      "city": "Los Angeles",
+      "org": "Cloudflare"
+     },
+     "kind": "proxy",
+     "colo": "LAX",
+     "tcp": 52,
+     "at": 1794656746406
+    },
+    {
+     "id": "be998848-98cd-4e51-9280-45cf60e9c389",
+     "server": "172.67.70.3",
+     "port": 443,
+     "label": "HK-香港",
+     "host": "et.test",
+     "type": "vless",
+     "from": "sub",
+     "delay": 61,
+     "exit": {
+      "ip": "",
+      "country": "HK",
+      "city": "Hong Kong",
+      "org": "Cloudflare"
+     },
+     "kind": "proxy",
+     "colo": "HKG",
+     "tcp": 20,
+     "at": 1794656746406
+    }
+   ],
+   "pips": [
+    {
+     "id": "a:104.18.32.47:443",
+     "type": "proxyip",
+     "value": "104.18.32.47:443",
+     "label": "JP-东京",
+     "key": "104.18.32.47:443",
+     "derived": true,
+     "delay": 108,
+     "cf": {
+      "ip": "203.0.113.11",
+      "country": "JP",
+      "region": "Tokyo",
+      "city": "Tokyo",
+      "timezone": "Asia/Tokyo",
+      "org": "NTT Communications"
+     },
+     "kind": "proxy",
+     "colo": "NRT",
+     "tcp": 29,
+     "at": 1794656746406
+    },
+    {
+     "id": "a:104.21.5.9:443",
+     "type": "proxyip",
+     "value": "104.21.5.9:443",
+     "label": "US-洛杉矶",
+     "key": "104.21.5.9:443",
+     "derived": true,
+     "delay": 176,
+     "cf": {
+      "ip": "203.0.113.22",
+      "country": "US",
+      "region": "Los Angeles",
+      "city": "Los Angeles",
+      "timezone": "America/Los_Angeles",
+      "org": "Comcast Cable"
+     },
+     "kind": "proxy",
+     "colo": "LAX",
+     "tcp": 52,
+     "at": 1794656746406
+    },
+    {
+     "id": "a:172.67.70.3:443",
+     "type": "proxyip",
+     "value": "172.67.70.3:443",
+     "label": "HK-香港",
+     "key": "172.67.70.3:443",
+     "derived": true,
+     "delay": 81,
+     "cf": {
+      "ip": "203.0.113.33",
+      "country": "HK",
+      "region": "Hong Kong",
+      "city": "Hong Kong",
+      "timezone": "Asia/Hong_Kong",
+      "org": "HKT Limited"
+     },
+     "kind": "proxy",
+     "colo": "HKG",
+     "tcp": 20,
+     "at": 1794656746406
+    }
+   ],
+   "nodeCount": 3,
+   "scanning": false,
+   "scannedAt": 1794656746454,
+   "speeding": false,
+   "profiles": [
+    {
+     "key": "a500f7dabf",
+     "host": "et.test",
+     "hosts": 1,
+     "type": "vless",
+     "net": "ws"
+    }
+   ]
+  }
+ ],
+ "vault": {
+  "error": "",
+  "hasDefault": true,
+  "rules": [
+   {
+    "site": "https://passport.jd.com",
+    "host": "passport.jd.com",
+    "kinds": [
+     "phone",
+     "pass"
+    ],
+    "by": 1,
+    "at": 1
+   }
+  ]
+ },
+ "version": "dev",
+ "app": {
+  "current": "p2",
+  "tabs": {
+   "p2": 2,
+   "p1": 1
+  },
+  "ua": "Mozilla/5.0 (Android 14; Mobile; rv:160.0) Gecko/160.0 Firefox/160.0"
+ }
+}

@@ -68,6 +68,10 @@ func (a *App) Serve() error {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		// 宿主（安卓）的 HTTP 客户端发不了 PATCH：用 POST 加这个头代替。只在宿主模式认，且已经过了令牌检查。
+		if m := r.Header.Get("X-MaskTab-Method"); m != "" && a.hosted() && r.Method == http.MethodPost {
+			r.Method = m
+		}
 		mux.ServeHTTP(w, r)
 	})
 	go func() { log.Println(http.Serve(ln, h)) }()
@@ -101,6 +105,7 @@ type instView struct {
 // fpInfo 是界面上"指纹信息"展示的内容：按当前设置，下次启动时这个实例会呈现的样子。
 type fpInfo struct {
 	Seed     uint32 `json:"seed"`
+	Seed64   int64  `json:"seed64,omitempty"` // 宿主模式：给页面内伪装用的 64 位种子
 	Platform string `json:"platform"`
 	Brand    string `json:"brand"`
 	Cores    int    `json:"cores"`
@@ -212,6 +217,9 @@ func (a *App) State(me string) map[string]any {
 			if v.Info.Brand == "" {
 				v.Info.Brand = "Chrome"
 			}
+			if a.hosted() { // 手机：系统和浏览器固定（UA 必须和内核一致）
+				v.Info.Platform, v.Info.Brand, v.Info.Seed64 = a.Host.Name, "Firefox", seed64(in.FP.Seed)
+			}
 		}
 		insts = append(insts, v)
 		if in.ID == me {
@@ -265,7 +273,8 @@ func (a *App) State(me string) map[string]any {
 	return map[string]any{
 		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts, "ipq": a.ipqViewLocked(),
 		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version,
-		"kernel":      map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": kernel.KernelVersion, "path": a.kernelExe},
+		"host":        a.Host.Name,
+		"kernel":      map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": a.kernelVersion(), "path": a.kernelExe},
 		"core":        map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
 		"net":         a.netInfoLocked(),
 		"launchSteps": LaunchSteps,
@@ -315,7 +324,7 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 	}
 	r := a.rtLocked(id)
 	restart := func(why string) {
-		if r.Running {
+		if r.Running && !a.adapter.Caps().Live {
 			r.NeedRestart = append(without(r.NeedRestart, why), why)
 		}
 	}
@@ -469,6 +478,7 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 func (a *App) routes(mux *http.ServeMux) {
 	me := func(r *http.Request) string { return r.Header.Get("X-MaskTab-Inst") }
 	a.accountRoutes(mux)
+	a.hostRoutes(mux)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { reply(w, a.State(me(r)), nil) })
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
 		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
@@ -484,6 +494,10 @@ func (a *App) routes(mux *http.ServeMux) {
 		reply(w, map[string]any{"seq": seq, "events": ev}, nil)
 	})
 	mux.HandleFunc("POST /api/open", func(w http.ResponseWriter, r *http.Request) {
+		if a.hosted() {
+			reply(w, nil, nil)
+			return
+		}
 		a.mu.Lock()
 		id := a.inst0().ID
 		a.mu.Unlock()

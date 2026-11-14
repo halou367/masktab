@@ -23,7 +23,13 @@ type Input struct {
 	// Interface 非空时，全部出站与 DNS 绑定到这块物理网卡（mihomo 的 interface-name），
 	// 本机开着的 TUN / 系统代理都接管不到。DNS 同时改用直连 IP 的解析服务器，不用可能被 TUN 劫持的系统 DNS。
 	Interface string
+	// Hosted：宿主模式（安卓）。安卓上没有 /etc/resolv.conf，mihomo 的系统解析不可靠：解析一律走 mihomo 自己的 DNS，
+	// 服务器都写 IP；入站用 mixed（GeckoView 的代理既可能按 socks 也可能按 http 连）。
+	Hosted bool
 }
+
+// hostedDNS 是宿主模式用的解析服务器（0.1.41 及以前安卓版一直用这一组，手机上实测可用）。
+var hostedDNS = []string{"https://223.5.5.5/dns-query", "https://1.1.1.1/dns-query", "223.5.5.5", "8.8.8.8"}
 
 // boundDNS 是绑定网卡时用的解析服务器：都写 IP，不依赖系统 DNS。
 var boundDNS = []string{"223.5.5.5", "119.29.29.29", "https://223.5.5.5/dns-query"}
@@ -108,7 +114,12 @@ func Generate(in Input) []byte {
 	if in.Interface != "" {
 		cfg["interface-name"] = in.Interface
 	}
-	if len(echNames) > 0 || in.Interface != "" {
+	if in.Hosted {
+		for _, l := range listeners {
+			l["type"] = "mixed"
+		}
+	}
+	if len(echNames) > 0 || in.Interface != "" || in.Hosted {
 		policy := map[string]any{}
 		for n := range echNames {
 			policy[n] = echDoH
@@ -120,6 +131,10 @@ func Generate(in Input) []byte {
 		if in.Interface != "" {
 			dns["nameserver"] = boundDNS
 			dns["default-nameserver"] = []string{"223.5.5.5", "119.29.29.29"}
+		}
+		if in.Hosted {
+			dns["nameserver"], dns["proxy-server-nameserver"] = hostedDNS, hostedDNS
+			dns["default-nameserver"] = []string{"223.5.5.5", "119.29.29.29", "1.1.1.1", "8.8.8.8"}
 		}
 		if len(policy) > 0 {
 			dns["nameserver-policy"] = policy

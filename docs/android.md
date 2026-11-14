@@ -10,13 +10,15 @@
 | 内核 | GeckoView 160（Mozilla Maven，`org.mozilla.geckoview:geckoview:160.0.20261104181552`，固定版本），单 Activity，Kotlin，没有 Compose / AndroidX UI 依赖 |
 | 界面 | 顶部地址栏；右侧依次是标签数、**头像（当前实例的彩色编号圆点 + 出口国旗）**、菜单。点头像弹出实例菜单 |
 | 多实例 | 每个实例 = `GeckoSessionSettings.contextId("mt-<id>")` 的容器，Cookie / 存储 / 缓存隔离；每实例一组标签页，切实例只换显示的那组，后台实例的会话一直活着 |
-| 代理 | mihomo 安卓二进制随包（`jniLibs/<abi>/libmihomo.so`），订阅用 proxy-providers；每个实例一个本地 mixed 入站；内置扩展用 `proxy.onRequest` 按标签所属实例分流 |
+| 核心服务 | **和电脑版是同一个程序**（`cmd/masktab`，随包 `jniLibs/<abi>/libmasktab.so`，app 把它当子进程以 `-host android` 启动，决策 D-4）：实例、订阅（含 edgetunnel）、出口 / 入口选线、测速、密码库都是它管 |
+| 代理 | mihomo 安卓二进制随包（`jniLibs/<abi>/libmihomo.so`），由核心服务生成配置并启动；每个实例一个本地 mixed 入站（端口 21000 + 编号）；内置扩展用 `proxy.onRequest` 按标签所属实例分流 |
 | 指纹 | 每实例种子；UA 是安卓火狐（只换 Android 版本号）；内置扩展在 document_start 改页面：画布 / 音频噪声、核数、屏幕、语言、时区；Gecko 指纹保护打开 |
-| 密码库 | Android Keystore 的 AES-256-GCM 密钥加密整库；按实例隔离；复用桌面 `autofill.js` |
+| 密码库 | 核心服务的密码库（和电脑版同一份代码）；密钥由 Android Keystore 包着，启动时交给核心服务；按实例隔离；复用桌面 `autofill.js` |
 | 实例管理 | 复用桌面 `instances.js` 的 `lite` 模式（一行一张卡片、站点图标、长按拖动排序、账号与 Cookie 抽屉、导入邮箱） |
-| 启动 | 原生启动页：准备内核 → 加载内置扩展 → 启动 mihomo → 加载订阅 → 网络检测，每步动画与结果 |
+| 界面 | 节点面板、订阅与出口、设置、实例管理、实例菜单的内容都和电脑版共用同一份文件（`panel.js` `pages.js` `instances.js` `menu.js`），手机只有外壳（底部标签、返回、触屏尺寸）是自己的 |
+| 启动 | 原生启动页：准备内核 → 加载内置扩展 → 启动核心服务 → 加载订阅 → 网络检测，每步动画与结果 |
 | 扩展 | 从 addons.mozilla.org 安装（安装前确认权限），“扩展”页里启用 / 停用 / 移除 / 打开弹窗 / 设置页 |
-| 不做 | 双端同步（第二版）、下载文件、edgetunnel 专用功能（优选 / 反代 / ECH） |
+| 不做 | 双端同步（第二版）、下载文件 |
 
 ## 代码结构
 
@@ -27,27 +29,47 @@ android/
                                任务 buildExt：把桌面伴随扩展里可复用的文件 + android/ext 合成到 assets/ext/
   app/src/main/java/com/masktab/browser/
     Core.kt       GeckoRuntime、内置扩展、标签页、会话回调、与扩展的原生消息
-    Bridge.kt     扩展页面调用 app 的接口（模仿桌面核心服务的 方法 + 路径 + JSON）
+    Bridge.kt     扩展页面的请求：原样转给核心服务；只有界面、用户扩展、诊断、切换实例这几样在 app 里办
+    Host.kt       核心服务子进程（CoreProc）、密码库密钥（VaultKey）、状态快照与事件（Host）、旧数据迁移（Legacy）、UA 与指纹参数（Fp）
     MainActivity.kt  工具栏、启动页、弹出页（实例菜单 / 管理页等）、标签页列表、菜单
-    Mihomo.kt     mihomo 配置生成、进程、external-controller
-    Identity.kt   出口探测、UA 与指纹参数
-    Vault.kt      密码库（Keystore 加密）
-    Store.kt      实例、设置、标签页网址（JSON）
     Addons.kt     用户扩展
     Prompts.kt    网页弹框、<select>、安装确认
     Views.kt      头像、标签数、启动页等自绘控件
   ext/            安卓专用的扩展文件：manifest（MV2）、background.js、fp.js、fp-boot.js、newtab、app.html + main.js、api.js、app.css
   scripts/
     fetch-mihomo.sh       下载 mihomo v1.19.34 安卓 arm64 / amd64 并校验 SHA-256
-    emulator-smoke.sh     CI 模拟器冒烟：装、启动、截图、查崩溃；第二轮经测试节点验证代理分流与坏节点断流
-    preview-pages.mjs     沙箱里用 Playwright 预览扩展页面（假的 Bridge）并检查 fp.js
+    build-core.sh         用 NDK 把核心服务（cmd/masktab）编成 jniLibs/<abi>/libmasktab.so
+    emulator-smoke.sh     CI 模拟器冒烟：装、启动、截图、查崩溃；第二轮放进旧版数据，验证迁移、经测试节点的代理分流与坏节点断流
+    preview-pages.mjs     用 Playwright 预览扩展页面并检查 fp.js；同一份状态再画电脑版弹窗，比对两端面板内容（CI 里每次都跑）
+    fixture-state.json    上面用的状态：从真的核心服务（宿主模式）抓的，只改了数值
 ```
 
-复用桌面伴随扩展的文件（构建时拷贝，不复制进仓库）：`ui.js`、`ui.css`、`sites.js`、`menu.js`、`instances.js`、`autofill.js`、`assets/flags`。
+复用桌面伴随扩展的文件（构建时拷贝，不复制进仓库）：`ui.js`、`ui.css`、`sites.js`、`menu.js`、`instances.js`、`autofill.js`、`common.js`、`panel.js`、`panel.css`、`pages.js`、`assets/flags`。
 `menu.js` 为此加了两行：手机上头像写编号、不显示键盘快捷键。改这些文件时，桌面和安卓两边都要看。
 
-本地构建：装 JDK 21、安卓 SDK（platforms;android-37.2）、Gradle 9.9.1，然后
-`bash android/scripts/fetch-mihomo.sh && cd android && gradle assembleDebug`。
+本地构建：装 JDK 21、安卓 SDK（platforms;android-37.2）、NDK、Go、Gradle 9.9.1，然后
+`bash android/scripts/fetch-mihomo.sh && bash android/scripts/build-core.sh && cd android && gradle assembleDebug`。
+
+### 两端还剩的差别（都是内核决定的，不是没做）
+
+| 项 | 电脑 | 手机 | 原因 |
+|---|---|---|---|
+| 伪装成什么系统 / 浏览器 | 可选 Windows / macOS / Linux，Chrome / Edge… | 固定安卓火狐 | GeckoView 的内核特征改不掉，UA 改了反而露馅 |
+| 逐项开关伪装（Canvas、音频、字体、显卡…） | 有 | 没有，固定一组 | 电脑是内核级改写，手机是页面脚本 |
+| 全局扩展库（Chrome 扩展、共享数据） | 有 | 换成“扩展”页（火狐扩展） | 内核不同，扩展格式不同 |
+| 绑定物理网卡、下载镜像、退出、恢复上次的实例 | 有 | 没有这几项设置 | 安卓上没有对应的东西（标签页由 app 自己恢复） |
+| 改时区 / 语言 / 指纹 | 重启实例生效 | 刷新网页生效 | 手机的伪装在页面里做 |
+| 实例菜单的版式 | 弹窗 | 整页、大按钮 | 触屏 |
+| 悬停提示 | 有 | 没有（手机没有悬停） | 面板上的说明文字都在悬停提示里，手机上看不到 |
+
+其余（订阅、edgetunnel 线路、出口 / 入口、自动与手动、出口国家、换一个、测延迟 / 测下载、纯净度、地址库、批量导入、账号与密码、录入登录、导入邮箱）两端是同一份代码。
+
+### 本机联调（不用安卓环境）
+
+核心服务的宿主模式在 Linux 上就能跑：`go build -o /tmp/mt ./cmd/masktab`，然后
+`MASKTAB_VAULT_KEY=$(head -c 32 /dev/urandom | base64) /tmp/mt -data /tmp/hd -host android -mihomo <mihomo 路径> -kernel-name GeckoView -kernel-version 160.0`
+（标准输入要一直开着，关了它就退出）。端口和令牌在 `/tmp/hd/state/running.lock`，请求带 `X-MaskTab-Token` 和 `X-MaskTab-Inst`。
+`fixture-state.json` 就是这样抓的 `GET /api/state`；核心服务的状态改了形状要重新抓一份。
 
 ## 关键流程
 
@@ -127,7 +149,8 @@ android/
 8. **APK 很大**：GeckoView 两个架构 + mihomo 两个架构。只给真机用可以去掉 x86_64。
 9. **调试签名固定**（`android/app/debug.keystore`）：从这一版起新包能直接覆盖安装。之前的包每次 CI 签名都不同，第一次换到这一版要先卸载旧的（数据会清空）。这是调试证书，不能用来上架。
 10. **读屏（TalkBack）的焦点框位置偏下**：内置页面报给系统的控件坐标比实际低一个状态栏高度（CI 里用 uiautomator 量出来的），不影响点按，读屏用户会看到焦点框错位。没修。
-11. 没做：双端同步、下载文件、打印、全屏视频的横屏处理、地址栏联想、书签与历史页、edgetunnel 专用的优选 / 反代 / ECH（安卓版只把订阅交给 mihomo 解析）。
+11. 没做：双端同步、下载文件、打印、全屏视频的横屏处理、地址栏联想、书签与历史页。
+12. **核心服务是一个子进程**（和 mihomo 一样从原生库目录启动）。系统在后台杀掉它时 app 会重启它并把开着标签页的实例重新启动（30 秒内最多一次）；这条路只在本机用代码走查过，没有在真机上验证。
 
 ## 验证情况
 
@@ -136,11 +159,12 @@ android/
 | Kotlin 代码对 GeckoView 160 的 API 能编译 | 沙箱里用 kotlinc（第二版用的是 2.2.21）+ android.jar（37.2）+ GeckoView classes.jar 编译通过；CI 构建见 PROGRESS |
 | APK 构建、模拟器里启动不崩、各页面截图 | CI（`.github/workflows/android.yml`），结果见 `docs/PROGRESS.md` |
 | 扩展页面（菜单、管理、节点、指纹、设置、扩展、新标签页）布局 | 沙箱 Chromium 预览（假数据），`android/scripts/preview-pages.mjs` |
-| mihomo 配置与选节点、失败不直连 | 沙箱 Linux arm64 同版本 mihomo；CI 模拟器第二轮（见下） |
+| 核心服务的宿主模式（决策 D-4）：旧数据迁移、edgetunnel 订阅、通用订阅、选线、坏节点 / 订阅拉不下来时断流不直连、换订阅后自己恢复、改时区免重启 | 沙箱 Linux amd64 上真的跑核心服务 + mihomo + 假 edgetunnel / 测试节点，从实例端口发请求核对；`go test`（`internal/core/host_test.go`）；CI 模拟器第二轮在安卓上再跑一遍（见下） |
+| 两端节点面板内容一致 | `preview-pages.mjs`：同一份状态画电脑版弹窗和手机页面，逐块比文字（CI 每次都跑） |
 | fp.js 逻辑 | 沙箱里真火狐 160 以内容脚本方式加载，开 `android/scripts/fpcheck.html` 逐项检查；CI 模拟器里实例 #3 打开同一页（日志 `MTFPCHECK pass`） |
-| 从菜单真点进“节点与出口 / 指纹与时区 / 管理实例”、整页之间换路由、点“全部测速” | CI 模拟器（`adb shell input tap`） |
+| 从菜单真点进“节点与出口 / 指纹与时区 / 管理实例”、整页之间换路由、点“测延迟” | CI 模拟器（`adb shell input tap`） |
 | 订阅 404、151 个节点（150 个不通）、接口卡 10 秒、接口报错时页面的表现 | 沙箱真火狐 160 + 假 app（原生消息）+ 真 mihomo；没有在模拟器 / 真机上做 |
-| 真机：代理分流、指纹在 GeckoView 里的实际效果、自动填写、AMO 安装、拖动排序手感、Google 登录 | **没有验证** |
+| 真机：代理分流、指纹在 GeckoView 里的实际效果、自动填写、AMO 安装、拖动排序手感、Google 登录；**核心服务子进程在真机上能不能起来、被系统杀掉后能不能恢复；从 0.1.41 覆盖安装后的数据迁移** | **没有验证** |
 
 ### CI 冒烟第二轮（代理）怎么验证
 

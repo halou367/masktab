@@ -15,8 +15,6 @@ import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 import java.io.File
 import java.net.URLEncoder
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicInteger
 
 // 浏览器核心：GeckoRuntime、内置扩展、每个实例的一组标签页。放在进程级单例里，Activity 重建时会话不丢。
 //
@@ -29,20 +27,6 @@ class Tab(val inst: String, val session: GeckoSession) {
     var progress = 100
     var canBack = false
     var canFwd = false
-}
-
-/** 订阅 / 测速后台任务的进度（“节点与出口”页轮询 /api/nodes 时带回去显示）。 */
-class Job {
-    /** 空 = 空闲；start 启动 mihomo；fetch 拉订阅；test 测速。 */
-    @Volatile var phase = ""
-    @Volatile var done = 0
-    @Volatile var total = 0
-    /** 最近一次启动 / 拉订阅出的问题（成功后清空）。 */
-    @Volatile var error = ""
-    @Volatile var busy = false
-    /** 上次任务结束的时间。 */
-    @Volatile var at = 0L
-    fun toJson(): JSONObject = jsonOf("phase" to phase, "done" to done, "total" to total, "error" to error, "busy" to busy, "at" to at)
 }
 
 /** Activity 实现它来刷新界面。 */
@@ -61,9 +45,6 @@ object Core {
     const val NATIVE = "masktab"
 
     lateinit var app: Context
-    lateinit var store: Store
-    lateinit var vault: Vault
-    lateinit var mihomo: Mihomo
     var runtime: GeckoRuntime? = null
     var ext: WebExtension? = null
     var bgPort: WebExtension.Port? = null
@@ -80,9 +61,10 @@ object Core {
         if (::app.isInitialized) return
         app = ctx.applicationContext
         Diag.install(app)
-        store = Store(app.filesDir).apply { load() }
-        vault = Vault(app.filesDir)
-        mihomo = Mihomo(app)
+        CoreProc.init(app)
+        Host.init(app)
+        Host.onChange = { old -> onState(old) }
+        CoreProc.onDied = { coreDied() }
     }
 
     // ---------- 内核 ----------
@@ -144,7 +126,7 @@ object Core {
 
     fun tabsOf(inst: String): MutableList<Tab> = tabs.getOrPut(inst) { mutableListOf() }
 
-    fun curTab(): Tab? = active[store.current]
+    fun curTab(): Tab? = active[Host.current]
 
     private fun newSession(i: Inst): GeckoSession {
         val s = GeckoSession(
@@ -170,7 +152,7 @@ object Core {
 
     /** 在实例里开一个标签页。url 为空 = 新标签页。 */
     fun openTab(instId: String, url: String? = null, activate: Boolean = true, raw: Boolean = false): Tab? {
-        val i = store.get(instId) ?: return null
+        val i = Host.get(instId) ?: return null
         val t = Tab(i.id, newSession(i))
         attach(t)
         tabsOf(i.id).add(t)
@@ -183,7 +165,7 @@ object Core {
 
     /** onNewSession（网页 window.open / target=_blank）：同一实例里开新标签，保留 opener 关系。 */
     private fun popupTab(instId: String): GeckoSession? {
-        val i = store.get(instId) ?: return null
+        val i = Host.get(instId) ?: return null
         val t = Tab(i.id, newSession(i))
         // 不在这里 open：GeckoView 要求 onNewSession 返回未打开的会话，由它来打开
         t.session.navigationDelegate = Nav(t)
@@ -205,256 +187,210 @@ object Core {
         if (active[t.inst] == t) {
             if (l.isNotEmpty()) active[t.inst] = l[minOf(k, l.size - 1)] else active.remove(t.inst)
         }
-        if (l.isEmpty() && t.inst == store.current) openTab(t.inst) else ui?.onTabsChanged()
+        if (l.isEmpty() && t.inst == Host.current) openTab(t.inst) else ui?.onTabsChanged()
         saveTabs()
     }
 
     fun selectTab(t: Tab) { active[t.inst] = t; ui?.onTabsChanged() }
 
-    /** 切到另一个实例：显示它的标签组；它还没有标签就开一个新标签页。 */
+    /** 切到另一个实例：显示它的标签组；它还没有标签就开一个新标签页。实例还没启动（代理没备好）时先请核心服务启动它，就绪后再切。 */
     fun switchTo(id: String) {
-        val i = store.get(id) ?: return
-        store.current = i.id
-        store.save()
+        val i = Host.get(id) ?: return
+        if (!i.running) { open(id); return }
+        Host.saveCurrent(i.id)
         if (tabsOf(i.id).isEmpty()) openTab(i.id) else ui?.onTabsChanged()
-        if (store.rtOf(i.id).exit == null) probe(i.id)
         pushState()
     }
-
-    /** 关闭一个实例的全部标签（会话结束，数据保留）。 */
-    fun stopInst(id: String) {
+    /** 待切过去的实例（正在启动），和开始等的时间。 */
+    private var pendingOpen: String? = null
+    private var pendingAt = 0L
+    /** 启动一个实例（核心服务：选线、写 mihomo 配置、探出口），就绪后切过去。 */
+    fun open(id: String) {
+        val i = Host.get(id) ?: return
+        if (i.running) { switchTo(id); return }
+        pendingOpen = id; pendingAt = System.currentTimeMillis()
+        ui?.toast("正在打开 #${i.no}…")
+        launch(id)
+    }
+    /** 请核心服务启动实例（不切换）。 */
+    fun launch(id: String) = bg {
+        try { CoreProc.json("POST", "/api/instances/$id/launch"); Host.refresh() } catch (e: Exception) {
+            logw("启动实例失败：${e.message}")
+            ui { if (pendingOpen == id) { pendingOpen = null; ui?.toast("打不开：${e.message}") } }
+        }
+    }
+    private fun closeAll(id: String) {
         tabsOf(id).toList().forEach { it.session.close() }
         tabs.remove(id)
         active.remove(id)
-        if (id == store.current) openTab(id) else ui?.onTabsChanged()
+    }
+    /**
+     * 关闭一个实例的全部标签（会话结束，数据保留）。当前显示的实例关完马上给它开一个新标签页（代理不停）；
+     * 别的实例同时请核心服务停掉它（它在 mihomo 里的入站一并拿掉）。
+     */
+    fun stopInst(id: String) {
+        closeAll(id)
+        if (id == Host.current) openTab(id) else {
+            ui?.onTabsChanged()
+            bg { try { CoreProc.json("POST", "/api/instances/$id/stop"); Host.refresh() } catch (e: Exception) { logw("停止实例失败：${e.message}") } }
+        }
         saveTabs()
     }
-
     fun reloadInst(id: String) { tabsOf(id).forEach { it.session.reload() } }
-
-    /** 删除实例：关会话、清容器数据、删它的密码。 */
-    fun deleteInst(id: String) {
-        val i = store.get(id) ?: return
-        tabsOf(id).toList().forEach { it.session.close() }
-        tabs.remove(id)
-        active.remove(id)
-        runtime?.storageController?.clearDataForSessionContext(i.contextId)
-        try { vault.deleteInst(id) } catch (e: Exception) { logw("删除实例密码失败", e) }
-        store.delete(id)
-        if (tabsOf(store.current).isEmpty()) openTab(store.current)
-        restartProxy()
+    /** 删除实例之前：关会话、清容器数据。实例本身（连同它的账号密码）由核心服务删，删完状态里没有它了，[onState] 会换到别的实例。 */
+    fun dropInst(id: String) {
+        closeAll(id)
+        runtime?.storageController?.clearDataForSessionContext("mt-$id")
         ui?.onTabsChanged()
         saveTabs()
     }
-
     /** 换了种子（换指纹）后：UA 要在新会话上才生效，所以把这个实例的标签按原网址重开。 */
     fun refreshIdentity(id: String) {
-        val i = store.get(id) ?: return
+        val i = Host.get(id) ?: return
         val urls = tabsOf(id).map { it.url }
-        tabsOf(id).toList().forEach { it.session.close() }
-        tabs.remove(id)
-        active.remove(id)
+        closeAll(id)
         pushState()
-        if (urls.isEmpty()) { if (id == store.current) openTab(id) } else urls.forEach { openTab(i.id, it.takeUnless { u -> isInternal(u) || u.isEmpty() }) }
+        if (urls.isEmpty()) { if (id == Host.current) openTab(id) } else urls.forEach { openTab(i.id, it.takeUnless { u -> isInternal(u) || u.isEmpty() }) }
         ui?.onTabsChanged()
     }
-
+    private val tabsFile get() = File(app.filesDir, "tabs.json")
     fun saveTabs() {
         val j = JSONObject()
         for ((id, l) in tabs) {
+            if (l.isEmpty()) continue
             val urls = JSONArray(l.map { if (isInternal(it.url)) "" else it.url })
             j.put(id, jsonOf("urls" to urls, "active" to l.indexOf(active[id])))
         }
-        bg { store.saveTabs(j) }
+        for ((id, o) in pendingRestore) if (!j.has(id)) j.put(id, o) // 还没来得及恢复的也留着
+        bg { writeAtomic(tabsFile, j.toString().toByteArray()) }
     }
-
-    /** 启动时恢复上次的标签页（每个都经引导页，先登记实例再加载网址）。 */
+    /** 等实例启动好再恢复的标签页：实例 id → {urls, active}。 */
+    private val pendingRestore = HashMap<String, JSONObject>()
+    private fun restoreInst(id: String, o: JSONObject) {
+        val urls = o.optJSONArray("urls")?.strings() ?: return
+        urls.forEach { openTab(id, it.ifEmpty { null }, activate = false) }
+        val l = tabsOf(id)
+        if (l.isNotEmpty()) active[id] = l[o.optInt("active", 0).coerceIn(0, l.size - 1)]
+    }
+    /** 启动时恢复上次的标签页（每个都经引导页，先登记实例再加载网址）。还没启动的实例先请核心服务启动，就绪后再恢复。 */
     fun restoreTabs() {
-        val j = store.loadTabs()
+        val j = try { JSONObject(tabsFile.readText()) } catch (e: Exception) { JSONObject() }
         for (id in j.keys()) {
-            if (store.get(id) == null) continue
+            val i = Host.get(id) ?: continue
             val o = j.optJSONObject(id) ?: continue
-            val urls = o.optJSONArray("urls")?.strings() ?: continue
-            urls.forEach { openTab(id, it.ifEmpty { null }, activate = false) }
-            val l = tabsOf(id)
-            if (l.isNotEmpty()) active[id] = l[o.optInt("active", 0).coerceIn(0, l.size - 1)]
+            if ((o.optJSONArray("urls")?.length() ?: 0) == 0) continue
+            if (i.running) restoreInst(id, o) else { pendingRestore[id] = o; launch(id) }
         }
-        if (tabsOf(store.current).isEmpty()) openTab(store.current)
+        val cur = Host.cur()
+        if (cur != null) {
+            Host.saveCurrent(cur.id)
+            if (tabsOf(cur.id).isEmpty() && !pendingRestore.containsKey(cur.id)) { if (cur.running) openTab(cur.id) else open(cur.id) }
+        }
         ui?.onTabsChanged()
     }
 
-    // ---------- 代理与出口 ----------
+    // ---------- 跟着核心服务的状态走 ----------
 
-    /** 写配置并（重新）启动 mihomo，然后按实例选回节点、通知扩展。在后台线程调用。 */
-    fun restartProxyBlocking(): Boolean {
-        val ok = if (store.subUrl.isEmpty()) { mihomo.stop(); true } else mihomo.start(store)
-        if (ok) mihomo.applySelections(store) else job.error = mihomo.lastError
-        ui { pushState() }
-        return ok
+    /** 核心服务的状态变了（主线程）：把 GeckoView 这边对齐。 */
+    private fun onState(old: List<Inst>) {
+        if (!started) return
+        val now = Host.insts
+        // 实例被删了：关掉它的标签
+        for (id in tabs.keys.toList()) if (Host.get(id) == null) closeAll(id)
+        for (id in pendingRestore.keys.toList()) if (Host.get(id) == null) pendingRestore.remove(id)
+        // 换了指纹：按新种子重开这个实例的标签
+        for (i in now) {
+            val o = old.firstOrNull { it.id == i.id } ?: continue
+            if (o.seed != i.seed && tabsOf(i.id).isNotEmpty()) { logi("实例 #${i.no} 换了指纹，重开标签页"); refreshIdentity(i.id) }
+        }
+        // 等启动的：标签页恢复、切换
+        for ((id, o) in pendingRestore.toMap()) if (Host.get(id)?.running == true) { pendingRestore.remove(id); restoreInst(id, o) }
+        pendingOpen?.let { id ->
+            val i = Host.get(id)
+            when {
+                i == null -> pendingOpen = null
+                i.running -> { pendingOpen = null; switchTo(id) }
+                !i.starting && i.error.isNotEmpty() -> { pendingOpen = null; ui?.toast("#${i.no} 打不开：${i.error}") }
+                System.currentTimeMillis() - pendingAt > 45000 -> { pendingOpen = null; ui?.toast("#${i.no} 一直没启动好") }
+            }
+        }
+        // 当前显示的实例没了（被删）：换到第一个；一个都不剩就新建
+        if (Host.get(Host.current) == null && pendingOpen == null) {
+            val first = now.firstOrNull()
+            if (first != null) { Host.saveCurrent(first.id); if (first.running) switchTo(first.id) else open(first.id) } else createInst()
+        }
+        pushState()
+        ui?.onTabsChanged()
     }
-
-    fun restartProxy() = bg { restartProxyBlocking() }
-
-    val job = Job()
-    /** 订阅 / 测速任务排队执行（一次只跑一个）。界面上的请求只管排进来、立刻返回，进度看 [job]。 */
-    private val proxyQueue = Executors.newSingleThreadExecutor()
-    private val queued = AtomicInteger(0)
-
-    /**
-     * 排一个代理任务（立刻返回）：[restart] 重写配置并（重）启 mihomo；[fetch] 让 mihomo 重新拉订阅；
-     * [test] 全部节点测速（null = 只在“自动”实例手上没有确认可用的节点时才测）。完成后重新探测当前实例的出口。
-     * 以前保存订阅、全部测速都是等做完才回话，订阅慢或节点多时页面一卡几十秒（表现为白屏 / 转圈）。
-     */
-    fun syncProxy(restart: Boolean, fetch: Boolean, test: Boolean?) {
-        queued.incrementAndGet()
-        job.busy = true
-        proxyQueue.execute {
-            val t0 = System.currentTimeMillis()
-            var tested = false
+    @Volatile private var creating = false
+    /** 新建一个实例并切过去（核心服务建好后自己启动它）。 */
+    fun createInst() {
+        if (creating) return
+        creating = true
+        bg {
             try {
-                if (store.subUrl.isEmpty()) {
-                    mihomo.stop(); job.error = ""; job.total = 0; job.done = 0
-                } else {
-                    var ok = true
-                    if (restart || !mihomo.running) {
-                        job.phase = "start"
-                        ok = mihomo.start(store)
-                        if (!ok) job.error = mihomo.lastError
-                    }
-                    if (ok) { loadSub(fetch, test); tested = job.phase == "test" }
-                }
-            } catch (e: Throwable) {
-                logw("代理任务出错", e)
-                job.error = e.message ?: e.toString()
-            } finally {
-                val ns = if (mihomo.running) mihomo.nodes() else emptyList()
-                logi("代理任务完成${if (tested) "（含测速）" else ""}：节点 ${ns.size} 个，测过可用 ${ns.count { it.good }} 个，用时 ${System.currentTimeMillis() - t0} 毫秒${if (job.error.isNotEmpty()) "，问题：${job.error}" else ""}")
-                if (queued.decrementAndGet() == 0) { job.phase = ""; job.busy = false }
-                job.at = System.currentTimeMillis()
-                ui {
-                    pushState()
-                    val cur = store.cur()
-                    if (!cur.direct || store.rtOf(cur.id).exit == null) { store.rtOf(cur.id).exit = null; probe(cur.id) }
-                    ui?.onTabsChanged()
-                }
-            }
+                val r = CoreProc.json("POST", "/api/instances", JSONObject())
+                val id = r.str("id")
+                Host.refresh()
+                ui { Host.saveCurrent(id); pendingOpen = id; pendingAt = System.currentTimeMillis(); Host.get(id)?.let { if (it.running) switchTo(id) } }
+            } catch (e: Exception) { logw("新建实例失败：${e.message}"); ui { ui?.toast("新建实例失败：${e.message}") } } finally { creating = false }
         }
     }
+    /** 等某个实例启动好再切过去（新建、导入之后用）。 */
+    fun openWhenReady(id: String) { pendingOpen = id; pendingAt = System.currentTimeMillis(); Host.get(id)?.let { if (it.running) { pendingOpen = null; switchTo(id) } } }
 
-    /**
-     * mihomo 已在运行：等订阅里的节点出现（[fetch] 或一个节点都没有时让 mihomo 立刻重拉一次，拿到确切的失败原因），
-     * 按实例选节点，必要时测速后再选一次。在后台线程调用；[note] 报告进度文字。返回节点数。
-     */
-    fun loadSub(fetch: Boolean, test: Boolean?, note: (String) -> Unit = {}): Int {
-        val url = store.subUrl
-        var n = 0
-        var err: String? = null
-        if (!fetch) {
-            // 刚启动 / 刚重新加载：mihomo 正在自己拉订阅（或读上次的缓存），稍等一下
-            val end = System.currentTimeMillis() + 6000
-            while (System.currentTimeMillis() < end) { n = mihomo.nodes().size; if (n > 0) break; Thread.sleep(300) }
-        }
-        if (fetch || n == 0) {
-            job.phase = "fetch"
-            note("正在拉取订阅…")
-            err = mihomo.updateProvider()
-            val end = System.currentTimeMillis() + 6000
-            while (true) { n = mihomo.nodes().size; if (n > 0 || err != null || System.currentTimeMillis() > end) break; Thread.sleep(300) }
-        }
-        job.error = when {
-            err != null && n > 0 -> "订阅刷新失败（先用上次拉到的 $n 个节点）：$err"
-            err != null -> "订阅拉取失败：$err"
-            n == 0 -> "订阅里没有解析出节点（要填 Clash / 通用订阅地址）"
-            else -> ""
-        }
-        if (err != null) logw("订阅拉取失败：$err")
-        mihomo.applySelections(store)
-        ui { pushState() }
-        if (n == 0) return 0
-        var need = test == true
-        if (test == null) {
-            // “自动”实例选中的节点先单独测一下（最多两三秒）；通就不必把整张表测一遍，启动快、也省电
-            val picked = store.sorted().filter { !it.direct && it.node == "auto" }.map { store.rtOf(it.id).node }.filter { it.isNotEmpty() }.distinct()
-            if (picked.isNotEmpty()) note("检查节点…")
-            need = picked.take(4).any { mihomo.delay(it, 2500) <= 0 } || picked.size > 4
-        }
-        if (need) {
-            job.phase = "test"; job.done = 0; job.total = n
-            mihomo.testAll(par = 16, timeoutMs = 2500, budgetMs = if (test == true) 45000 else 20000, stop = { store.subUrl != url }) { d, t ->
-                job.done = d; job.total = t
-                if (d % 8 == 0 || d == t) note("测速 $d/$t")
-            }
-            mihomo.applySelections(store)
-            ui { pushState() }
-        }
-        return n
-    }
-
-    /** mihomo 被系统杀掉（安卓 12+ 会清理 app 的子进程）或自己退出后，自动拉起来。由界面轮询顺带触发，30 秒内最多一次。 */
-    private var lastEnsure = 0L
-    fun ensureProxy() {
-        if (!started || store.subUrl.isEmpty() || job.busy || mihomo.running) return
-        val now = System.currentTimeMillis()
-        if (now - lastEnsure < 30000) return
-        lastEnsure = now
-        logw("mihomo 不在运行，重新启动")
-        syncProxy(restart = true, fetch = false, test = null)
+    /** 核心服务被系统杀掉（安卓 12+ 会清理 app 的子进程）或自己退出：拉起来，把开着标签页的实例重新接上。30 秒内最多一次。 */
+    private var lastRevive = 0L
+    private fun coreDied() {
+        if (!started) return
+        val t = System.currentTimeMillis()
+        if (t - lastRevive < 30000) { ui { ui?.toast("核心服务又退出了，请在“设置”里复制诊断信息") }; return }
+        lastRevive = t
+        Thread.sleep(800)
+        if (!CoreProc.start()) { ui { ui?.toast("核心服务没有起来：${CoreProc.lastError}") }; return }
+        Host.refresh()
+        val open = tabs.filter { it.value.isNotEmpty() }.keys.toList()
+        for (id in open) try { CoreProc.json("POST", "/api/instances/$id/launch") } catch (e: Exception) { logw("重新接上实例 $id 失败：${e.message}") }
+        Host.refresh()
     }
 
     // ---------- 诊断 ----------
-
-    /** 扩展页面报上来的错误（最近 30 条），连同版本、mihomo 状态和日志一起给“复制诊断信息”。 */
+    /** 扩展页面报上来的错误（最近 30 条），连同版本、核心服务状态和日志一起给“复制诊断信息”。 */
     private val pageErrors = ArrayDeque<String>()
     fun pageLog(msg: String) {
         logw("页面报错：$msg")
         synchronized(pageErrors) { pageErrors.addLast(java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date()) + " " + msg.take(500)); while (pageErrors.size > 30) pageErrors.removeFirst() }
     }
-
     fun diag(): String {
         val sb = StringBuilder()
         val pi = try { app.packageManager.getPackageInfo(app.packageName, 0) } catch (e: Exception) { null }
         sb.append("MaskTab ${pi?.versionName ?: "?"} · Android ${android.os.Build.VERSION.RELEASE}（API ${android.os.Build.VERSION.SDK_INT}） · ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · ${android.os.Build.SUPPORTED_ABIS.firstOrNull()}\n")
         sb.append("内核 ${GeckoSession.getDefaultUserAgent().substringAfter("rv:").substringBefore(")")} · 内置扩展 ${if (ext != null) "已装" else "未装"} · 后台连接 ${if (bgPort != null) "有" else "无"}\n")
-        val host = try { java.net.URI(store.subUrl).host ?: "" } catch (e: Exception) { "?" }
-        val ns = if (mihomo.running) mihomo.nodes() else emptyList()
-        sb.append("订阅 ${if (store.subUrl.isEmpty()) "未设置" else "…$host…"} · mihomo ${if (!mihomo.installed) "未安装" else if (mihomo.running) "运行中 ${mihomo.version}" else "未运行"} · 节点 ${ns.size} 个（测过通 ${ns.count { it.good }}，不通 ${ns.count { it.tested && !it.good }}）\n")
-        sb.append("任务 ${job.phase.ifEmpty { "空闲" }} ${job.done}/${job.total}${if (job.error.isNotEmpty()) " · 问题：${job.error}" else ""}${if (mihomo.lastError.isNotEmpty()) " · mihomo：${mihomo.lastError}" else ""}\n")
-        for (i in store.sorted()) {
-            val rt = store.rtOf(i.id)
-            sb.append("#${i.no} ${if (i.direct) "直连" else if (i.node == "auto") "自动→${rt.node.ifEmpty { "无" }}" else "指定→${rt.node.ifEmpty { "无" }}"} · 出口 ${rt.exit?.let { it.country + " " + it.ip.replace(Regex("\\d+$"), "x") } ?: if (rt.latency < 0) "连不上" else "未知"} · 标签 ${tabsOf(i.id).size}${if (rt.error.isNotEmpty()) " · ${rt.error}" else ""}\n")
+        sb.append("核心服务 ${if (!CoreProc.installed) "未安装" else if (CoreProc.running) "运行中 ${Host.version}" else "未运行"}${if (CoreProc.lastError.isNotEmpty()) "（${CoreProc.lastError}）" else ""}" +
+            " · mihomo ${if (!CoreProc.mihomoInstalled) "未安装" else if (Host.mihomoOk) "运行中 ${Host.mihomoVersion}" else "未运行"}${if (Host.coreError.isNotEmpty()) "（${Host.coreError}）" else ""}" +
+            " · 订阅 ${if (Host.subs.isEmpty()) "无" else Host.subs.joinToString("、") { "…$it…" }} · 入口 / 节点 ${Host.nodeCount} 个\n")
+        if (Host.vaultKeyError.isNotEmpty()) sb.append("密码库：${Host.vaultKeyError}\n")
+        for (i in Host.insts) {
+            sb.append("#${i.no} ${if (!i.on) "直连" else "代理"} · ${if (i.running) "运行中" else if (i.starting) "启动中" else "未启动"} · 端口 ${i.port} · 出口 ${if (i.country.isEmpty()) "未知" else i.country + " " + i.ip.replace(Regex("\\.\\d+\\.\\d+$"), ".*.*")}" +
+                " · 标签 ${tabsOf(i.id).size}${if (i.id == Host.current) " · 当前" else ""}${if (i.error.isNotEmpty()) " · 问题：${i.error}" else ""}\n")
         }
         val errs = synchronized(pageErrors) { pageErrors.toList() }
         if (errs.isNotEmpty()) sb.append("—— 页面报错 ——\n").append(errs.joinToString("\n")).append("\n")
-        val log = mihomo.logTail(1200).trim()
-        if (log.isNotEmpty()) sb.append("—— mihomo 日志 ——\n").append(log.replace(store.subUrl.ifEmpty { "\u0000" }, "<订阅地址>")).append("\n")
+        val log = CoreProc.logTail(2500).trim()
+        if (log.isNotEmpty()) sb.append("—— 核心服务日志 ——\n").append(log).append("\n")
+        val ml = CoreProc.mihomoLogTail(1200).trim()
+        if (ml.isNotEmpty()) sb.append("—— mihomo 日志 ——\n").append(ml).append("\n")
         return sb.toString()
-    }
-
-    fun probe(id: String, done: (() -> Unit)? = null) {
-        val i = store.get(id) ?: return
-        val rt = store.rtOf(id)
-        if (rt.probing) return
-        rt.probing = true
-        bg {
-            val (ex, ms) = Probe.exit(i, mihomo.running)
-            rt.probing = false
-            if (ex != null) { rt.exit = ex; rt.latency = ms } else rt.latency = -1
-            ui { pushState(); ui?.onTabsChanged(); done?.invoke() }
-        }
     }
 
     // ---------- 与内置扩展通信 ----------
 
-    /** 交给扩展后台的每实例参数：端口、是否直连、指纹种子、时区、语言。 */
+    /** 交给扩展后台的每实例参数：端口、指纹种子、时区、语言。 */
     fun extState(): JSONObject {
         val arr = JSONArray()
-        for (i in store.sorted()) {
-            val ex = store.rtOf(i.id).exit
-            arr.put(Fp.cfg(i, ex).put("port", i.port).put("direct", i.direct))
-        }
-        return jsonOf("t" to "state", "insts" to arr, "searchUrl" to store.searchUrl)
+        for (i in Host.insts) arr.put(Fp.cfg(i))
+        return jsonOf("t" to "state", "insts" to arr, "searchUrl" to Host.searchUrl)
     }
-
     fun pushState() = ui { try { bgPort?.postMessage(extState()) } catch (e: Exception) { logw("推送状态失败", e) } }
 
     /**
@@ -465,7 +401,7 @@ object Core {
         override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
             val r = GeckoResult<Any>()
             val j = message as? JSONObject ?: return GeckoResult.fromValue(jsonOf("error" to "格式不对").toString())
-            Bridge.handle(j) { out -> r.complete(out.toString()) }
+            Bridge.handle(j) { out -> r.complete(out) }
             return r
         }
 
@@ -489,13 +425,13 @@ object Core {
         override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
             val j = message as? JSONObject ?: return GeckoResult.fromValue(jsonOf("error" to "格式不对").toString())
             if (j.str("t") == "hello") {
-                val i = store.get(instId) ?: return GeckoResult.fromValue(jsonOf("error" to "不是实例标签页").toString())
-                return GeckoResult.fromValue(Fp.cfg(i, store.rtOf(i.id).exit).put("port", i.port).put("direct", i.direct).toString())
+                val i = Host.get(instId) ?: return GeckoResult.fromValue(jsonOf("error" to "不是实例标签页").toString())
+                return GeckoResult.fromValue(Fp.cfg(i).toString())
             }
             if (sender.environmentType != WebExtension.MessageSender.ENV_TYPE_EXTENSION) return GeckoResult.fromValue(jsonOf("error" to "内容脚本不能调用这个接口").toString())
             if (instId != null && !j.has("inst")) j.put("inst", instId)
             val r = GeckoResult<Any>()
-            Bridge.handle(j) { out -> r.complete(out.toString()) }
+            Bridge.handle(j) { out -> r.complete(out) }
             return r
         }
     }

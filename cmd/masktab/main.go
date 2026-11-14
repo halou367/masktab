@@ -26,6 +26,10 @@ func main() {
 	showVer := flag.Bool("version", false, "显示版本")
 	noOpen := flag.Bool("no-open", false, "只启动核心服务，不打开任何窗口（测试用）")
 	keep := flag.Bool("keep", false, "所有窗口关闭后核心服务继续运行")
+	host := flag.String("host", "", "宿主模式：核心服务跑在别的应用里，浏览器由宿主管（android）。此时不开窗口、不下载内核、不自动退出")
+	mihomo := flag.String("mihomo", "", "宿主模式：mihomo 可执行文件的完整路径")
+	kname := flag.String("kernel-name", "", "宿主模式：浏览器内核的名字（展示用）")
+	kver := flag.String("kernel-version", "", "宿主模式：浏览器内核的版本（展示用）")
 	quit := flag.Bool("quit", false, "让正在运行的 MaskTab 关闭全部窗口并退出，等它退出后返回（安装程序升级前调用）")
 	flag.Parse()
 	if *showVer {
@@ -38,6 +42,10 @@ func main() {
 		return
 	}
 	_ = os.MkdirAll(filepath.Join(dir, "state"), 0o755)
+	if *host != "" { // 宿主重启后上一个核心服务可能还活着：请它退出，自己接手（宿主只认自己启动的这一个）
+		quitRunning(filepath.Join(dir, "state", "running.lock"))
+		_ = os.Remove(filepath.Join(dir, "state", "running.lock"))
+	}
 	if b, err := os.ReadFile(filepath.Join(dir, "state", "running.lock")); err == nil { // 已有一个核心服务在运行：让它打开普通窗口
 		if f := strings.Fields(string(b)); len(f) == 2 {
 			req, _ := http.NewRequest("POST", "http://127.0.0.1:"+f[0]+"/api/open", nil)
@@ -52,7 +60,12 @@ func main() {
 		log.SetOutput(io.MultiWriter(os.Stderr, lf))
 	}
 	log.Printf("MaskTab %s，数据目录 %s", version, dir)
-	app, err := core.Open(dir, exeDir, version)
+	var hostOpts []core.HostOpts
+	if *host != "" {
+		hostOpts = append(hostOpts, core.HostOpts{Name: *host, Mihomo: *mihomo, KernelName: *kname, KernelVersion: *kver})
+		*noOpen = true
+	}
+	app, err := core.Open(dir, exeDir, version, hostOpts...)
 	if err != nil {
 		log.Fatalf("打开数据目录失败：%v", err)
 	}
@@ -67,6 +80,14 @@ func main() {
 		app.Shutdown()
 		os.Exit(0)
 	}()
+	if *host != "" { // 宿主进程没了（标准输入被关）就跟着退出，不留孤儿进程
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			log.Println("宿主已退出，核心服务跟着退出")
+			app.Shutdown()
+			os.Exit(0)
+		}()
+	}
 	// 组件（代理内核、浏览器内核）已经有的直接用；缺了才下载，并用系统浏览器打开进度页。
 	opened := false
 	openSetup := func() {

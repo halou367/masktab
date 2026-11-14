@@ -76,6 +76,7 @@ type App struct {
 	Dir     string
 	ExeDir  string
 	Version string
+	Host    HostOpts // 宿主模式（host.go）；电脑版为空
 
 	mu        sync.Mutex
 	Settings  model.Settings
@@ -197,13 +198,16 @@ type fileWrap[T any] struct {
 }
 
 // Open 载入数据目录；首次运行创建普通实例 #0。
-func Open(dir, exeDir, version string) (*App, error) {
+func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	a := &App{Dir: dir, ExeDir: exeDir, Version: version, rt: map[string]*Runtime{}, scan: map[string]*model.NodeScan{}, scanning: map[string]bool{}, pipVia: map[string]string{}, scanProg: map[string]*scanProg{}, speed: map[string]*speedJob{}, scannedAt: map[string]int64{},
 		kernelUp: make(chan struct{}), waiters: map[chan struct{}]bool{}, connSeen: map[string][2]int64{}, token: randToken(24)}
 	for _, d := range []string{"config", "kernel", "profiles", "extensions", "ext-master", "runtime", "core", "state"} {
 		if err := os.MkdirAll(a.p(d), 0o755); err != nil {
 			return nil, err
 		}
+	}
+	if len(host) > 0 {
+		a.Host = host[0]
 	}
 	a.Settings = model.DefaultSettings()
 	readJSON(a.p("config", "settings.json"), &a.Settings)
@@ -228,6 +232,9 @@ func Open(dir, exeDir, version string) (*App, error) {
 		a.scan = map[string]*model.NodeScan{}
 	}
 	a.adapter = kernel.Get(a.Settings.Kernel)
+	if a.hosted() {
+		a.adapter = kernel.Hosted{Label: a.Host.KernelName}
+	}
 	// 旧版的"入口用 ProxyIP"：改成直接选中反代列表里的那个地址当入口，效果相同。
 	for _, in := range a.Instances {
 		// 0.1.11 及以前只有一个"自动"开关，而且手动点一下入口或反代就会把它关掉（用户反馈：地区老是自己变成"指定"）。
@@ -250,7 +257,7 @@ func Open(dir, exeDir, version string) (*App, error) {
 	}
 	a.loadIPQ()
 	a.openVault()
-	if a.inst0() == nil {
+	if a.inst0() == nil && !a.hosted() { // 宿主模式没有"普通窗口"
 		a.mu.Lock()
 		a.newInstanceLocked("normal")
 		a.saveLocked("instances")
