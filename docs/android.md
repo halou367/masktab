@@ -1,6 +1,6 @@
 # 安卓版（第一版，GeckoView 内核）
 
-分支 `demo/android`，代码在 `android/`。计划第 9 章原定系统 WebView + 进程槽位；需求方 2026-11-14 拍板改用火狐 GeckoView，理由与影响见 `docs/decisions.md` 的 A-1。
+代码在 `android/`（起初在分支 `demo/android`，2026-11-14 已并入 `main`，和电脑版同一个版本号、同一个 Release 发布，见 decisions D-3）。计划第 9 章原定系统 WebView + 进程槽位；需求方 2026-11-14 拍板改用火狐 GeckoView，理由与影响见 `docs/decisions.md` 的 A-1。
 目标是功能尽量与桌面版一致，界面像手机 Chrome。**本文写到的行为，除了标注“CI 截图”“沙箱实测”的，都没有在真机上验证过。**
 
 ## 一眼看懂

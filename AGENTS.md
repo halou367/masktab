@@ -27,7 +27,7 @@
 2. 更新 `docs/PROGRESS.md`（完成了什么、发现了什么问题、下一步）。
 3. 有新决定或新坑，写进 `docs/decisions.md`。
 4. 提交信息用中文，一句话说清改了什么。
-5. 推送后看 Actions：三个任务（单元测试、Windows 安装程序与冒烟、Linux 冒烟）。失败就先修。`main` 上成功后安装程序会发布到 Releases。
+5. 推送后看 Actions：单元测试、Windows 安装程序与冒烟、Linux 冒烟；`main` 上还有安卓构建与模拟器冒烟。失败就先修。`main` 上全部通过后，电脑安装程序和手机 APK 一起发布到同一个 Release（decisions D-3）；两端都在 `main` 上改，不要只发一端。
 
 ## 密钥
 

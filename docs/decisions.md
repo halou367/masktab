@@ -265,6 +265,16 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - CI 在 Windows 机器上构建两个包，把完整包静默安装后**对装好的那一份跑冒烟测试**，再验证：运行中升级、完整包覆盖安装跳过内核、卸载保留数据。
   两个包发布到 Releases。
 
+### D-3 两端同步发布（2026-11-14，需求方：“合并吧，之后一起更新同步发布”）
+
+- 安卓分支 `demo/android` 并入 `main`，以后两端都在 `main` 上改，不再分开。
+- 一次推送到 `main` = 一个版本号 `0.1.<CI 运行序号>` = 一个 Release，里面同时有 `MaskTab-Setup-Full.exe`、`MaskTab-Setup.exe`、`MaskTab-android-arm64-v8a.apk`。
+- 做法：`ci.yml` 在 `main` 上调用 `android.yml`（`workflow_call`），再由单独的 `release` 任务等单元测试、Windows、Linux 冒烟、安卓构建与模拟器冒烟**全部通过**后一起发布；任何一项不过就整个不发，不会出现只发了一端的版本。
+- 安卓版本号（`versionCode` / `versionName`）取 `GITHUB_RUN_NUMBER`；被 `ci.yml` 调用时就是 CI 的运行序号，所以和电脑版一致，并且比之前的试用版（`android-v0.1.9 / 13 / 14`，按安卓工作流自己的序号）大，可以覆盖安装。
+- 代价：只改电脑端的代码也要等安卓模拟器测完（约 15 分钟）才发版；Release 多 128 MB 的 APK。
+- 其它分支：`ci.yml` 照常跑电脑端测试、不发版；`android.yml` 在安卓相关文件有变化时自己跑、只出产物。
+- 之前的三个安卓试用版（prerelease）保留，不再新增。
+
 ## 核心服务
 
 ### C-1 本地接口的访问控制
@@ -363,7 +373,7 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - 测试：`scripts/rec-test.mjs`（Playwright，Chromium 和 Firefox 各跑一遍，后台用假的顶替）；Go 接口测试 `TestRuleRoutes`、`TestRules`。
 - 已知不足（之后优化）：登录按钮在内嵌框架里的网站不支持（内容脚本只在顶层页面工作）；用 CSS 把普通文本框伪装成密码框的网站，密码会被当成账号；规则目前只用来找框，`path`（哪一页）记了没用上；“怎么用？”的说明在手机上是悬停提示，看不到。
 
-## 安卓版（2026-11-14，分支 demo/android，详见 docs/android.md）
+## 安卓版（2026-11-14，起初在分支 demo/android，已并入 main，见 D-3；详见 docs/android.md）
 
 ### A-1 安卓用 GeckoView，不用计划第 9 章的系统 WebView（偏离计划 D14）
 

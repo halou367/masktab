@@ -1,5 +1,8 @@
 # 安卓版（GeckoView 内核）的构建与模拟器冒烟测试，见 docs/android.md。
-# 只在非 main 分支、且安卓相关文件有变化时运行；不发布 Release，不影响 ci.yml。
+# 两种触发：
+#   - main 分支：由 ci.yml 调用（workflow_call），每次推送都跑；通过后 ci.yml 把 APK 和电脑安装程序放进同一个 Release（decisions D-3）。
+#     版本号 = 0.1.<ci.yml 的运行序号>，与电脑版相同（被调用时 GITHUB_RUN_NUMBER 是调用方的）。
+#   - 其它分支：安卓相关文件有变化时自己运行，只出产物，不发布。
 # 产物（Actions → 本次运行 → Artifacts）：
 #   MaskTab-android-arm64-v8a：调试签名的 APK，装到手机上用
 #   MaskTab-android-x86_64：同上，x86_64 架构（模拟器用）
@@ -19,6 +22,7 @@ on:
       - 'companion/ext/assets/flags/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

@@ -3,9 +3,13 @@
 #   2. 在真实的 Windows 机器上构建两个安装程序，把完整包静默安装后对"装好的那一份"跑冒烟测试，
 #      再验证覆盖升级（数据与内核不动）与卸载（数据保留）。
 #   3. Linux 无头冒烟测试。
+#   4. 只在 main 分支：构建安卓版并跑模拟器冒烟测试（调用 android.yml），然后电脑版和安卓版一起发布。
+# 两端同步发布（decisions D-3）：一次推送 = 一个版本号 0.1.<本工作流的运行序号> = 一个 Release，
+#   里面同时有电脑安装程序和手机 APK；上面四项有一项不过就整个不发，不会出现只发了一端的版本。
 # 产物：
-#   Releases 页面：MaskTab-Setup-Full.exe（首次安装用，自带浏览器内核与代理内核）、MaskTab-Setup.exe（升级用，几 MB）。
-#   Actions → 本次运行 → Artifacts：同样的两个安装程序，以及 smoke-windows / smoke-linux（测试结果、日志、截图）。
+#   Releases 页面：MaskTab-Setup-Full.exe（首次安装用，自带浏览器内核与代理内核）、MaskTab-Setup.exe（升级用，几 MB）、
+#                  MaskTab-android-arm64-v8a.apk（手机，覆盖安装）。
+#   Actions → 本次运行 → Artifacts：同样的安装程序，以及 smoke-windows / smoke-linux / android-smoke（测试结果、日志、截图）。
 name: CI
 on:
   push:
@@ -33,6 +37,9 @@ jobs:
     timeout-minutes: 45
     env:
       VER: 0.1.${{ github.run_number }}
+    outputs:
+      kver: ${{ steps.pack.outputs.KVER }}
+      mver: ${{ steps.pack.outputs.MVER }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -53,11 +60,13 @@ jobs:
           path: pack
           key: pack-windows-${{ hashFiles('internal/kernel/fetch.go') }}
       - name: 准备浏览器内核与代理内核（下载、校验、解压）
+        id: pack
         shell: pwsh
         run: |
           go run ./cmd/pack -dir pack | Tee-Object pack-info.txt
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-Content pack-info.txt | Where-Object { $_ -match '^(KVER|MVER)=' } | Add-Content $env:GITHUB_ENV
+          Get-Content pack-info.txt | Where-Object { $_ -match '^(KVER|MVER)=' } | Add-Content $env:GITHUB_OUTPUT
       - name: 构建安装程序
         shell: pwsh
         run: |
@@ -137,14 +146,6 @@ jobs:
           name: MaskTab-Setup-Full
           path: out/MaskTab-Setup-Full.exe
           compression-level: 0
-      - name: 发布到 Releases
-        if: github.ref == 'refs/heads/main'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $notes = "首次安装：下载 MaskTab-Setup-Full.exe（自带浏览器内核 $env:KVER 与代理内核 $env:MVER，装完不需要再下载）。`n升级：下载 MaskTab-Setup.exe 直接覆盖安装；数据、内核都不会动。"
-          gh release create "v$env:VER" out/MaskTab-Setup-Full.exe out/MaskTab-Setup.exe --target $env:GITHUB_SHA --title "MaskTab $env:VER" --notes $notes
 
   smoke-linux:
     name: 冒烟测试（Linux，无头）
@@ -177,3 +178,51 @@ jobs:
             smoke-data/smoke-result.md
             smoke-data/smoke-core.log
             smoke-data/state/masktab.log
+
+  # 安卓版：只在 main 上由这里调用（版本号与电脑版相同）；其它分支由 android.yml 自己按文件变化触发。
+  android:
+    name: 安卓版
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/android.yml
+
+  # 两端一起发布：前面全部通过才发，一个 Release 里同时放电脑安装程序和手机 APK。
+  release:
+    name: 发布（电脑 + 手机）
+    if: github.ref == 'refs/heads/main'
+    needs: [test, windows, smoke-linux, android]
+    runs-on: ubuntu-latest
+    env:
+      VER: 0.1.${{ github.run_number }}
+      KVER: ${{ needs.windows.outputs.kver }}
+      MVER: ${{ needs.windows.outputs.mver }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: MaskTab-Setup-Full
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: MaskTab-Setup
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: MaskTab-android-arm64-v8a
+          path: out
+      - name: 发布到 Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la out
+          for f in MaskTab-Setup-Full.exe MaskTab-Setup.exe MaskTab-android-arm64-v8a.apk; do [ -s "out/$f" ] || { echo "缺少 $f"; exit 1; }; done
+          {
+            echo "电脑（Windows）"
+            echo "- 首次安装：下载 MaskTab-Setup-Full.exe（自带浏览器内核 $KVER 与代理内核 $MVER，装完不需要再下载）。"
+            echo "- 升级：下载 MaskTab-Setup.exe 直接覆盖安装；数据、内核都不会动。"
+            echo
+            echo "手机（安卓，arm64）"
+            echo "- 下载 MaskTab-android-arm64-v8a.apk 覆盖安装；数据不会动。"
+            echo
+            echo "两端是同一份代码、同一个版本号 $VER。"
+          } > notes.md
+          gh release create "v$VER" out/MaskTab-Setup-Full.exe out/MaskTab-Setup.exe out/MaskTab-android-arm64-v8a.apk \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "MaskTab $VER" --notes-file notes.md
