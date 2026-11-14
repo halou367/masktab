@@ -64,14 +64,20 @@ A shell input keyevent KEYCODE_BACK; sleep 1
 ready() { A logcat -d | grep -c "MaskTab 页面就绪 $1"; }
 # 按无障碍标签（content-desc / text）找到控件并点它的中心；找不到返回 1
 tap_desc() {
-  local b
+  local b UI_LABEL="$1"
   A shell uiautomator dump /sdcard/mt-ui.xml > /dev/null 2>&1 || return 1
   A shell cat /sdcard/mt-ui.xml > "$OUT/ui-dump.xml" 2>/dev/null || return 1
   b=$(grep -o "<node[^>]*\(content-desc\|text\)=\"$1\"[^>]*>" "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1)
   [ -n "$b" ] || return 1
+  # 内置页面的无障碍坐标比实际位置偏下一个状态栏的高度（页面容器按状态栏留了内边距，GeckoView 报坐标时又加了一次；
+  # 模拟器实测：WebView 报的顶边 256，实际 128）。所以纵坐标减掉 WebView 顶边的一半。
+  local wt off
+  wt=$(grep -o '<node[^>]*class="android.webkit.WebView"[^>]*>' "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]' | grep -o '[0-9]*\]$' | tr -d ']')
+  off=$(( ${wt:-0} / 2 ))
   # shellcheck disable=SC2046
   set -- $(echo "$b" | grep -o '[0-9]\+')
-  A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
+  echo "点“$UI_LABEL”：($(( ($1 + $3) / 2 )),$(( ($2 + $4) / 2 - off )))"
+  A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 - off ))
 }
 tapflow() { # 名字 x y 路由
   local n0 n1
