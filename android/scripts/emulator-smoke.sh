@@ -162,11 +162,31 @@ for k in 1 2 3 4 5 6 7 8; do sleep 1; A logcat -d -s MaskTab:I | grep -q "诊断
 sleep 1; shot t-diag
 if A logcat -d -s MaskTab:I | grep -q "诊断信息已收集"; then echo "通过：诊断信息窗口"; else echo "失败：诊断信息没有收集出来"; fail=1; fi
 A shell input keyevent KEYCODE_BACK; sleep 2
-# 导入邮箱放在这一段最后：run 43570179240 里点开它之后整个模拟器不响应了（原因待查），放最后不挡住前面几项的结果
+# 导入邮箱：这一页以前让 GPU 进程卡死、整个模拟器不响应（弹框是带圆角的可滚动容器，见 app.css 里的说明）。
+# 打开后多等一会儿再截图：截得出来、GPU 进程没被杀，才算过。
 tapflow import "导入邮箱" "instances/import"
-sleep 3; shot t-import-later
+sleep 8; if shot t-import-later; then echo "通过：导入邮箱页开着时系统照常响应"; fi
 closepanel
-if A shell pidof $PKG > /dev/null; then echo "通过：导入邮箱页开过之后应用还在"; else echo "失败：导入邮箱页开过之后应用不在了"; fail=1; fi
+# 扩展页（以前没开过）
+n0=$(ready addons)
+A shell am start -n $ACT --es mt_open addons > /dev/null; sleep 6; shot t-addons
+if [ "$(ready addons)" -gt "$n0" ]; then echo "通过：扩展页"; else echo "失败：扩展页没有就绪"; fail=1; fi
+closepanel
+# 在页面里打字：点节点页的订阅地址框（坐标按 pixel_6、还没有订阅时的版面量的），弹出键盘、输入、收起键盘。
+# 键盘弹出会让 GeckoView 改大小，是另一条容易出问题的路。
+A shell am start -n $ACT --es mt_open node > /dev/null; sleep 5
+A shell input tap 471 591; sleep 4; shot t-type-1focus
+A shell input text "https://sub.example.invalid/x"; sleep 3; shot t-type-2typed
+if grep -q "InsetsController: show(ime" "$OUT/logcat-live.txt" || grep -q "ImeTracker.*onShown\|ImeTracker.*onRequestShow" "$OUT/logcat-live.txt"; then echo "通过：点输入框弹出了键盘"; else echo "跳过：没看到键盘弹出的日志（坐标可能没点中输入框）"; fi
+A shell input keyevent KEYCODE_BACK; sleep 3   # 收起键盘
+n0=$(ready fp)
+A shell am start -n $ACT --es mt_open fp > /dev/null
+for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready fp)" -gt "$n0" ] && break; done
+shot t-type-3after
+if [ "$(ready fp)" -gt "$n0" ]; then echo "通过：打字、收起键盘之后页面照常"; else echo "失败：打字之后页面不响应"; fail=1; fi
+closepanel
+if grep -q "Killing GPU process" "$OUT/logcat-live.txt"; then echo "失败：GPU 进程卡死被杀过"; fail=1; else echo "通过：GPU 进程没有卡死"; fi
+if A shell pidof $PKG > /dev/null; then echo "通过：这一段做完应用还在"; else echo "失败：应用不在了"; fail=1; fi
 # 5c. 整页之间直接换（设置 → 节点 → 指纹）：同一个页面里换路由
 n0=$(ready fp)
 A shell am start -n $ACT --es mt_open settings; sleep 6; shot t-nav-1settings
@@ -315,6 +335,7 @@ Y
   else echo "失败：指纹自检（东京通过 $n 次，应为 2；柏林通过 $m 次，应为 1；失败 $bad 次）"; fail=1; fi
   if grep -q "页面报错：" "$L"; then echo "失败：内置页面有报错："; grep "页面报错：" "$L" | cut -c1-240 | head -5; fail=1; fi
   if grep -q "代理任务出错" "$L"; then echo "失败：代理后台任务出错"; fail=1; fi
+  if grep -q "Killing GPU process" "$OUT/logcat-live.txt"; then echo "失败：GPU 进程卡死被杀过"; fail=1; fi
   chk "加载失败 https://example.com/\? 实例 p2\|加载失败 https://example.com 实例 p2" "实例 #2（节点不存在）打不开网页，没有直连"
   if grep -q "MaskTab 指纹参数 example.com #2" "$L"; then echo "失败：实例 #2 的网页加载成功了（应当断流）"; fail=1; else echo "通过：实例 #2 的网页没有加载成功"; fi
   grep -E "启动步骤|加载失败|MaskTab (后台|指纹|标签页)" "$L" | cut -c1-200 | head -30

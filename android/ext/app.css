@@ -79,7 +79,11 @@ main.pg h2 .sub{font-weight:400}
 .cardi{touch-action:pan-y;-webkit-touch-callout:none} .cardi .ib{width:36px;height:36px}
 .fl .tip{right:-6px}
 .drawer{width:100%;max-width:520px;padding:16px 14px 40px}
-.modal{width:100%;max-width:560px;max-height:calc(100% - 24px);overflow-y:auto}
+/* 弹框太高时让外面的遮罩滚动，弹框自己不滚：带圆角的可滚动容器（border-radius + overflow:auto）在安卓模拟器里会让
+   GeckoView 的 GPU 进程卡死，整个系统跟着不响应（CI run 43574923756 逐项排除定位到这一条；真机上是否同样没有确认）。
+   这份样式里不要再出现“圆角 + overflow:auto/scroll”的组合。 */
+.scrim.center{align-items:flex-start;overflow-y:auto;padding:12px 0}
+.modal{width:100%;max-width:560px;margin:auto}
 .box{border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:14px;background:var(--bg)}
 .box>.hd{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:8px}
 .box .hint{color:var(--sub);font-size:12.5px;line-height:1.5;margin:-2px 0 10px}
