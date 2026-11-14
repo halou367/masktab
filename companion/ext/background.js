@@ -162,7 +162,7 @@ function siteOfSender(s) {
 }
 // 两步登录暂存：chrome.storage.session 只在扩展自己的页面里可读（网页内容脚本默认读不到），后台休眠重启也不丢，浏览器关掉即清空。
 const pendingKey = (k) => 'pend:' + k;
-chrome.tabs?.onRemoved?.addListener(async (id) => { const all = await chrome.storage.session.get(null); const ks = Object.keys(all).filter((k) => k.startsWith(`pend:${id}|`)); if (ks.length) chrome.storage.session.remove(ks); });
+chrome.tabs?.onRemoved?.addListener(async (id) => { const all = await chrome.storage.session.get(null); const ks = Object.keys(all).filter((k) => k.startsWith(`pend:${id}|`) || k.startsWith(`rec:${id}|`)); if (ks.length) chrome.storage.session.remove(ks); });
 async function vaultMsg(m, s) {
   const site = siteOfSender(s);
   if (!site) throw new Error('不支持的页面');
@@ -174,6 +174,16 @@ async function vaultMsg(m, s) {
   if (m.t === 'vault:pending-set') { const u = String(m.user || '').trim().slice(0, 256); if (u) await chrome.storage.session.set({ [pendingKey(pk)]: { u, at: Date.now() } }); return true; }
   if (m.t === 'vault:pending-get') { const x = (await chrome.storage.session.get(pendingKey(pk)))[pendingKey(pk)]; return x && Date.now() - x.at < 600_000 ? x.u : ''; }
   if (m.t === 'vault:undo') return api('DELETE', `/api/vault/${encodeURIComponent(m.id)}`);
+  // 录入（标记网站，decisions M-3）：规则存进核心服务，全部实例共用；录到一半的内容只暂存在后台内存里（跨页面的登录流程换页后接着录）。
+  if (m.t === 'vault:rule-save') return api('PUT', '/api/vault/rule', { site, steps: Array.isArray(m.steps) ? m.steps.slice(0, 6) : [] });
+  const rk = 'rec:' + pk;
+  if (m.t === 'vault:rec-set') {
+    const rec = m.rec && typeof m.rec === 'object' && JSON.stringify(m.rec).length < 4000 ? m.rec : null;
+    if (rec || m.off) await chrome.storage.session.set({ [rk]: { rec, off: !rec && !!m.off, at: Date.now() } }); else await chrome.storage.session.remove(rk);
+    return true;
+  }
+  if (m.t === 'vault:rec-get') { const x = (await chrome.storage.session.get(rk))[rk]; return x && Date.now() - x.at < 600_000 ? { rec: x.rec, off: x.off } : null; }
+  if (m.t === 'vault:vis') return {}; // 手机版用它记“哪个标签页正显示着”；桌面版直接问浏览器
   throw new Error('未知请求');
 }
 

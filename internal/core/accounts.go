@@ -81,6 +81,33 @@ func (a *App) acctViewsLocked() map[string]*acctView {
 	return out
 }
 
+// ruleView 是管理页上“已标记的网站”的一项（不含选择器）。
+type ruleView struct {
+	Site  string   `json:"site"`
+	Host  string   `json:"host"`
+	Kinds []string `json:"kinds"`
+	By    int      `json:"by"` // 录入它的实例编号；实例已删除为 -1
+	At    int64    `json:"at"`
+}
+
+func (a *App) ruleViewsLocked() []ruleView {
+	out := []ruleView{}
+	if a.vault == nil {
+		return out
+	}
+	for _, r := range a.vault.Rules() {
+		v := ruleView{Site: r.Site, Host: vault.Host(r.Site), Kinds: []string{}, By: -1, At: r.At}
+		for _, s := range r.Steps {
+			v.Kinds = append(v.Kinds, s.Kind)
+		}
+		if in := a.instLocked(r.By); in != nil {
+			v.By = in.No
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 // emailOf：实例名是邮箱时返回它（批量导入的实例以邮箱命名）。
 func emailOf(in *model.Instance) string {
 	if in != nil && strings.Contains(in.Name, "@") && !strings.ContainsAny(in.Name, " \t") {
@@ -135,7 +162,30 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		for _, it := range a.vault.Match(id, r.URL.Query().Get("site")) {
 			items = append(items, m{it, nos[it.Inst], it.Inst == id})
 		}
-		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "no": no}, nil)
+		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "no": no, "rule": a.vault.RuleOf(r.URL.Query().Get("site"))}, nil)
+	})
+	// 录入规则（标记网站）：全部实例共用，只有“哪个框填什么”。
+	mux.HandleFunc("PUT /api/vault/rule", func(w http.ResponseWriter, r *http.Request) {
+		if !vt(w) {
+			return
+		}
+		var rl vault.Rule
+		if err := body(r, &rl); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		rl.By = me(r)
+		saved, err := a.vault.SetRule(rl)
+		a.bump("state", "")
+		reply(w, saved, err)
+	})
+	mux.HandleFunc("DELETE /api/vault/rule", func(w http.ResponseWriter, r *http.Request) {
+		if !vt(w) {
+			return
+		}
+		err := a.vault.DeleteRule(r.URL.Query().Get("site"))
+		a.bump("state", "")
+		reply(w, nil, err)
 	})
 	mux.HandleFunc("POST /api/vault", func(w http.ResponseWriter, r *http.Request) {
 		if !vt(w) {

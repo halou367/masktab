@@ -25,7 +25,7 @@ const mock = () => {
     id, no, name, color, kind: 'persistent', node, seed: 123456789 * no, tzSet: '', langSet: '', ua: 'Mozilla/5.0 (Android 14; Mobile; rv:160.0) Gecko/160.0 Firefox/160.0',
     tz: { source: 'exit-cf', effective: exit?.timezone || '', lang: 'en-US' }, proxy: { state: node === 'DIRECT' ? 'off' : 'on' },
     rt: { running: cur || no === 2, starting: false, tabs: cur ? 2 : 0, current: cur, latency: exit ? 180 + no * 40 : 0, probing: false, error: null, probe: exit ? { cf: exit, direct: exit } : null, launchedTz: exit?.timezone, needRestart: [] },
-    acct: { sites, count, cookies: [{ d: 'google.com', n: 23 }, { d: 'github.com', n: 9 }], cookieN: 32 },
+    acct: { sites, count, cookies: [{ d: 'google.com', n: 23 }, { d: 'github.com', n: 9 }, { d: 'jd.com', n: 14 }, { d: 'reddit.com', n: 6 }, { d: 'doubleclick.net', n: 3 }], cookieN: 55 },
   });
   const insts = [
     inst('a1', 1, 'alice@gmail.com', '#1A73E8', 'auto', ex('104.28.12.3', 'US', 'Los Angeles', 'Cloudflare', 'America/Los_Angeles'), ['accounts.google.com', 'github.com', 'x.com', 'discord.com'], 4, true),
@@ -33,7 +33,7 @@ const mock = () => {
     inst('c3', 3, '', '#F9AB00', 'DIRECT', ex('223.104.3.7', 'CN', 'Shanghai', 'China Mobile', 'Asia/Shanghai'), [], 0, false),
   ];
   const state = { me: insts[0], instances: insts, palette: ['#1A73E8', '#D93025', '#F9AB00', '#188038', '#D01884', '#A142F4'], launchSteps: ['准备内核', '加载内置扩展', '启动 mihomo', '加载订阅', '网络检测'],
-    vault: { hasDefault: true }, settings: { searchUrl: 'https://www.bing.com/search?q=%s', subUrl: 'https://sub.example.com/clash' }, proxy: { running: true, installed: true }, current: 'a1', platform: 'android' };
+    vault: { hasDefault: true, rules: [{ site: 'https://passport.jd.com', host: 'passport.jd.com', kinds: ['phone', 'pass'], by: 1, at: 1 }, { site: 'https://arena.ai', host: 'arena.ai', kinds: ['email', 'pass'], by: 2, at: 1 }] }, settings: { searchUrl: 'https://www.bing.com/search?q=%s', subUrl: 'https://sub.example.com/clash' }, proxy: { running: true, installed: true }, current: 'a1', platform: 'android' };
   const nodes = { sub: { url: state.settings.subUrl, running: true, version: 'v1.19.34', loaded: true }, inst: { id: 'a1', node: 'auto', now: 'US-洛杉矶-02' },
     nodes: [['US-洛杉矶-02', 'vless', 156], ['JP-东京-01', 'trojan', 88], ['SG-新加坡', 'ss', 0], ['HK-香港-03', 'vmess', 61]].map(([name, type, delay]) => ({ name, type, delay, alive: delay > 0 })) };
   const vault = { items: [{ id: 'v1', inst: 'a1', site: '*', user: 'alice@gmail.com', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'a1', site: 'https://github.com', user: 'alice', pass: 'gh-secret', src: 'saved' }], hasDefault: true };

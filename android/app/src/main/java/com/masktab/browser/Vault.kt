@@ -35,6 +35,7 @@ class VItem(
 class Vault(dir: File) {
     private val file = File(dir, "vault.bin")
     private val items = mutableListOf<VItem>()
+    private val rules = LinkedHashMap<String, JSONObject>() // 录入规则：站点 → {site, steps:[{kind, sel, n, path}], by, at}
     private var def = ""
     var error = ""
         private set
@@ -69,6 +70,8 @@ class Vault(dir: File) {
         def = j.str("default")
         items.clear()
         j.optJSONArray("items")?.objects()?.forEach { items.add(VItem.from(it)) }
+        rules.clear()
+        j.optJSONArray("rules")?.objects()?.forEach { if (it.str("site").isNotEmpty()) rules[it.str("site")] = it }
     }
 
     private var batching = 0
@@ -81,7 +84,7 @@ class Vault(dir: File) {
 
     private fun save() {
         if (batching > 0) { dirty = true; return }
-        val j = jsonOf("default" to def, "items" to JSONArray(items.map { it.toJson() }))
+        val j = jsonOf("default" to def, "items" to JSONArray(items.map { it.toJson() }), "rules" to JSONArray(rules.values.toList()))
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.ENCRYPT_MODE, key())
         val out = c.iv + c.doFinal(j.toString().toByteArray())
@@ -146,10 +149,39 @@ class Vault(dir: File) {
 
     @Synchronized fun count(): Map<String, Int> = items.groupingBy { it.inst }.eachCount()
 
+    /** 录入规则（“标记网站”，与桌面 vault.SetRule 相同）：全部实例共用，只记“哪个框填什么”，不含账号内容。同站点覆盖。 */
+    @Synchronized fun setRule(site0: String, steps0: JSONArray?, by: String): JSONObject {
+        check()
+        val site = normSite(site0)
+        require(site.isNotEmpty() && site != "*") { "站点为空" }
+        val steps = JSONArray()
+        for (s in (steps0 ?: JSONArray()).objects()) {
+            val kind = s.str("kind")
+            val sel = s.str("sel").trim()
+            val n = s.optInt("n")
+            if (kind !in KINDS || sel.isEmpty() || sel.length > 300 || n < 0 || n > 50) continue
+            val o = jsonOf("kind" to kind, "sel" to sel, "path" to s.str("path").take(200))
+            if (n > 0) o.put("n", n)
+            steps.put(o)
+        }
+        require(steps.length() in 1..6) { "规则里没有可用的输入框" }
+        val r = jsonOf("site" to site, "steps" to steps, "by" to by, "at" to System.currentTimeMillis())
+        rules[site] = r
+        save()
+        return r
+    }
+
+    @Synchronized fun ruleOf(site: String): JSONObject? = rules[normSite(site)]
+
+    @Synchronized fun deleteRule(site: String) { check(); if (rules.remove(normSite(site)) != null) save() }
+
+    @Synchronized fun rules(): List<JSONObject> = rules.values.sortedByDescending { it.optLong("at") }
+
     private fun VItem.copy() = VItem(id, inst, site, user, pass, note, src, at)
 
     companion object {
         private const val ALIAS = "masktab-vault"
+        private val KINDS = setOf("user", "email", "phone", "pass")
 
         /** 规范化站点：scheme://host[:port]，默认端口省略；"*" 原样。与桌面 vault.NormSite 相同。 */
         fun normSite(s0: String): String {

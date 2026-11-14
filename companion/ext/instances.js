@@ -3,10 +3,10 @@
 // 点卡片打开右侧抽屉看账号、密码、Cookie；“导入邮箱”批量建实例。
 import { api, shownExit, RESTART_WHY } from './api.js';
 import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname } from './ui.js';
-import { siteIcon, siteName, uniqSites } from './sites.js';
+import { siteIcon, siteName, siteKey, uniqSites } from './sites.js';
 import { face, stepLine } from './menu.js';
 
-const MAXI = 7; // 卡片上最多几个站点图标，多的显示 +N
+const MAXI = 9; // 卡片上最多几个站点图标，多的显示 +N
 let ctx;        // { st, act, load, render }
 const route = () => location.hash.slice(1).split('/'); // ['instances', id | 'import']
 const setRoute = (sub) => { location.hash = sub ? `instances/${sub}` : 'instances'; };
@@ -20,7 +20,7 @@ export function instancesView(c) {
     h('button', { class: 'btn pri', title: '新建伪装实例（Ctrl+M）', onclick: () => c.act(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('mask', 16), '新建'));
   const grid = h('div', { class: 'grid' }, st.instances.map(card));
   dragSort(grid);
-  const out = [head, st.vault?.error ? h('div', { class: 'banner bad' }, icon('warn'), st.vault.error) : null, grid];
+  const out = [head, st.vault?.error ? h('div', { class: 'banner bad' }, icon('warn'), st.vault.error) : null, grid, rulesBox(st)];
   const cur = sub && sub !== 'import' && st.instances.find((i) => i.id === sub);
   if (cur) out.push(drawer(cur));
   if (sub === 'import') out.push(importBox());
@@ -29,9 +29,36 @@ export function instancesView(c) {
 
 const nameOf = (i) => i.name || (i.kind === 'normal' ? '普通窗口' : '未命名');
 
+// 卡片下面那一排网站图标：先是记住了账号密码的网站，再是只有 Cookie 的网站（淡一点；认识的品牌排前，其余按 Cookie 多少）。
+function cardSites(i) {
+  const acc = uniqSites(i.acct?.sites || []);
+  const seen = new Set(acc.map((x) => siteKey(x) || String(x).replace(/^www\./, '')));
+  const ck = [];
+  for (const c of [...(i.acct?.cookies || [])].sort((a, b) => (siteKey(b.d) ? 1 : 0) - (siteKey(a.d) ? 1 : 0) || b.n - a.n)) {
+    const k = siteKey(c.d) || String(c.d).replace(/^www\./, '');
+    if (!seen.has(k)) { seen.add(k); ck.push(c); }
+  }
+  return [...acc.map((d) => ({ d, acc: true })), ...ck.map((c) => ({ d: c.d, n: c.n }))];
+}
+const siteTip = (s) => `${siteName(s.d)}：${s.acc ? '记住了账号' : `只有 Cookie（${s.n} 条）`}`;
+
+// 已标记的网站（录入规则，decisions M-3）：全部实例共用。别的实例打开这些网站会自动录入；删掉规则不影响已经记住的账号。
+const KIND = { user: '账号', email: '邮箱', phone: '手机号', pass: '密码' };
+function rulesBox(st) {
+  const rules = st.vault?.rules || [];
+  return h('div', { class: 'rules' },
+    h('h3', {}, icon('rec', 16), '已标记的网站', h('span', { class: 'sub' }, rules.length ? `  ${rules.length} 个 · 全部实例共用` : ''),
+      h('span', { class: 'sub tipq', title: '在网站的登录框旁点“录入”，或从实例菜单点“录入登录”，然后照常登录一次：\n登录成功后，这个网站怎么登录（哪个框填邮箱 / 账号 / 手机号 / 密码）会记在这里，账号记进当前实例。\n别的实例打开已标记的网站会自动进入录入，登录一次就记住各自的账号。' }, '怎么用？')),
+    rules.length ? h('div', { class: 'cks' }, rules.map((r) => h('span', { class: 'ck rule', title: `${r.site}\n由 ${r.by > 0 ? '#' + r.by : '已删除的实例'} 录入` },
+      siteIcon(r.host, 14), h('span', {}, siteName(r.host)),
+      h('b', { title: '登录时填的内容' }, (r.kinds || []).map((k) => KIND[k]).filter(Boolean).join(' + ')),
+      h('button', { class: 'x', title: '取消标记（不删已记住的账号）', onclick: () => ctx.act(() => api('DELETE', `/api/vault/rule?site=${encodeURIComponent(r.site)}`), '已取消标记') }, icon('x', 12)))))
+      : h('div', { class: 'sub' }, '还没有。打开要登录的网站，在登录框旁点“录入”（或从实例菜单点“录入登录”），登录成功后自动记下。'));
+}
+
 function card(i) {
   const ex = i.proxy.state === 'on' ? shownExit(i) : null, rt = i.rt;
-  const sites = uniqSites(i.acct?.sites || []);
+  const sites = cardSites(i);
   const state = rt.starting ? stepLine(i, ctx.st.launchSteps)
     : h('span', { class: 'state' + (rt.running ? ' on' : '') }, h('i'), rt.running ? '运行中' : '休眠');
   // 国旗：悬停才显示出口详情
@@ -45,7 +72,8 @@ function card(i) {
   const el = h('div', { class: 'cardi' + (rt.running ? ' running' : ''), 'data-id': i.id, style: { '--c': i.color }, title: '点开看账号与 Cookie；长按拖动排序',
     onclick: (ev) => { if (ev.target.closest('button,input,.fl') || el.dataset.dragged) return; setRoute(i.id); } },
   h('div', { class: 'ct' }, face(i, false, false, true), h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm', title: nameOf(i) }, nameOf(i)), h('span', { class: 'grow' }), fl),
-  h('div', { class: 'cs' }, sites.length ? [sites.slice(0, MAXI).map((s) => siteIcon(s, 15)), sites.length > MAXI && h('span', { class: 'more', title: sites.slice(MAXI).map(siteName).join('、') }, `+${sites.length - MAXI}`)]
+  h('div', { class: 'cs' }, sites.length ? [sites.slice(0, MAXI).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
+    sites.length > MAXI && h('span', { class: 'more', title: sites.slice(MAXI).map(siteTip).join('\n') }, `+${sites.length - MAXI}`)]
     : h('span', { class: 'sub' }, i.acct?.count ? '已存邮箱账号' : '还没有记住的账号')),
   warn,
   h('div', { class: 'cb' }, state, h('span', { class: 'grow' }),

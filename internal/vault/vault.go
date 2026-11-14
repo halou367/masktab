@@ -29,9 +29,26 @@ type Item struct {
 	At   int64  `json:"at"`             // 最后修改，毫秒
 }
 
+// Step 是录入规则里的一个输入框：登录时这个框填什么。
+type Step struct {
+	Kind string `json:"kind"`           // user 用户名 | email 邮箱 | phone 手机号 | pass 密码
+	Sel  string `json:"sel"`            // CSS 选择器
+	N    int    `json:"n,omitempty"`    // 选择器匹配到多个时取第几个（从 0 开始）
+	Path string `json:"path,omitempty"` // 录入时所在页面的路径（只作参考）
+}
+
+// Rule 是一个站点的录入规则（“标记网站”，decisions M-3）：全部实例共用，只记“哪个框填什么”，不含任何账号内容。
+type Rule struct {
+	Site  string `json:"site"`
+	Steps []Step `json:"steps"`
+	By    string `json:"by,omitempty"` // 录入它的实例 id
+	At    int64  `json:"at"`
+}
+
 type data struct {
 	Default string  `json:"default,omitempty"` // 默认密码（批量导入、注册新站时用）
 	Items   []*Item `json:"items"`
+	Rules   []*Rule `json:"rules,omitempty"` // 录入规则，全部实例共用
 }
 
 type Vault struct {
@@ -238,6 +255,81 @@ func (v *Vault) Sites() map[string][]string {
 			out[x.Inst] = append(out[x.Inst], Host(x.Site))
 		}
 	}
+	return out
+}
+
+var stepKinds = map[string]bool{"user": true, "email": true, "phone": true, "pass": true}
+
+// SetRule 保存一个站点的录入规则（同站点覆盖）。只接受已知的种类，选择器限长，最多 6 步。
+func (v *Vault) SetRule(r Rule) (*Rule, error) {
+	r.Site = NormSite(r.Site)
+	if r.Site == "" || r.Site == "*" {
+		return nil, errors.New("站点为空")
+	}
+	steps := []Step{}
+	for _, s := range r.Steps {
+		s.Sel = strings.TrimSpace(s.Sel)
+		if !stepKinds[s.Kind] || s.Sel == "" || len(s.Sel) > 300 || s.N < 0 || s.N > 50 {
+			continue
+		}
+		if len(s.Path) > 200 {
+			s.Path = s.Path[:200]
+		}
+		steps = append(steps, s)
+	}
+	if len(steps) == 0 || len(steps) > 6 {
+		return nil, errors.New("规则里没有可用的输入框")
+	}
+	r.Steps, r.At = steps, time.Now().UnixMilli()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for i, x := range v.d.Rules {
+		if x.Site == r.Site {
+			v.d.Rules[i] = &r
+			return &r, v.saveLocked()
+		}
+	}
+	v.d.Rules = append(v.d.Rules, &r)
+	return &r, v.saveLocked()
+}
+
+// RuleOf 返回 site 的录入规则；没有返回 nil。
+func (v *Vault) RuleOf(site string) *Rule {
+	site = NormSite(site)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, x := range v.d.Rules {
+		if x.Site == site {
+			cp := *x
+			return &cp
+		}
+	}
+	return nil
+}
+
+// DeleteRule 删除 site 的录入规则（已经记住的账号不动）。
+func (v *Vault) DeleteRule(site string) error {
+	site = NormSite(site)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for i, x := range v.d.Rules {
+		if x.Site == site {
+			v.d.Rules = append(v.d.Rules[:i], v.d.Rules[i+1:]...)
+			return v.saveLocked()
+		}
+	}
+	return nil
+}
+
+// Rules 返回全部录入规则，最近的在前。
+func (v *Vault) Rules() []Rule {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]Rule, 0, len(v.d.Rules))
+	for _, x := range v.d.Rules {
+		out = append(out, *x)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At > out[j].At })
 	return out
 }
 

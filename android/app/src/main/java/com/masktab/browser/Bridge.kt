@@ -150,8 +150,11 @@ object Bridge {
                 val i = store.get(inst) ?: return fail("实例不存在")
                 val nos = store.insts.associate { it.id to it.no }
                 val items = vault.match(inst, uri.getQueryParameter("site") ?: "").map { it.toJson().put("no", nos[it.inst] ?: 0).put("mine", it.inst == inst) }
-                ok(jsonOf("items" to JSONArray(items), "default" to vault.default(), "email" to emailOf(i), "no" to i.no))
+                ok(jsonOf("items" to JSONArray(items), "default" to vault.default(), "email" to emailOf(i), "no" to i.no, "rule" to vault.ruleOf(uri.getQueryParameter("site") ?: "")))
             }
+            // 录入规则（标记网站）：全部实例共用
+            k == "PUT /api/vault/rule" -> { val r = vault.setRule(b.str("site"), b.optJSONArray("steps"), req.str("inst")); Core.pushState(); ok(r) }
+            k == "DELETE /api/vault/rule" -> { vault.deleteRule(uri.getQueryParameter("site") ?: ""); Core.pushState(); ok(null) }
             k == "POST /api/vault" -> {
                 val it = VItem.from(b)
                 if (it.inst.isEmpty()) it.inst = req.str("inst")
@@ -229,6 +232,14 @@ object Bridge {
         return jsonOf("created" to created, "skipped" to skipped, "bad" to bad.size, "noPass" to noPass)
     }
 
+    /** 管理页“已标记的网站”（不含选择器）。 */
+    private fun ruleViews(): List<JSONObject> = vault.rules().map { r ->
+        val site = r.str("site")
+        val host = try { java.net.URI(site).host ?: site } catch (e: Exception) { site }
+        val kinds = (r.optJSONArray("steps") ?: JSONArray()).objects().map { it.str("kind") }
+        jsonOf("site" to site, "host" to host, "kinds" to JSONArray(kinds), "by" to (store.get(r.str("by"))?.no ?: -1), "at" to r.optLong("at"))
+    }
+
     /** 与桌面 /api/state 同形状的状态（menu.js、instances.js 直接用）。 */
     fun state(meId: String?): JSONObject {
         val sites = vault.sites()
@@ -243,7 +254,7 @@ object Bridge {
         return jsonOf(
             "me" to (me ?: arr.optJSONObject(0)), "instances" to arr, "palette" to JSONArray(PALETTE),
             "launchSteps" to JSONArray(LAUNCH_STEPS),
-            "vault" to jsonOf("hasDefault" to vault.default().isNotEmpty(), "error" to vault.error.ifEmpty { null }),
+            "vault" to jsonOf("hasDefault" to vault.default().isNotEmpty(), "error" to vault.error.ifEmpty { null }, "rules" to JSONArray(ruleViews())),
             "settings" to jsonOf("searchUrl" to store.searchUrl, "subUrl" to store.subUrl),
             "proxy" to jsonOf("running" to Core.mihomo.running, "error" to Core.job.error.ifEmpty { Core.mihomo.lastError }, "installed" to Core.mihomo.installed, "busy" to Core.job.busy),
             "current" to store.current, "platform" to "android",

@@ -14,6 +14,9 @@ const tabInst = new Map(); // tabId → 实例 id
 const tabCs = new Map();   // tabId → cookieStoreId
 const csInst = new Map();  // cookieStoreId（容器）→ 实例 id
 const pending = new Map(); // 两步登录暂存：`${tabId}|${主域名}` → {u, at}
+const recs = new Map();    // 录入到一半的内容（decisions M-3）：`${tabId}|${主域名}` → {rec, off, at}，只在内存里
+const visTab = new Map();  // 实例 id → 正显示着的网页标签页（从菜单点“录入登录”时转给它）
+const recWant = new Map(); // 实例 id → 点“录入登录”的时间：当时没有网页在显示，等下一个显示出来的网页接手（2 分钟内）
 
 // app 的回复是 JSON 字符串（GeckoView 不直接回传 JSONObject）
 const parse = (r) => (typeof r === 'string' ? JSON.parse(r) : r);
@@ -76,6 +79,8 @@ browser.tabs.onCreated.addListener((t) => { if (t.openerTabId != null && tabInst
 browser.tabs.onRemoved.addListener((id) => {
   tabInst.delete(id); tabCs.delete(id);
   for (const k of [...pending.keys()]) if (k.startsWith(id + '|')) pending.delete(k);
+  for (const k of [...recs.keys()]) if (k.startsWith(id + '|')) recs.delete(k);
+  for (const [k, v] of [...visTab]) if (v === id) visTab.delete(k);
 });
 
 // ---------- 代理分流 ----------
@@ -177,6 +182,21 @@ async function vaultMsg(m, s) {
   if (m.t === 'vault:pending-set') { const u = String(m.user || '').trim().slice(0, 256); if (u) pending.set(pk, { u, at: Date.now() }); return true; }
   if (m.t === 'vault:pending-get') { const x = pending.get(pk); return x && Date.now() - x.at < 600_000 ? x.u : ''; }
   if (m.t === 'vault:undo') return native('DELETE', `/api/vault/${encodeURIComponent(m.id)}`, null, ex);
+  // 录入（标记网站）：规则交给 app 存，全部实例共用；录到一半的内容只暂存在后台内存里。
+  if (m.t === 'vault:rule-save') return native('PUT', '/api/vault/rule', { site, steps: Array.isArray(m.steps) ? m.steps.slice(0, 6) : [], inst }, ex);
+  if (m.t === 'vault:rec-set') {
+    const rec = m.rec && typeof m.rec === 'object' && JSON.stringify(m.rec).length < 4000 ? m.rec : null;
+    if (rec || m.off) recs.set(pk, { rec, off: !rec && !!m.off, at: Date.now() }); else recs.delete(pk);
+    return true;
+  }
+  if (m.t === 'vault:rec-get') { const x = recs.get(pk); return x && Date.now() - x.at < 600_000 ? { rec: x.rec, off: x.off } : null; }
+  if (m.t === 'vault:vis') {
+    if (!m.on) { if (visTab.get(inst) === s.tab.id) visTab.delete(inst); return {}; }
+    visTab.set(inst, s.tab.id);
+    const w = recWant.get(inst);
+    if (w) recWant.delete(inst);
+    return { start: !!w && Date.now() - w < 120_000 };
+  }
   throw new Error('未知请求');
 }
 
@@ -199,6 +219,13 @@ browser.runtime.onMessage.addListener((m, sender) => {
   if (t === 'fp:who' && sender.tab && typeof m.n === 'string') { ready.then(() => instOfTab(sender.tab.id)).then((id) => fpAnnounce(m.n, id), () => fpAnnounce(m.n, null)); return; }
   if (t.startsWith('vault:')) return vaultMsg(m, sender).then((r) => ({ ok: true, r }), (e) => ({ ok: false, error: e.message }));
   if (t === 'search') return Promise.resolve(searchUrl);
+  // 实例菜单里的“录入登录”（扩展自己的页面发来）：转给这个实例正显示着的网页；没有就记下来，等下一个网页接手。
+  if (t === 'rec-start' && !sender.tab?.url?.startsWith('http')) {
+    const inst = String(m.inst || ''), tab = visTab.get(inst);
+    recWant.set(inst, Date.now());
+    if (tab == null) return Promise.resolve({ ok: true, later: true });
+    return browser.tabs.sendMessage(tab, { t: 'mt:rec-start' }).then(() => { recWant.delete(inst); return { ok: true }; }, () => ({ ok: true, later: true }));
+  }
 });
 
 // ---------- Cookie 汇总 ----------

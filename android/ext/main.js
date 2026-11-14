@@ -64,7 +64,13 @@ function top(title, me) {
 // 菜单里点某一项：直接换路由（同一个页面里切换，最快也最稳），不绕 app 一圈
 function menu() {
   const go = (r) => { fromMenu = r; location.hash = r; };
-  const nav = { node: () => go('node'), fp: () => go('fp'), open: (r) => go(r), render };
+  // 录入登录：交给后台转到这个实例正显示着的网页，然后收起菜单；当时没有网页就等下一个打开的网页接手。
+  const record = () => run(async () => {
+    const r = await browser.runtime.sendMessage({ t: 'rec-start', inst: st.me.id });
+    if (r?.later) toast('回到要登录的网页后开始录入');
+    setTimeout(closeMe, r?.later ? 900 : 0);
+  });
+  const nav = { node: () => go('node'), fp: () => go('fp'), open: (r) => go(r), render, record };
   return [h('div', { class: 'top' }, ibtn('chevL', '返回', closeMe), h('h1', {}, '实例')), menuView(st, nav)];
 }
 

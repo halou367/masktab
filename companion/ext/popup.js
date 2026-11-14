@@ -15,6 +15,13 @@ let resOnly = false;    // 出口列表只看住宅
 let sortBy = 'delay';   // delay | score | speed
 let adding = false, fresh = false, fpOpen = false, autoScanned = false, told = 0;
 const open = (hash) => chrome.tabs.create({ url: chrome.runtime.getURL('app.html#' + hash) });
+// 录入登录：让当前标签页的网页进入录入模式（记下这个网站怎么登录，全部实例共用）。
+const record = () => run(async () => {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || !/^https?:/.test(tab.url || '')) throw new Error('先打开要登录的网站，再点录入');
+  try { await chrome.tabs.sendMessage(tab.id, { t: 'mt:rec-start' }); } catch { throw new Error('这个页面还没准备好：刷新一下再点录入'); }
+  window.close();
+});
 const patch = (body) => run(async () => { await api('PATCH', `/api/instances/${st.me.id}`, body); await load(); });
 const stop = (fn) => (ev) => { ev.stopPropagation(); fn(ev); };
 const go = (v) => () => { view = v; flt = ''; kindFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; adding = false; fresh = true; render(); };
@@ -382,7 +389,7 @@ function render() {
   document.body.classList.toggle('pk', !!view && view !== 'menu');
   document.body.classList.toggle('menu', view === 'menu');
   document.body.classList.toggle('tall', view === 'entry' || view === 'exit'); // 地址列表占满面板；国家列表有几行占几行
-  const nav = { node: go(''), fp: () => { fpOpen = true; go('')(); }, open, render };
+  const nav = { node: go(''), fp: () => { fpOpen = true; go('')(); }, open, render, record };
   const kids = view === 'menu' ? menuView(st, nav) : view === 'region' ? regionView(me, sub) : view === 'entry' ? entryView(me, sub) : view === 'exit' ? exitView(me, sub) : mainView(me, sub);
   root.replaceChildren(...kids.flat(Infinity).filter(Boolean));
   const list = root.querySelector('.ls');

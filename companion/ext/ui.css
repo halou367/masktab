@@ -34,3 +34,8 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); }
 .tg i { width:26px; height:14px; border-radius:99px; background:var(--line); position:relative; transition:background .15s; flex:none; }
 .tg i::after { content:''; position:absolute; left:2px; top:2px; width:10px; height:10px; border-radius:50%; background:#fff; box-shadow:0 0 0 1px rgba(0,0,0,.15); transition:left .15s; }
 .tg.on { color:var(--fg); } .tg.on i { background:var(--accent); } .tg.on i::after { left:14px; }
+
+/* 实例管理：卡片上只有 Cookie 的网站图标淡一点；已标记的网站（录入规则） */
+.site.ckonly{opacity:.5}
+.rules{margin-top:18px} .rules h3{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;margin:0 0 8px} .rules .tipq{margin-left:auto;text-decoration:underline dotted;cursor:help;font-weight:400}
+.ck.rule{padding-right:3px} .ck.rule .x{border:0;background:none;color:var(--sub);cursor:pointer;display:inline-flex;padding:3px;border-radius:99px} .ck.rule .x:hover{background:var(--line);color:inherit}

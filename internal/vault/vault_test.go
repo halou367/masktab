@@ -64,3 +64,35 @@ func TestParseEmails(t *testing.T) {
 		t.Fatalf("bad=%v", bad)
 	}
 }
+
+func TestRules(t *testing.T) {
+	v, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.SetRule(Rule{Site: "https://Example.com/login", Steps: []Step{{Kind: "weird", Sel: "x"}}}); err == nil {
+		t.Fatal("未知种类的步骤应被拒绝")
+	}
+	r, err := v.SetRule(Rule{Site: "https://Example.com/login", By: "a", Steps: []Step{{Kind: "email", Sel: "input#u"}, {Kind: "pass", Sel: "input[type=password]"}, {Kind: "code", Sel: "input#otp"}}})
+	if err != nil || r.Site != "https://example.com" || len(r.Steps) != 2 {
+		t.Fatalf("保存规则：%+v %v", r, err)
+	}
+	// 同站点覆盖，不新增
+	if _, err := v.SetRule(Rule{Site: "example.com", Steps: []Step{{Kind: "phone", Sel: "input[name=tel]", N: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Rules(); len(got) != 1 || got[0].Steps[0].Kind != "phone" || got[0].Steps[0].N != 1 {
+		t.Fatalf("覆盖后：%+v", got)
+	}
+	// 重开后还在；规则里没有账号内容
+	v2, _ := Open(filepath.Dir(v.path))
+	if x := v2.RuleOf("https://example.com/any"); x == nil || x.Steps[0].Sel != "input[name=tel]" {
+		t.Fatalf("重开后：%+v", x)
+	}
+	if v2.RuleOf("https://other.com") != nil {
+		t.Fatal("别的站点不该有规则")
+	}
+	if err := v2.DeleteRule("example.com"); err != nil || len(v2.Rules()) != 0 {
+		t.Fatalf("删除：%v", err)
+	}
+}

@@ -29,6 +29,7 @@ let q = '';
 export function menuView(st, nav) {
   const me = st.me, rt = me.rt, on = me.proxy.state === 'on', ex = on ? shownExit(me) : null;
   const sites = uniqSites(me.acct?.sites || []);
+  const rules = st.vault?.rules?.length || 0; // 已标记的网站数（全部实例共用）
   const kids = [];
   kids.push(h('div', { class: 'hero', style: { '--c': me.color } },
     face(me, true),
@@ -42,7 +43,8 @@ export function menuView(st, nav) {
   kids.push(h('div', { class: 'grp' },
     mi('key', '账号与密码', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),
     mi('globe', '节点与出口', nav.node, ex ? h('span', { class: 'k' }, flag(ex.country)) : ''),
-    me.kind !== 'normal' && mi('finger', '指纹与时区', nav.fp)));
+    me.kind !== 'normal' && mi('finger', '指纹与时区', nav.fp),
+    nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : '')));
 
   const others = st.instances.filter((x) => x.id !== me.id);
   const match = (x) => !q || `#${x.no} ${x.name || ''} ${exitText(x)}`.toLowerCase().includes(q.toLowerCase());

@@ -205,3 +205,19 @@
 - 原因：第二步页面只有密码框、找不到邮箱框，保存时用户名为空；第一步自动填后 `filledOnce` 挡住了第二步；页面变动观察 60 秒 / 400 次后就停，单页应用退出后回到登录页不再检查；点按钮后网页立刻清空表单时读不到值。
 - 改法：第一步提交时把用户名暂存到后台（chrome.storage.session，按标签页 + 主域名，10 分钟）；第二步按暂存用户名配对保存、挑对应账号填；每个输入框各自只填一次；观察不再停止（最多每 400 毫秒检查一次）；在 pointerdown 时同步读值；查询进入开放影子 DOM；只认提交类按钮。
 - 验证：沙箱模拟单页两步与多页两步登录，记住、退出后第一步填邮箱、第二步填密码均正确。未在真实 arena.ai 上验证（沙箱访问不到）。
+
+### 2026-11-14 统一界面演示加“手机精简版”（提交 5560ef8）
+- 演示页 `demo/unified/unified.html` 加手机精简布局（`lite.js`）和“电脑也用精简版”的切换。需求方看后回复“没大问题”。内核外置（IMPROVE I-1）需求方决定搁置。
+
+### 2026-11-14 标记网站 / 录入登录（decisions M-3，IMPROVE I-3）
+- 需求：卡片下显示有账号密码和 Cookie 的网站图标；加“录入”按钮，记下网站怎么登录（邮箱 / 账号 / 手机号 + 密码），登录成功结束；录过的网站全部实例共用，别的实例打开自动进入录入。
+- 改动：
+  - 密码库加规则（Go `internal/vault`、`internal/core/accounts.go`；安卓 `Vault.kt`、`Bridge.kt`），接口 `PUT` / `DELETE /api/vault/rule`，匹配结果带 `rule`，状态带 `vault.rules`。
+  - 内容脚本 `companion/ext/autofill.js`（两端共用）：录入按钮、录入条、登录成功判断、按规则找框填、无账号时自动录入、跨页面接着录。
+  - 两端后台：`vault:rule-save`、`vault:rec-set/get`、`vault:vis`；安卓加 `rec-start`（菜单 → 当前网页）。
+  - 实例菜单加“录入登录”；实例管理卡片的图标行加 Cookie 网站，页底加“已标记的网站”。
+- 验证：
+  - `go vet`、`go test ./...` 通过（新增 `TestRules`、`TestRuleRoutes`）；Kotlin 本地编译检查通过；`node --check` 通过。
+  - `scripts/rec-test.mjs` 在 Chromium 和 Firefox 各 21 项全过：手动录入（先输错一次）、另一实例自动录入、有账号按规则填、跨页两步登录、菜单触发、取消后不再自动录入。
+  - `android/scripts/preview-pages.mjs` 预览实例管理和菜单页，无脚本错误。
+- 未验证：真实网站；Windows 实机；安卓真机（特别是从菜单触发录入这条路：GeckoView 里后台给网页发消息没有实测过，做了“回到网页后接手”的后备）。
