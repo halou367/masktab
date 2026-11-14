@@ -38,6 +38,20 @@ class Inst(
     val country: String,
     val ip: String,
     val error: String,
+    // 下面几项只给外壳的头像菜单、标签页切换器显示用（2026-11-15，决策 UI-2）：都是核心服务算好的，这里只读
+    /** 出口城市、延迟（毫秒；0 未测，-1 不通）。 */
+    val city: String = "",
+    val latency: Int = 0,
+    /** 密码库里这个实例记住的账号数。 */
+    val accounts: Int = 0,
+    /** 伪装一致性检查：通过 / 能判断的项数（internal/core/checks.go）。 */
+    val checksPass: Int = 0,
+    val checksTotal: Int = 0,
+    /** 出口 IP 的纯净度（-1 = 查不到）和类型（res / dc / mobile）。 */
+    val purity: Int = -1,
+    val ipType: String = "",
+    /** CF 信誉：good = CF 那一路有出口；bad = 只有普通网站那一路；空 = 不知道。 */
+    val cf: String = "",
 ) {
     val contextId get() = "mt-$id"
 }
@@ -233,6 +247,15 @@ object Host {
     @Volatile var nodeCount = 0
         private set
     @Volatile var vaultKeyError = ""
+    /** 设置里的“外观”：dark（默认）| light | system。 */
+    @Volatile var theme = "dark"
+        private set
+    /** 新标签页的书签（三点菜单里的星标按钮加 / 删）。 */
+    @Volatile var bookmarks: List<Pair<String, String>> = emptyList()
+        private set
+    /** 已标记（录入过登录）的网站数。 */
+    @Volatile var rules = 0
+        private set
     /** 快照换新之后（主线程）。 */
     var onChange: ((old: List<Inst>) -> Unit)? = null
 
@@ -252,6 +275,7 @@ object Host {
     fun refresh(): Boolean {
         val j = try { CoreProc.json("GET", "/api/state", timeoutMs = 10000) } catch (e: Exception) { logw("取核心服务状态失败：${e.message}"); return false }
         val list = ArrayList<Inst>()
+        val ipq = j.optJSONObject("ipq") ?: JSONObject()
         for (o in j.optJSONArray("instances")?.objects() ?: emptyList()) {
             if (o.str("kind") == "normal") continue
             val rt = o.optJSONObject("rt") ?: JSONObject()
@@ -264,6 +288,10 @@ object Host {
                 seed = fi.optLong("seed64"), tz = fi.str("tz"), lang = fi.str("lang"),
                 running = rt.optBoolean("running"), starting = rt.optBoolean("starting"), on = on,
                 country = ex?.str("country") ?: "", ip = ex?.str("ip") ?: "", error = rt.str("error"),
+                city = ex?.str("city") ?: "", latency = rt.optInt("latency"), accounts = o.optJSONObject("acct")?.optInt("count") ?: 0,
+                checksPass = o.optJSONObject("checks")?.optInt("pass") ?: 0, checksTotal = o.optJSONObject("checks")?.optInt("total") ?: 0,
+                purity = ex?.str("ip")?.let { ipq.optJSONObject(it) }?.optInt("score", -1) ?: -1, ipType = ex?.str("ip")?.let { ipq.optJSONObject(it) }?.str("type") ?: "",
+                cf = if (!on || pr == null) "" else if (pr.optJSONObject("cf") != null) "good" else if (pr.optJSONObject("direct") != null) "bad" else "",
             ))
         }
         val names = ArrayList<String>()
@@ -276,7 +304,11 @@ object Host {
         val old = insts
         insts = list
         subs = names; nodeCount = n
-        searchUrl = j.optJSONObject("settings")?.str("searchUrl")?.ifEmpty { null } ?: searchUrl
+        val set = j.optJSONObject("settings") ?: JSONObject()
+        searchUrl = set.str("searchUrl").ifEmpty { null } ?: searchUrl
+        theme = set.str("theme").ifEmpty { "dark" }
+        bookmarks = (set.optJSONArray("bookmarks")?.objects() ?: emptyList()).map { it.str("title") to it.str("url") }
+        rules = j.optJSONObject("vault")?.optJSONArray("rules")?.length() ?: 0
         mihomoOk = core.optBoolean("ok"); mihomoVersion = core.str("version"); coreError = core.str("error").ifEmpty { j.optJSONObject("setup")?.str("coreError") ?: "" }
         version = j.str("version")
         seq = maxOf(seq, j.optLong("seq"))

@@ -206,6 +206,16 @@ type Settings struct {
 	TZSourceDefault       string   `json:"tzSourceDefault"`     // exit-cf | exit-direct
 	IPQOff                bool     `json:"ipqOff,omitempty"`    // 不向第三方查询出口 IP 的类型和纯净度
 	BindIface             string   `json:"bindIface,omitempty"` // 出站绑定的网卡：空 = 自动识别物理网卡（绕过 TUN）；off = 不绑定；其它 = 网卡名
+	// 界面（2026-11-15，Chrome 风格界面，decisions UI-1）：两端共用
+	Theme     string     `json:"theme,omitempty"`     // 外观：空 / dark = 深色（默认）| light 浅色 | system 跟随系统
+	Bookmarks []Bookmark `json:"bookmarks,omitempty"` // 新标签页上的书签（全部实例共用）
+	NTPHide   []string   `json:"ntpHide,omitempty"`   // 新标签页上不显示的部分：card | bookmarks | recent | accounts
+}
+
+// Bookmark 是新标签页上的一个书签。
+type Bookmark struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
 }
 
 func DefaultSettings() Settings {

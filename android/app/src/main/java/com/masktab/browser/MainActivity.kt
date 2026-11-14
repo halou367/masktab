@@ -3,9 +3,11 @@ package com.masktab.browser
 import android.app.Activity
 import android.app.Dialog
 import android.content.Intent
-import org.json.JSONObject
+import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.text.TextUtils
@@ -13,63 +15,79 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
 import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.window.OnBackInvokedDispatcher
+import org.json.JSONArray
+import org.json.JSONObject
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 
-// 唯一的 Activity：像手机 Chrome——顶部地址栏，右侧依次是标签数、头像（当前实例的彩色编号圆点）、菜单。
-// 点头像打开实例菜单（内置扩展页面 app.html#menu，复用桌面 menu.js）。
+// 唯一的 Activity：照安卓 Chrome 的深色样子（决策 UI-1）。顶部一条工具栏：主页、地址栏（新标签页上没有）、实例头像（右下角国旗）、标签页数、三点菜单；
+// 手机底部不放工具栏。浮在网页上的三样——头像菜单（底部弹出）、三点菜单、标签页切换器——是浏览器外壳，原生画（决策 UI-2）；
+// 内置页面（设置、节点与出口、指纹与伪装、实例、订阅与地址库、扩展、诊断…）是共用的扩展页面，和电脑版同一份代码。
 //
-// 内置页面（菜单、实例管理、节点、指纹、设置、扩展）怎么显示（第三版，决策 A-8）：
-// 全应用只有一个 GeckoView。内置页面用一个常驻的会话 [panel]（启动时就把 app.html 载好），要显示时把它换进这个 GeckoView，
+// 内置页面怎么显示（第三版，决策 A-8）：全应用只有一个 GeckoView。内置页面用一个常驻的会话 [panel]（启动时就把 app.html 载好），要显示时把它换进这个 GeckoView，
 // 关掉时换回当前标签页——和切换标签页是同一条路。页面之间跳转只是改地址 # 后面的路由，不新建也不销毁任何窗口、视图、会话。
-// 以前每开一页就新建一个对话框 + GeckoView + 会话、关掉时全部销毁；模拟器里没事，真机上从菜单点任何一项（都要先关菜单再开下一页）
-// 会白屏或闪退（用户两次反馈）。真机原因没有拿到日志确认，所以换成这条不创建、不销毁绘制表面的路，并加了不依赖内置页面的诊断入口。
+//
+// 全面屏（决策 UI-4）：内容贴着系统给的 insets（状态栏、刘海、导航栏 / 手势条、键盘）摆，露出来的那一圈由 [BarsLayout] 按当前页面和主题涂色；
+// 状态栏、导航栏的图标深浅跟着底色换。浮层盖住整个窗口（连两条栏），遮罩压暗时两条栏一起变暗。
 
 class MainActivity : Activity(), CoreUi {
-    private lateinit var gecko: GeckoView
+    private lateinit var root: BarsLayout
+    private lateinit var col: LinearLayout
+    private lateinit var gecko: TouchGecko
+    private lateinit var pull: PullRefresh
     private lateinit var url: EditText
+    private lateinit var urlBox: FrameLayout
+    private lateinit var spacer: View
+    private lateinit var home: ImageView
     private lateinit var tabCount: TabCountView
     private lateinit var avatar: AvatarView
+    private lateinit var dots: DotsView
     private lateinit var progress: ProgressBar
+    private lateinit var tb: LinearLayout
     private var startup: StartupView? = null
     private lateinit var toolbar: View
     private var panel: GeckoSession? = null   // 内置页面专用的常驻会话
     private var panelOn = false               // 现在显示的是不是内置页面
     private var panelRoute = ""               // app 让它显示的路由
-    private var panelCur = ""                 // 页面现在所在的路由（页面自己也会换，例如从菜单点进某一页）
     private var panelRetry = 0
     private var shown: GeckoSession? = null
     private var hold = false
+    private var overlay: Overlay? = null
+    private var pal = Theme.DARK
+    private var themeKey = ""
+    // 页面报上来的：盖了遮罩 / 底部有表单（决策 UI-4）
+    private var pageDim = false; private var pageSheet = false
+    private var ntpDim = false; private var ntpSheet = false
+    private var inTop = 0; private var inBottom = 0; private var inLeft = 0; private var inRight = 0; private var inIme = 0
     override var prompts: Prompts? = null
-
-    private val bar = Color.parseColor("#F1F3F4")
-    private val ink = Color.parseColor("#3C4043")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Core.init(this)
         Core.ui = this
         prompts = Prompts(this)
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        edgeToEdge()
         hold = intent?.getBooleanExtra("mt_hold", false) == true
+        pal = Theme.pal(this)
         setContentView(buildUi())
+        applyTheme(true)
         if (Build.VERSION.SDK_INT >= 33) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { handleBack() }
         }
@@ -87,48 +105,153 @@ class MainActivity : Activity(), CoreUi {
         super.onDestroy()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyTheme() // “跟随系统”时系统切了深浅色
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
     }
 
-    /** 测试用的启动参数（CI 截图）：mt_open=menu|instances|…打开对应页面，close 收起，diag 打开诊断窗口；mt_inst=<实例id 或 #编号> 切换实例；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
+    /** 测试用的启动参数（CI 截图）：mt_open=menu（头像菜单）|appmenu（三点菜单）|tabs（标签页切换器）|close|diag|其余是内置页面的路由；mt_inst=<实例id 或 #编号> 切换实例；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
     private fun handleIntent(i: Intent?) {
         if (i == null || !Core.started) return
-        if (i.action == Intent.ACTION_VIEW && i.data != null) { closeSheet(); Core.openTab(Host.current, i.dataString); return }
+        if (i.action == Intent.ACTION_VIEW && i.data != null) { closeOverlay(); closeSheet(); Core.openTab(Host.current, i.dataString); return }
         if (i.getBooleanExtra("mt_hold", false)) return
         if (hold) { hold = false; hideStartup() }
-        i.getStringExtra("mt_inst")?.let { v -> closeSheet(); Core.switchTo(if (v.startsWith("#")) Host.insts.firstOrNull { it.no == v.drop(1).toIntOrNull() }?.id ?: v else v) }
-        i.getStringExtra("mt_open")?.let { r -> when (r) { "diag" -> showDiag(); "close" -> closeSheet(); else -> openSheet(r, r != "menu") } }
+        i.getStringExtra("mt_inst")?.let { v -> closeOverlay(); closeSheet(); Core.switchTo(if (v.startsWith("#")) Host.insts.firstOrNull { it.no == v.drop(1).toIntOrNull() }?.id ?: v else v) }
+        i.getStringExtra("mt_open")?.let { r ->
+            when (r) {
+                "diag" -> showDiag()
+                "close" -> { closeOverlay(); closeSheet() }
+                "menu" -> { closeSheet(); showAvatarMenu() }
+                "appmenu" -> { closeSheet(); showAppMenu() }
+                "tabs" -> { closeSheet(); showTabs() }
+                else -> { closeOverlay(); openSheet(r, true) }
+            }
+        }
         i.removeExtra("mt_open")
         i.removeExtra("mt_inst")
     }
 
+    // ---------- 全面屏：insets 与两条系统栏 ----------
+
+    private fun edgeToEdge() {
+        val w = window
+        if (Build.VERSION.SDK_INT >= 30) w.setDecorFitsSystemWindows(false)
+        @Suppress("DEPRECATION")
+        run {
+            w.statusBarColor = Color.TRANSPARENT
+            w.navigationBarColor = Color.TRANSPARENT
+            if (Build.VERSION.SDK_INT < 30) w.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        }
+        w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+        if (Build.VERSION.SDK_INT >= 29) { w.isStatusBarContrastEnforced = false; w.isNavigationBarContrastEnforced = false }
+        if (Build.VERSION.SDK_INT >= 28) w.attributes = w.attributes.apply {
+            layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= 30) WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+    }
+
+    /** 系统给的 insets：状态栏 + 刘海（上、左、右）、导航栏 / 手势条（下）、键盘。内容按它们留边；浮层各自按它们留边。 */
+    private fun onInsets(ins: WindowInsets) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            val b = ins.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            inTop = b.top; inBottom = b.bottom; inLeft = b.left; inRight = b.right
+            inIme = ins.getInsets(WindowInsets.Type.ime()).bottom
+        } else {
+            @Suppress("DEPRECATION")
+            run { inTop = ins.systemWindowInsetTop; inLeft = ins.systemWindowInsetLeft; inRight = ins.systemWindowInsetRight; inBottom = minOf(ins.systemWindowInsetBottom, ins.stableInsetBottom); inIme = ins.systemWindowInsetBottom }
+            if (Build.VERSION.SDK_INT >= 28) ins.displayCutout?.let { inTop = maxOf(inTop, it.safeInsetTop); inLeft = maxOf(inLeft, it.safeInsetLeft); inRight = maxOf(inRight, it.safeInsetRight) }
+        }
+        root.insetTop = inTop; root.insetBottom = inBottom; root.insetLeft = inLeft; root.insetRight = inRight
+        col.setPadding(inLeft, inTop, inRight, maxOf(inBottom, inIme))
+        startup?.insets(inTop, inBottom)
+        overlay?.let { fitOverlay(it) }
+        root.invalidate()
+    }
+
+    /** 状态栏、导航栏的底色和图标深浅，按现在显示的东西算（决策 UI-4）。 */
+    private fun applyBars() {
+        val bg = pal.bg
+        val dimmed = Theme.over(bg, pal.scrim)
+        var top = bg; var bottom = bg
+        when {
+            startup != null -> {}
+            panelOn -> { top = if (pageDim) dimmed else bg; bottom = if (pageSheet) pal.surf else if (pageDim) dimmed else bg }
+            isNtp(Core.curTab()) -> { bottom = if (ntpSheet) pal.surf else if (ntpDim) dimmed else bg }
+        }
+        root.paint(top, bottom)
+        barIcons(Theme.isLight(if (overlay != null && overlay!!.tag == "dim") Theme.over(top, pal.scrim) else top), Theme.isLight(bottom))
+    }
+
+    private fun barIcons(lightTop: Boolean, lightBottom: Boolean) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            val c = window.insetsController ?: return
+            val f = (if (lightTop) WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS else 0) or (if (lightBottom) WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS else 0)
+            c.setSystemBarsAppearance(f, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                var f = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                if (lightTop) f = f or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                if (lightBottom) f = f or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                window.decorView.systemUiVisibility = f
+            }
+        }
+    }
+
+    override fun pageBars(src: String, dim: Boolean, sheet: Boolean) {
+        if (src == "panel") { pageDim = dim; pageSheet = sheet } else { ntpDim = dim; ntpSheet = sheet }
+        applyBars()
+    }
+
+    /** 主题（设置里的“外观”）变了，或第一次：重涂外壳。 */
+    private fun applyTheme(force: Boolean = false) {
+        val p = Theme.pal(this)
+        val key = if (p.dark) "d" else "l"
+        if (!force && key == themeKey) return
+        themeKey = key; pal = p
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(p.bg))
+        tb.setBackgroundColor(p.bg)
+        col.setBackgroundColor(p.bg)
+        urlBox.background = rounded(p.pill, dp(24).toFloat())
+        url.setTextColor(p.on); url.setHintTextColor(p.on2)
+        home.setImageDrawable(mi("home", p.on))
+        tabCount.tint = p.on; tabCount.invalidate()
+        dots.tint = p.on; dots.invalidate()
+        avatar.ring = p.bg; avatar.invalidate()
+        progress.progressTintList = android.content.res.ColorStateList.valueOf(p.acc)
+        progress.progressBackgroundTintList = android.content.res.ColorStateList.valueOf(p.bg)
+        gecko.coverUntilFirstPaint(p.bg)
+        applyBars()
+    }
+
     // ---------- 界面 ----------
 
-    private fun iconBtn(v: View, desc: String, onClick: () -> Unit): View {
+    private fun btn(v: View, desc: String, onClick: () -> Unit): View {
         v.contentDescription = desc
         v.setOnClickListener { onClick() }
-        v.background = obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackgroundBorderless)).let { a -> a.getDrawable(0).also { a.recycle() } }
+        v.ripple(true)
         return v
     }
 
     private fun buildUi(): View {
-        val root = FrameLayout(this)
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.WHITE) }
-        val tb = LinearLayout(this).apply {
+        root = BarsLayout(this)
+        col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        tb = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(6), dp(4), dp(6))
-            setBackgroundColor(Color.WHITE)
+            setPadding(dp(4), 0, dp(4), 0)
         }
+        home = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
+        tb.addView(btn(home, "主页") { goHome() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         url = EditText(this).apply {
             hint = "搜索或输入网址"
             setSingleLine()
-            textSize = 15f
-            setTextColor(Color.parseColor("#202124"))
-            setHintTextColor(Color.parseColor("#80868B"))
-            background = rounded(bar, dp(24).toFloat())
+            textSize = 16f
+            background = null
             setPadding(dp(16), 0, dp(12), 0)
             imeOptions = EditorInfo.IME_ACTION_GO
             inputType = EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_VARIATION_URI
@@ -139,32 +262,38 @@ class MainActivity : Activity(), CoreUi {
             }
             setOnFocusChangeListener { _, f -> if (f) { Core.curTab()?.let { t -> setText(if (Core.isInternal(t.url)) "" else t.url); selectAll() } } else showUrl() }
         }
-        tb.addView(url, LinearLayout.LayoutParams(0, dp(44), 1f))
-        tabCount = TabCountView(this).apply { tint = ink }
-        tb.addView(iconBtn(tabCount, "标签页") { showTabs() }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(4) })
-        avatar = AvatarView(this)
-        tb.addView(iconBtn(avatar, "实例") { openSheet("menu", false) }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        urlBox = FrameLayout(this).apply { addView(url, FrameLayout.LayoutParams(-1, -1)) }
+        tb.addView(urlBox, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
+        spacer = View(this)
+        tb.addView(spacer, LinearLayout.LayoutParams(0, dp(48), 1f))
+        avatar = AvatarView(this).apply { scale = 0.62f }
+        tb.addView(btn(avatar, "实例") { showAvatarMenu() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         avatar.setOnLongClickListener { showDiag(); true } // 长按头像：诊断信息（原生窗口）
-        val dots = DotsView(this).apply { tint = ink }
-        tb.addView(iconBtn(dots, "菜单") { showMenu(dots) }, LinearLayout.LayoutParams(dp(40), dp(44)))
+        tabCount = TabCountView(this)
+        tb.addView(btn(tabCount, "标签页") { showTabs() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        dots = DotsView(this)
+        tb.addView(btn(dots, "更多选项") { showAppMenu() }, LinearLayout.LayoutParams(dp(44), dp(48)))
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; visibility = View.INVISIBLE }
-        // 地址栏和进度条包在一起：显示内置页面时整块藏起来（页面自己有标题和返回）
+        // 工具栏和进度条包在一起：显示内置页面时整块藏起来（页面自己有标题和返回）
         toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(tb, LinearLayout.LayoutParams(-1, -2))
-            addView(progress, LinearLayout.LayoutParams(-1, dp(3)))
+            addView(tb, LinearLayout.LayoutParams(-1, dp(64)))
+            addView(progress, LinearLayout.LayoutParams(-1, dp(3)).apply { topMargin = -dp(3) })
         }
         col.addView(toolbar, LinearLayout.LayoutParams(-1, -2))
-        gecko = GeckoView(this)
-        col.addView(gecko, LinearLayout.LayoutParams(-1, 0, 1f))
+        gecko = TouchGecko(this)
+        pull = PullRefresh(this, gecko) { pal }
+        pull.atTop = { (Core.curTab()?.scrollY ?: 0) <= 0 }
+        pull.onRefresh = { Core.curTab()?.session?.reload() }
+        col.addView(pull, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(col, FrameLayout.LayoutParams(-1, -1))
-        fitInsets(col)
+        root.setOnApplyWindowInsetsListener { _, ins -> onInsets(ins); ins }
         if (!Core.started) {
-            startup = StartupView(this, Bridge.LAUNCH_STEPS).also { sv ->
+            startup = StartupView(this, Bridge.LAUNCH_STEPS, pal).also { sv ->
                 // 启动页底部：版本号 + 诊断入口（启动卡住时也能点）
-                sv.addView(TextView(this).apply {
+                sv.content.addView(TextView(this).apply {
                     text = "版本 ${Diag.version(this@MainActivity)} · 诊断信息"
-                    textSize = 12f; setTextColor(Color.parseColor("#80868B")); gravity = Gravity.CENTER
+                    textSize = 12f; setTextColor(pal.on3); gravity = Gravity.CENTER
                     setPadding(dp(16), dp(28), dp(16), dp(12))
                     setOnClickListener { showDiag() }
                 }, LinearLayout.LayoutParams(-2, -2))
@@ -174,25 +303,19 @@ class MainActivity : Activity(), CoreUi {
         return root
     }
 
-    /** 安卓 15+ 强制全屏绘制：给内容留出状态栏、导航栏和输入法的位置。 */
-    private fun fitInsets(v: View) {
-        v.setOnApplyWindowInsetsListener { view, ins ->
-            if (Build.VERSION.SDK_INT >= 30) {
-                val b = ins.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
-                view.setPadding(b.left, b.top, b.right, b.bottom)
-            } else {
-                @Suppress("DEPRECATION")
-                view.setPadding(ins.systemWindowInsetLeft, ins.systemWindowInsetTop, ins.systemWindowInsetRight, ins.systemWindowInsetBottom)
-            }
-            ins
-        }
-    }
+    private fun isNtp(t: Tab?): Boolean = t != null && (t.url.isEmpty() || (Core.isInternal(t.url) && t.url.contains("newtab.html")))
 
     private fun showUrl() {
         val t = Core.curTab()
-        if (url.hasFocus()) return
-        val u = t?.url ?: ""
-        url.setText(if (Core.isInternal(u) || u.isEmpty()) "" else u.removePrefix("https://").removePrefix("http://").removeSuffix("/"))
+        if (!url.hasFocus()) {
+            val u = t?.url ?: ""
+            url.setText(if (Core.isInternal(u) || u.isEmpty()) "" else u.removePrefix("https://").removePrefix("http://").removeSuffix("/"))
+        }
+        // 新标签页上没有地址栏（搜索框在页面里），只留主页、头像、标签页数、三点菜单
+        val ntp = isNtp(t) && !url.hasFocus()
+        urlBox.visibility = if (ntp) View.GONE else View.VISIBLE
+        spacer.visibility = if (ntp) View.VISIBLE else View.GONE
+        pull.enabled2 = !panelOn && t != null && !ntp && !Core.isInternal(t.url)
     }
 
     private fun go(input: String) {
@@ -203,26 +326,39 @@ class MainActivity : Activity(), CoreUi {
         val t = Core.curTab()
         if (t == null) Core.openTab(Host.current, target) else t.session.loadUri(target)
         url.clearFocus()
-        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(url.windowToken, 0)
+        hideIme()
         gecko.requestFocus()
+    }
+
+    private fun hideIme() { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(url.windowToken, 0) }
+
+    /** 主页：当前标签页回到新标签页。 */
+    private fun goHome() {
+        closeSheet()
+        val t = Core.curTab() ?: run { Core.openTab(Host.current); return }
+        t.session.loadUri(Core.bootUrl(t.inst, null))
     }
 
     override fun onTabsChanged() {
         val i = Host.cur() ?: return
+        applyTheme()
         val t = Core.curTab()
         // 正显示内置页面时不动 GeckoView 里的会话（关掉页面时再换回标签页）
         if (!panelOn && t != null && shown !== t.session) {
+            pull.done()
             gecko.releaseSession()
             for ((_, l) in Core.tabs) for (x in l) if (x !== t) x.session.setActive(false)
             panel?.let { if (it.isOpen) it.setActive(false) }
             gecko.setSession(t.session)
             t.session.setActive(true)
             shown = t.session
+            ntpDim = false; ntpSheet = false
         }
         tabCount.count = Core.tabsOf(i.id).size
         avatar.set(parseColor(i.color), i.no.toString(), flagBitmap(this, i.country.takeIf { i.on && it.isNotEmpty() }))
         avatar.contentDescription = "实例 #${i.no} ${i.name}"
         t?.let { onTabUpdated(it) }
+        applyBars()
     }
 
     override fun onTabUpdated(t: Tab) {
@@ -230,7 +366,10 @@ class MainActivity : Activity(), CoreUi {
         showUrl()
         progress.progress = t.progress
         progress.visibility = if (t.progress in 1..99) View.VISIBLE else View.INVISIBLE
+        applyBars()
     }
+
+    override fun onPageStopped(t: Tab) { if (t === Core.curTab()) pull.done() }
 
     override fun toast(msg: String) = ui { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
 
@@ -257,6 +396,7 @@ class MainActivity : Activity(), CoreUi {
                 if (!CoreProc.start()) { step(2, 4, CoreProc.lastError); step(3, 3); step(4, 3); return@bg }
                 Host.waitFor(15000) { Host.mihomoOk || Host.coreError.isNotEmpty() }
                 Legacy.migrate(this@MainActivity)?.let { msg -> Host.refresh(); toast(msg) }
+                ui { applyTheme() } // 设置里的“外观”现在才知道
                 pace(s)
                 step(2, if (Host.mihomoOk) 2 else 4, if (Host.mihomoOk) "mihomo ${Host.mihomoVersion}" else Host.coreError.ifEmpty { "mihomo 没有起来" })
                 // 订阅
@@ -269,12 +409,14 @@ class MainActivity : Activity(), CoreUi {
                 Host.refresh()
                 val cur = Host.cur()
                 if (cur != null) {
+                    ui { st.showInst(parseColor(cur.color), cur.no.toString(), null) }
                     Host.saveCurrent(cur.id)
                     try { CoreProc.json("POST", "/api/instances/${cur.id}/launch") } catch (e: Exception) { logw("启动实例失败：${e.message}") }
                     Host.waitFor(25000) { Host.get(cur.id)?.let { it.running && !it.starting && (it.country.isNotEmpty() || it.error.isNotEmpty()) } ?: true }
                 }
                 val i = Host.cur()
                 pace(s)
+                if (i != null && i.country.isNotEmpty()) ui { st.showInst(parseColor(i.color), i.no.toString(), flagBitmap(this, i.country.takeIf { i.on })) }
                 step(4, if (i != null && i.country.isNotEmpty()) 2 else 4,
                     if (i == null) "没有实例" else if (i.country.isNotEmpty()) "#${i.no} 出口 ${i.country} · ${i.ip}" + (if (!i.on) "（直连）" else "") else i.error.ifEmpty { if (i.running) "出口还没探出来" else "实例没有启动好" })
                 Thread.sleep(500)
@@ -296,9 +438,10 @@ class MainActivity : Activity(), CoreUi {
         val v = startup ?: return
         startup = null
         v.animate().alpha(0f).setDuration(250).withEndAction { (v.parent as? ViewGroup)?.removeView(v) }.start()
+        applyBars()
     }
 
-    // ---------- 实例菜单、管理页等（内置扩展页面） ----------
+    // ---------- 内置页面（设置、节点与出口等） ----------
 
     /** 内置页面的常驻会话：没有就建一个（只在第一次、或它崩溃之后）。 */
     private fun ensurePanel(): GeckoSession {
@@ -307,12 +450,9 @@ class MainActivity : Activity(), CoreUi {
         s.promptDelegate = PromptBridge
         s.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
-                // 菜单 / 管理页里点到的外部链接在当前实例的新标签页打开
+                // 设置页里点到的外部链接在当前实例的新标签页打开
                 if (request.uri.startsWith("http")) { val u = request.uri; mainHandler.post { closeSheet(); Core.openTab(Host.current, u) }; return GeckoResult.deny() }
                 return null
-            }
-            override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
-                panelCur = url?.substringAfter('#', "") ?: ""
             }
             override fun onLoadError(session: GeckoSession, uri: String?, error: org.mozilla.geckoview.WebRequestError): GeckoResult<String>? {
                 logw("内置页面打不开 $uri 类别 ${error.category} 代码 ${error.code}")
@@ -340,26 +480,34 @@ class MainActivity : Activity(), CoreUi {
         try { val s = ensurePanel(); if (!panelOn) { s.loadUri(Core.pageUrl("idle")); s.setActive(false) } } catch (e: Throwable) { logw("预载内置页面出错", e); Core.pageLog("预载内置页面出错：${e.message}") }
     }
 
-    override fun openSheet(route: String, full: Boolean) { panelRetry = 0; showPanel(route) }
+    override fun openSheet(route: String, full: Boolean) {
+        if (route == "menu") { showAvatarMenu(); return } // 头像菜单是原生的（决策 UI-2）
+        panelRetry = 0; showPanel(route)
+    }
 
     private fun showPanel(route: String) {
         if (!Core.started || Core.baseUrl.isEmpty() || isFinishing || isDestroyed) return
         try {
+            closeOverlay()
             val s = ensurePanel()
             panelRoute = route
             s.loadUri(Core.pageUrl(route))
             if (!panelOn || shown !== s) {
                 panelOn = true
+                pageDim = false; pageSheet = false
                 url.clearFocus()
-                (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(url.windowToken, 0)
+                hideIme()
+                pull.done()
                 gecko.releaseSession()
                 for ((_, l) in Core.tabs) for (x in l) x.session.setActive(false)
                 gecko.setSession(s)
                 s.setActive(true)
                 shown = s
                 toolbar.visibility = View.GONE
+                pull.enabled2 = false
                 gecko.requestFocus()
             }
+            applyBars()
             logi("内置页面 $route")
         } catch (e: Throwable) {
             logw("内置页面打不开 $route", e)
@@ -392,15 +540,325 @@ class MainActivity : Activity(), CoreUi {
         onTabsChanged()
     }
 
+    // ---------- 浮层：头像菜单、三点菜单、标签页切换器（原生，决策 UI-2） ----------
+
+    private fun newOverlay(dim: Boolean): Overlay {
+        closeOverlay()
+        overlayFit = null
+        url.clearFocus(); hideIme()
+        lateinit var o: Overlay
+        // 点遮罩关掉的（不经 closeOverlay）也要把 overlay 清掉，免得下一次返回键白按一次
+        o = Overlay(this, pal, dim) { if (overlay === o) overlay = null; applyBars() }
+        o.tag = if (dim) "dim" else ""
+        overlay = o
+        root.addView(o, FrameLayout.LayoutParams(-1, -1))
+        applyBars()
+        return o
+    }
+    private fun closeOverlay() { val o = overlay ?: return; overlay = null; o.close(); applyBars() }
+    /** 浮层里的卡片怎么按 insets 留边（各浮层自己给）。 */
+    private var overlayFit: (() -> Unit)? = null
+    private fun fitOverlay(o: Overlay) { o.setPadding(inLeft, 0, inRight, 0); overlayFit?.invoke() }
+
+    private fun surface(color: Int, top: Float, bottom: Float) = GradientDrawable().apply { setColor(color); cornerRadii = floatArrayOf(top, top, top, top, bottom, bottom, bottom, bottom) }
+
+    private fun flagView(cc: String, w: Int = 20): View? = flagBitmap(this, cc.takeIf { it.isNotEmpty() })?.let { b ->
+        ImageView(this).apply { setImageBitmap(b); scaleType = ImageView.ScaleType.CENTER_CROP; layoutParams = LinearLayout.LayoutParams(dp(w), dp(w * 3 / 4)).apply { rightMargin = dp(8) } }
+    }
+    private fun latColor(l: Int) = if (l in 1..199) pal.good else if (l in 200..499) pal.mid else if (l == 0) pal.on3 else pal.bad
+    private fun avatarOf(i: Inst, size: Int, ring: Int, dot: Boolean = false) = AvatarView(this).apply {
+        set(parseColor(i.color), i.no.toString(), flagBitmap(this@MainActivity, i.country.takeIf { i.on && it.isNotEmpty() }))
+        scale = 0.84f; this.ring = ring
+        if (dot) this.dot = if (i.starting) 2 else if (i.running) 1 else 3
+        dotColors = intArrayOf(pal.good, pal.acc, pal.on3)
+        layoutParams = LinearLayout.LayoutParams(dp(size), dp(size))
+    }
+    private fun trailText(s: String, color: Int = pal.on3) = text(s, 14f, color)
+    private fun trailRow(vararg v: View?) = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; for (x in v) if (x != null) addView(x) }
+
+    /** 头像菜单（底部弹出，照已确认演示 03）：当前实例、三项入口、其它实例（点一下切换）、新建 / 导入邮箱 / 管理实例。 */
+    private fun showAvatarMenu() {
+        if (!Core.started) return
+        val me = Host.cur() ?: return
+        closeSheet()
+        val o = newOverlay(true)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isClickable = true }
+        box.addView(View(this).apply { background = rounded(pal.on3, dp(2).toFloat()); alpha = 0.6f }, LinearLayout.LayoutParams(dp(32), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(14); bottomMargin = dp(6) })
+        // 当前实例
+        val hero = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(24), dp(8), dp(20), dp(16)) }
+        hero.addView(avatarOf(me, 56, pal.surf))
+        val who = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(8), 0) }
+        who.addView(text("#${me.no} ${me.name.ifEmpty { "未命名" }}", 18f, pal.on))
+        val line = trailRow(flagView(me.country.takeIf { me.on } ?: ""), text(if (!me.on) "直连" else me.ip.ifEmpty { if (me.error.isNotEmpty()) me.error else "出口探测中…" }, 14f, if (me.on) pal.on2 else pal.mid).apply { typeface = Typeface.MONOSPACE },
+            if (me.on && me.ip.isNotEmpty()) text("  ${if (me.latency > 0) "${me.latency} ms" else if (me.latency < 0) "不通" else ""}", 13f, latColor(me.latency)) else null)
+        who.addView(line, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+        hero.addView(who, LinearLayout.LayoutParams(0, -2, 1f))
+        if (me.on) {
+            val rep = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+            rep.addView(RingView(this, pal).apply { value = me.purity.takeIf { it >= 0 }; contentDescription = "纯净度 ${if (me.purity >= 0) me.purity else "未知"}" }, LinearLayout.LayoutParams(dp(36), dp(36)))
+            rep.addView(trailRow(DotView(this, when (me.cf) { "good" -> pal.good; "bad" -> pal.bad; else -> pal.on3 }).apply { layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(5) } }, text("CF", 12f, pal.on2)), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+            hero.addView(rep)
+        }
+        box.addView(hero)
+        val go = { r: String -> { closeOverlay(); openSheet(r, true) } }
+        box.addView(menuRow(pal, "key", "账号与密码", trailText(if (me.accounts > 0) me.accounts.toString() else "")) { go("instances/${me.id}")() })
+        box.addView(menuRow(pal, "globe", "节点与出口", trailRow(flagView(me.country.takeIf { me.on } ?: ""), trailText(if (!me.on) "直连" else cname(me.country)))) { go("node")() })
+        box.addView(menuRow(pal, "finger", "指纹与伪装", trailText(if (me.checksTotal > 0) "${me.checksPass}/${me.checksTotal}" else "", if (me.checksTotal > 0 && me.checksPass == me.checksTotal) pal.good else pal.on3)) { go("fp")() })
+        box.addView(menuRow(pal, "edit", "录入登录", trailText(if (Host.rules > 0) Host.rules.toString() else "")) {
+            closeOverlay()
+            try { Core.bgPort?.postMessage(jsonOf("t" to "rec-start", "inst" to me.id)) } catch (e: Exception) { logw("录入登录没发出去", e) }
+            toast("回到要登录的网页后开始录入")
+        })
+        box.addView(divider(pal))
+        val others = Host.insts.filter { it.id != me.id }
+        box.addView(LinearLayout(this).apply {
+            setPadding(dp(24), dp(10), dp(24), dp(6))
+            addView(text("其它实例（${others.size}）", 14f, pal.on2), LinearLayout.LayoutParams(0, -2, 1f))
+            if (others.isNotEmpty()) addView(text("点一下切换", 13f, pal.on3))
+        })
+        for (x in others) {
+            val r = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(64); setPadding(dp(24), dp(8), dp(20), dp(8)); ripple(); contentDescription = "切换到 #${x.no}" }
+            r.addView(avatarOf(x, 40, pal.surf, true))
+            val tx = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(8), 0) }
+            tx.addView(text("#${x.no} ${x.name.ifEmpty { "未命名" }}", 16f, pal.on))
+            val tabs = Core.tabsOf(x.id).size
+            tx.addView(trailRow(flagView(x.country.takeIf { x.on } ?: "", 16), text((if (!x.on) "直连" else x.ip.ifEmpty { "—" }) + (if (tabs > 0) " · $tabs 个标签页" else ""), 13f, pal.on2)), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2) })
+            r.addView(tx, LinearLayout.LayoutParams(0, -2, 1f))
+            r.addView(TextView(this).apply {
+                text = if (x.starting) "启动中" else if (x.running) "运行中" else "休眠"; textSize = 12f
+                setTextColor(if (x.running) pal.good else pal.on2); setPadding(dp(8), dp(3), dp(8), dp(3))
+                background = rounded(Color.TRANSPARENT, dp(8).toFloat(), dp(1), if (x.running) pal.good else pal.div)
+            })
+            r.setOnClickListener { closeOverlay(); Core.switchTo(x.id) }
+            box.addView(r)
+        }
+        box.addView(divider(pal))
+        box.addView(menuRow(pal, "add", "新建实例") { closeOverlay(); Core.createInst() })
+        box.addView(menuRow(pal, "mail", "导入邮箱") { go("instances/import")() })
+        box.addView(menuRow(pal, "layers", "管理实例") { go("instances")() })
+        val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false }
+        val card = FrameLayout(this).apply { background = surface(pal.surf, dp(28).toFloat(), 0f); isClickable = true; addView(scroll) }
+        overlayFit = { card.setPadding(0, 0, 0, inBottom + dp(8)); (card.layoutParams as? FrameLayout.LayoutParams)?.topMargin = inTop + dp(40); card.requestLayout() }
+        o.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        fitOverlay(o)
+        card.translationY = resources.displayMetrics.heightPixels.toFloat()
+        card.animate().translationY(0f).setDuration(260).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        logi("头像菜单已打开")
+    }
+
+    /** 三点菜单（照新版 Chrome，已确认演示 04）：顶排后退 / 前进 / 书签 / 下载 / 刷新；然后各组菜单项，MaskTab 一组在中间。 */
+    private fun showAppMenu() {
+        if (!Core.started) return
+        val t = Core.curTab()
+        val me = Host.cur()
+        closeSheet()
+        val o = newOverlay(false)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isClickable = true; setPadding(0, 0, 0, dp(8)) }
+        val web = t != null && t.url.startsWith("http")
+        val marked = t != null && web && Host.bookmarks.any { it.second == t.url }
+        val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(15), dp(15), dp(16), dp(6)) }
+        fun topBtn(ic: String, desc: String, enabled: Boolean, bg: Int, fg: Int, radius: Int, act: () -> Unit) {
+            val v = ImageView(this).apply {
+                setImageDrawable(mi(ic, if (enabled) fg else pal.on3)); scaleType = ImageView.ScaleType.CENTER
+                background = rounded(if (enabled) bg else Theme.over(bg, Color.argb(60, 128, 128, 128)), dp(radius).toFloat())
+                contentDescription = desc; isEnabled = enabled
+                if (enabled) { ripple(true); setOnClickListener { closeOverlay(); act() } }
+            }
+            top.addView(v, LinearLayout.LayoutParams(dp(47), dp(47)))
+            top.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        }
+        topBtn("back", "后退", t?.canBack == true, pal.surf3, pal.on, 24) { t?.session?.goBack() }
+        topBtn("fwd", "前进", t?.canFwd == true, pal.surf3, pal.on, 24) { t?.session?.goForward() }
+        topBtn(if (marked) "star" else "starO", if (marked) "取消书签" else "添加书签", web, if (pal.dark) Color.parseColor("#3a3f55") else pal.tonal, pal.on, 16) { toggleBookmark(t!!) }
+        topBtn("dl", "下载（暂不支持）", false, pal.surf3, pal.on, 24) {}
+        topBtn("refresh", "刷新", t != null, if (pal.dark) Color.parseColor("#121318") else Color.parseColor("#1f1f1f"), Color.WHITE, 24) { t?.session?.reload() }
+        top.removeViewAt(top.childCount - 1)
+        box.addView(top)
+        val go = { r: String -> { closeOverlay(); openSheet(r, true) } }
+        fun item(ic: String, label: String, trail: View? = null, enabled: Boolean = true, act: () -> Unit) = box.addView(menuRow(pal, ic, label, trail, enabled, 52) { closeOverlay(); act() })
+        item("addBox", "打开新的标签页") { Core.openTab(Host.current) }
+        item("incog", "打开新的无痕式标签页", enabled = false) { toast("每个实例本来就是独立的容器；要一次性的身份，新建一个实例") }
+        item("group", "添加到新标签页组", enabled = false) { toast("标签页组还没有做") }
+        box.addView(divider(pal))
+        item("history", "历史记录") { openSheet("history", true) }
+        item("del", "删除浏览数据") { clearData() }
+        box.addView(divider(pal))
+        item("dlDone", "下载内容", enabled = false) { toast("暂不支持下载文件") }
+        item("starO", "书签") { openSheet("bookmarks", true) }
+        item("devices", "最近打开的标签页") { recentClosed() }
+        item("ext", "扩展程序") { openSheet("addons", true) }
+        box.addView(divider(pal))
+        if (me != null) {
+            item("globe", "节点与出口", trailRow(flagView(me.country.takeIf { me.on } ?: ""), trailText(if (!me.on) "直连" else ""))) { openSheet("node", true) }
+            item("finger", "指纹与伪装", trailText(if (me.checksTotal > 0) "${me.checksPass}/${me.checksTotal}" else "")) { openSheet("fp", true) }
+            item("layers", "实例管理") { openSheet("instances", true) }
+            box.addView(divider(pal))
+        }
+        item("tools", "更多工具") { moreTools(t) }
+        box.addView(divider(pal))
+        item("gear", "设置") { openSheet("settings", true) }
+        item("addhome", "自定义新标签页页面") { openSheet("settings/ntp", true) }
+        item("help", "帮助和反馈") { Core.openTab(Host.current, "https://github.com/halou367/masktab/issues") }
+        val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false }
+        val card = FrameLayout(this).apply { background = rounded(pal.surf, dp(26).toFloat()); elevation = dp(8).toFloat(); isClickable = true; addView(scroll) }
+        overlayFit = { (card.layoutParams as? FrameLayout.LayoutParams)?.let { it.topMargin = inTop + dp(8); it.bottomMargin = inBottom + dp(16) }; card.requestLayout() }
+        o.addView(card, FrameLayout.LayoutParams(minOf(dp(318), resources.displayMetrics.widthPixels - dp(24)), -2, Gravity.TOP or Gravity.END).apply { rightMargin = dp(7) })
+        fitOverlay(o)
+        card.pivotX = card.layoutParams.width.toFloat(); card.pivotY = 0f
+        card.scaleX = 0.85f; card.scaleY = 0.85f
+        card.animate().scaleX(1f).scaleY(1f).setDuration(180).start()
+        logi("三点菜单已打开")
+    }
+
+    private fun toggleBookmark(t: Tab) {
+        val l = Host.bookmarks.toMutableList()
+        val had = l.any { it.second == t.url }
+        if (had) l.removeAll { it.second == t.url } else l.add(t.title.ifEmpty { t.url } to t.url)
+        bg {
+            try {
+                CoreProc.json("PATCH", "/api/settings", jsonOf("bookmarks" to JSONArray(l.map { jsonOf("title" to it.first, "url" to it.second) })))
+                Host.refresh()
+                toast(if (had) "已取消书签" else "已加到书签（新标签页上能看到）")
+            } catch (e: Exception) { toast("书签没存上：${e.message}") }
+        }
+    }
+
+    /** 删除浏览数据：清掉当前实例的 Cookie、网站数据和缓存，以及它的最近访问。先确认。 */
+    private fun clearData() {
+        val me = Host.cur() ?: return
+        Theme.dialog(this).setTitle("删除浏览数据？")
+            .setMessage("清除 #${me.no} 的 Cookie、网站数据、缓存和访问记录。登录状态会丢，记住的账号密码不受影响。其它实例不受影响。")
+            .setPositiveButton("删除") { _, _ ->
+                Core.runtime?.storageController?.clearDataForSessionContext(me.contextId)
+                Recent.clear(me.id)
+                Core.reloadInst(me.id)
+                toast("已删除 #${me.no} 的浏览数据")
+            }
+            .setNegativeButton("取消", null).show()
+    }
+
+    private fun recentClosed() {
+        val l = Core.closed.toList()
+        if (l.isEmpty()) { toast("没有最近关闭的标签页"); return }
+        Theme.dialog(this).setTitle("最近关闭的标签页")
+            .setItems(l.map { (i, u) -> "#${Host.get(i)?.no ?: "?"}  ${u.removePrefix("https://").removePrefix("http://")}" }.toTypedArray()) { _, k ->
+                val (i, u) = l[k]
+                Core.closed.remove(l[k])
+                if (Host.get(i) != null) { Core.switchTo(i); Core.openTab(i, u) }
+            }.setNegativeButton("关闭", null).show()
+    }
+
+    private fun moreTools(t: Tab?) {
+        val web = t != null && t.url.startsWith("http")
+        val items = listOfNotNull(if (web) "复制链接" else null, if (web) "分享" else null, "诊断信息（${Diag.version(this)}）")
+        Theme.dialog(this).setTitle("更多工具").setItems(items.toTypedArray()) { _, k ->
+            when (items[k]) {
+                "复制链接" -> { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("链接", t!!.url)); toast("已复制链接") }
+                "分享" -> try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, t!!.url), "分享")) } catch (e: Exception) { toast("没有可用的应用") }
+                else -> showDiag()
+            }
+        }.show()
+    }
+
+    /** 标签页切换器（照已确认演示 05）：顶栏下面一排实例头像（点一个看它的标签页），下面两列标签页卡片。 */
+    private var tabsInst = ""
+    private fun showTabs() {
+        if (!Core.started) return
+        closeSheet()
+        tabsInst = Host.current
+        // 先截当前网页做缩略图（异步，回来了再画一次）
+        Core.curTab()?.let { t -> try { gecko.capturePixels().accept({ b -> if (b != null) { t.thumb = Bitmap.createScaledBitmap(b, maxOf(1, b.width / 3), maxOf(1, b.height / 3), true); b.recycle(); (overlay?.tag == "tabs").let { if (it) fillTabs() } } }, { _ -> }) } catch (e: Exception) { } }
+        val o = newOverlay(false)
+        o.tag = "tabs"
+        overlayFit = { fillTabs() }
+        o.setBackgroundColor(pal.bg)
+        o.isClickable = true; o.setOnClickListener(null)
+        fillTabs()
+        logi("标签页切换器已打开")
+    }
+
+    private fun fillTabs() {
+        val o = overlay ?: return
+        if (o.tag != "tabs") return
+        o.removeAllViews()
+        val inst = Host.get(tabsInst) ?: Host.cur() ?: return
+        val colm = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(inLeft, inTop, inRight, 0) }
+        // 顶栏：标签页数、新标签页、关闭全部
+        val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(4), 0) }
+        top.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(3), dp(4), dp(3)); background = rounded(pal.surf2, dp(26).toFloat())
+            addView(TabCountView(this@MainActivity).apply { count = Core.tabsOf(inst.id).size; tint = pal.on; background = rounded(pal.surf, dp(18).toFloat()) }, LinearLayout.LayoutParams(dp(47), dp(46)))
+        })
+        top.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        top.addView(ImageView(this).apply {
+            setImageDrawable(mi("add", pal.onacc)); scaleType = ImageView.ScaleType.CENTER; background = rounded(pal.acc, dp(15).toFloat()); contentDescription = "新标签页"; ripple(true)
+            setOnClickListener { closeOverlay(); if (inst.id != Host.current) Core.switchTo(inst.id); Core.openTab(inst.id) }
+        }, LinearLayout.LayoutParams(dp(47), dp(47)))
+        top.addView(btn(DotsView(this).apply { tint = pal.on }, "更多") {
+            Theme.dialog(this).setItems(arrayOf("关闭 #${inst.no} 的全部标签页")) { _, _ -> closeOverlay(); Core.stopInst(inst.id) }.show()
+        }, LinearLayout.LayoutParams(dp(44), dp(48)))
+        colm.addView(top, LinearLayout.LayoutParams(-1, dp(64)))
+        // 一排实例
+        val strip = LinearLayout(this).apply { setPadding(dp(16), dp(10), dp(16), dp(6)) }
+        for (x in Host.insts) {
+            val on = x.id == inst.id
+            strip.addView(LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), 0, dp(14), 0)
+                background = rounded(if (on) pal.tonal else Color.TRANSPARENT, dp(20).toFloat(), if (on) 0 else dp(1), pal.div)
+                addView(avatarOf(x, 32, if (on) pal.tonal else pal.bg).apply { dot = 0 })
+                addView(text("#${x.no}", 14f, if (on) pal.ontonal else pal.on2, true).apply { setPadding(dp(8), 0, dp(6), 0) })
+                val n = Core.tabsOf(x.id).size
+                if (n > 0) addView(text(n.toString(), 13f, if (on) pal.ontonal else pal.on3))
+                contentDescription = "实例 #${x.no}"
+                ripple()
+                setOnClickListener { tabsInst = x.id; fillTabs() }
+            }, LinearLayout.LayoutParams(-2, dp(40)).apply { rightMargin = dp(8) })
+        }
+        colm.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(strip) })
+        // 两列卡片
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(8), dp(14), inBottom + dp(24)) }
+        val tabs = Core.tabsOf(inst.id)
+        if (tabs.isEmpty()) grid.addView(text(if (inst.running) "#${inst.no} 还没有标签页，点右上角的 + 开一个" else "#${inst.no} 在休眠，点 + 打开它", 14f, pal.on3).apply { gravity = Gravity.CENTER; setPadding(0, dp(40), 0, 0); setSingleLine(false) })
+        var row: LinearLayout? = null
+        val cur = Core.active[inst.id]
+        for ((k, t) in tabs.withIndex()) {
+            if (k % 2 == 0) { row = LinearLayout(this); grid.addView(row, LinearLayout.LayoutParams(-1, dp(236)).apply { bottomMargin = dp(16) }) }
+            val sel = t === cur && inst.id == Host.current
+            val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = rounded(if (sel) pal.acc else pal.surf3, dp(24).toFloat()); clipToOutline = true }
+            val hd = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, 0, 0) }
+            val internal = isNtp(t) || Core.isInternal(t.url)
+            val title = if (internal) "新标签页" else t.title.ifEmpty { t.url }
+            hd.addView(TextView(this).apply {
+                text = (title.firstOrNull { it.isLetterOrDigit() } ?: '·').uppercase(); textSize = 11f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
+                background = rounded(parseColor(inst.color), dp(11).toFloat())
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            hd.addView(text(title, 15f, if (sel) pal.onacc else pal.on).apply { setPadding(dp(10), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+            hd.addView(ImageView(this).apply { setImageDrawable(mi("close", if (sel) pal.onacc else pal.on2)); scaleType = ImageView.ScaleType.CENTER; contentDescription = "关闭标签页"; ripple(true)
+                setOnClickListener { Core.closeTab(t); if (Core.tabsOf(inst.id).isEmpty() && inst.id == Host.current) closeOverlay() else fillTabs() } }, LinearLayout.LayoutParams(dp(44), dp(44)))
+            card.addView(hd, LinearLayout.LayoutParams(-1, dp(48)))
+            val th = FrameLayout(this).apply { background = rounded(if (pal.dark) Color.parseColor("#24242c") else Color.WHITE, dp(20).toFloat()); clipToOutline = true }
+            t.thumb?.let { b -> th.addView(ImageView(this).apply { setImageBitmap(b); scaleType = ImageView.ScaleType.CENTER_CROP }, FrameLayout.LayoutParams(-1, -1)) }
+                ?: th.addView(text(if (internal) "" else t.url.substringAfter("://").substringBefore('/'), 12f, pal.on3).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
+            card.addView(th, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(dp(5), 0, dp(5), dp(5)) })
+            card.contentDescription = "标签页 $title"
+            card.ripple()
+            card.setOnClickListener { closeOverlay(); if (inst.id != Host.current) Core.switchTo(inst.id); Core.selectTab(t) }
+            row!!.addView(card, LinearLayout.LayoutParams(0, -1, 1f).apply { if (k % 2 == 0) rightMargin = dp(8) else leftMargin = dp(8) })
+        }
+        if (tabs.size % 2 == 1) row?.addView(View(this), LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(8) })
+        colm.addView(ScrollView(this).apply { addView(grid); isVerticalScrollBarEnabled = false }, LinearLayout.LayoutParams(-1, 0, 1f))
+        o.addView(colm, FrameLayout.LayoutParams(-1, -1))
+    }
+
     // ---------- 诊断信息（原生窗口，不依赖内置页面：白屏、卡在启动页时也能用） ----------
 
     private fun showDiag() {
         val tv = TextView(this).apply {
-            text = "正在收集…"; textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(Color.parseColor("#202124"))
+            text = "正在收集…"; textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(pal.on)
             setTextIsSelectable(true); setPadding(dp(16), dp(8), dp(16), dp(8))
         }
         var text = ""
-        val d = android.app.AlertDialog.Builder(this)
+        val d = Theme.dialog(this)
             .setTitle("诊断信息")
             .setView(ScrollView(this).apply { addView(tv) })
             .setPositiveButton("复制", null)
@@ -428,9 +886,9 @@ class MainActivity : Activity(), CoreUi {
     private fun askDiag(why: String) {
         if (isFinishing || isDestroyed) return
         try {
-            android.app.AlertDialog.Builder(this)
+            Theme.dialog(this)
                 .setTitle("上次没有正常退出")
-                .setMessage("$why\n\n把诊断信息复制发给开发者，可以定位原因。以后也可以长按右上角头像、或点 ⋮ → 诊断信息 打开。")
+                .setMessage("$why\n\n把诊断信息复制发给开发者，可以定位原因。以后也可以长按右上角头像、或点 ⋮ → 更多工具 → 诊断信息 打开。")
                 .setPositiveButton("看诊断信息") { _, _ -> showDiag() }
                 .setNegativeButton("不用", null)
                 .show()
@@ -439,7 +897,7 @@ class MainActivity : Activity(), CoreUi {
 
     /** 用户扩展的弹窗。 */
     override fun showPopup(session: GeckoSession) {
-        val d = Dialog(this, android.R.style.Theme_Material_Light_Dialog_NoActionBar)
+        val d = Dialog(this, if (pal.dark) android.R.style.Theme_DeviceDefault_Dialog_NoActionBar else android.R.style.Theme_DeviceDefault_Light_Dialog_NoActionBar)
         val v = GeckoView(this)
         mainHandler.post { if (!session.isOpen) session.open(Core.ensureRuntime()); v.setSession(session) }
         d.setContentView(v, ViewGroup.LayoutParams(-1, -1))
@@ -449,86 +907,12 @@ class MainActivity : Activity(), CoreUi {
         d.show()
     }
 
-    // ---------- 标签页列表 ----------
-
-    private fun showTabs() {
-        val i = Host.cur() ?: return
-        val d = Dialog(this, android.R.style.Theme_Material_Light_NoActionBar)
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.parseColor("#F8F9FA")) }
-        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(10), dp(8), dp(10)) }
-        head.addView(AvatarView(this).apply { set(parseColor(i.color), i.no.toString(), null) }, LinearLayout.LayoutParams(dp(36), dp(36)))
-        head.addView(TextView(this).apply {
-            text = "#${i.no}  ${i.name.ifEmpty { "实例" }}"; textSize = 16f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.parseColor("#202124"))
-            setPadding(dp(10), 0, 0, 0); ellipsize = TextUtils.TruncateAt.END; setSingleLine()
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        head.addView(iconBtn(TextView(this).apply { text = "＋"; textSize = 24f; gravity = Gravity.CENTER; setTextColor(ink) }, "新标签页") {
-            d.dismiss(); Core.openTab(i.id)
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        col.addView(head)
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, dp(12), dp(12)) }
-        fun fill() {
-            list.removeAllViews()
-            for (t in Core.tabsOf(i.id)) {
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(10), dp(4), dp(10))
-                    background = rounded(Color.WHITE, dp(14).toFloat(), if (t === Core.active[i.id]) dp(2) else dp(1), if (t === Core.active[i.id]) parseColor(i.color) else Color.parseColor("#E0E3E7"))
-                    setOnClickListener { Core.selectTab(t); d.dismiss() }
-                }
-                val tx = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                val internal = Core.isInternal(t.url) || t.url.isEmpty()
-                tx.addView(TextView(this).apply { text = if (internal) "新标签页" else t.title.ifEmpty { t.url }; textSize = 14f; setTextColor(Color.parseColor("#202124")); setSingleLine(); ellipsize = TextUtils.TruncateAt.END })
-                if (!internal) tx.addView(TextView(this).apply { text = t.url; textSize = 12f; setTextColor(Color.parseColor("#5F6368")); setSingleLine(); ellipsize = TextUtils.TruncateAt.MIDDLE })
-                row.addView(tx, LinearLayout.LayoutParams(0, -2, 1f))
-                row.addView(iconBtn(TextView(this).apply { text = "✕"; textSize = 16f; gravity = Gravity.CENTER; setTextColor(Color.parseColor("#5F6368")) }, "关闭标签") {
-                    Core.closeTab(t); if (Core.tabsOf(i.id).isEmpty()) d.dismiss() else fill()
-                }, LinearLayout.LayoutParams(dp(40), dp(40)))
-                list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
-            }
-        }
-        fill()
-        col.addView(ScrollView(this).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        fitInsets(col)
-        d.setContentView(col)
-        d.window?.setLayout(-1, -1)
-        d.show()
-    }
-
-    // ---------- 菜单 ----------
-
-    private fun showMenu(anchor: View) {
-        val pm = PopupMenu(this, anchor)
-        val m = pm.menu
-        m.add(0, 1, 0, "新标签页")
-        m.add(0, 2, 1, "前进")
-        m.add(0, 3, 2, "刷新")
-        m.add(0, 4, 3, "实例管理")
-        m.add(0, 5, 4, "节点与出口")
-        m.add(0, 6, 5, "扩展")
-        m.add(0, 7, 6, "设置")
-        m.add(0, 8, 7, "诊断信息（${Diag.version(this)}）")
-        pm.setOnMenuItemClickListener {
-            val t = Core.curTab()
-            when (it.itemId) {
-                1 -> Core.openTab(Host.current)
-                2 -> t?.session?.goForward()
-                3 -> t?.session?.reload()
-                4 -> openSheet("instances", true)
-                5 -> openSheet("node", true)
-                6 -> openSheet("addons", true)
-                7 -> openSheet("settings", true)
-                8 -> showDiag()
-            }
-            true
-        }
-        pm.show()
-    }
-
-    /** 返回：先关弹出的页面，再网页后退，再关多余的标签，最后退到后台（不结束进程，后台实例保持）。 */
+    /** 返回：先关浮层，再交给内置页面（它按自己的返回栈退，栈空了自己收起），再网页后退，再关多余的标签，最后退到后台（不结束进程，后台实例保持）。 */
     private fun handleBack() {
+        if (overlay != null) { closeOverlay(); return }
         if (panelOn) {
-            // 从菜单点进去的页面：返回键先回菜单；其它情况收起
             val p = panel
-            if (panelRoute == "menu" && panelCur.isNotEmpty() && panelCur != "menu" && panelCur != "idle" && p != null && p.isOpen) p.loadUri(Core.pageUrl("menu")) else closeSheet()
+            if (p != null && p.isOpen) p.loadUri(Core.pageUrl("__back")) else closeSheet()
             return
         }
         val t = Core.curTab()
@@ -543,3 +927,9 @@ class MainActivity : Activity(), CoreUi {
     @Suppress("DEPRECATION")
     override fun onBackPressed() = handleBack()
 }
+
+/** 国家代码 → 中文名（头像菜单里用；和共用页面 ui.js 的表是同一份的子集，没列到的写代码）。 */
+private val CN = mapOf("US" to "美国", "CA" to "加拿大", "GB" to "英国", "DE" to "德国", "FR" to "法国", "NL" to "荷兰", "JP" to "日本", "KR" to "韩国", "SG" to "新加坡",
+    "HK" to "香港", "TW" to "台湾", "CN" to "中国", "AU" to "澳大利亚", "IN" to "印度", "RU" to "俄罗斯", "TR" to "土耳其", "VN" to "越南", "TH" to "泰国", "MY" to "马来西亚",
+    "ID" to "印度尼西亚", "PH" to "菲律宾", "BR" to "巴西", "MX" to "墨西哥", "IT" to "意大利", "ES" to "西班牙", "SE" to "瑞典", "CH" to "瑞士", "PL" to "波兰", "AE" to "阿联酋", "IL" to "以色列")
+fun cname(c: String) = if (c.isEmpty()) "未知" else CN[c.uppercase()] ?: c.uppercase()

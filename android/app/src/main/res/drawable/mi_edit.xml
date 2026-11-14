@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols 图标（和共用页面 ui.js 里的是同一份路径），着色由代码按主题设置 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M5 19h1.425L16.2 9.225 14.775 7.8 5 17.575ZM3 21v-4.25L16.2 3.575q.3-.275.663-.425.362-.15.762-.15t.775.15q.375.15.65.45L20.275 5q.3.275.437.65.138.375.138.75 0 .4-.138.763-.137.362-.437.662L7.25 21Z"/>
+</vector>

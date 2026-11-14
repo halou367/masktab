@@ -1,33 +1,10 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="ui.css"><link rel="stylesheet" href="panel.css">
+<html lang="zh-CN" class="pc"><head><meta charset="utf-8"><link rel="stylesheet" href="ui.css"><link rel="stylesheet" href="panel.css">
 <style>
-/* 面板像手机一样竖着排：宽 320，内容往下长。说明文字一律收进悬停提示。 */
-html{width:320px} body{max-height:600px;overflow-y:auto;overflow-x:hidden} ::-webkit-scrollbar{width:6px;height:6px} ::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px} ::-webkit-scrollbar-thumb:hover{background:var(--sub)}
-body.pk{overflow:hidden} body.pk #root{max-height:600px;display:flex;flex-direction:column} body.pk.tall #root{height:600px}
-button{padding:0} button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-.empty{padding:18px 6px;color:var(--sub);text-align:center}
-#toast{font-size:12.5px;padding:7px 12px;width:max-content;max-width:calc(100% - 24px);text-align:center}
-/* 实例菜单（点头像打开）：照 Chromium 个人资料菜单 */
-body.menu #root{padding:8px 0 6px}
-.hero{margin:0 8px 6px;border-radius:14px;background:color-mix(in srgb,var(--c) 14%,var(--bg));padding:16px 12px 12px;display:flex;flex-direction:column;align-items:center;gap:5px;text-align:center}
-.hero .t{font-size:14.5px;font-weight:600;margin-top:4px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hero .ex{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--sub);border-radius:7px;padding:2px 6px;font-variant-numeric:tabular-nums} .hero .ex:hover{background:color-mix(in srgb,var(--c) 14%,transparent)} .hero .ex b{font-weight:400}
-.hero .sites{display:flex;gap:5px;margin-top:4px;flex-wrap:wrap;justify-content:center} .hero .more{font-size:11px;color:var(--sub);align-self:center}
-.site{width:22px;height:22px;border-radius:7px;background:var(--bg);box-shadow:0 0 0 1px var(--line);display:inline-flex;align-items:center;justify-content:center;flex:none}
-.face{position:relative;width:28px;height:28px;border-radius:50%;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;flex:none}
-.face.big{width:64px;height:64px;font-size:27px;box-shadow:0 0 0 3px var(--bg)}
-.face .flag{position:absolute;right:-4px;bottom:-2px;width:15px;height:10.5px;box-shadow:0 0 0 1.5px var(--bg)} .face.big .flag{width:24px;height:17px;right:-6px;bottom:0;box-shadow:0 0 0 2.5px var(--bg)}
-.face .run{position:absolute;left:-2px;bottom:-1px;width:9px;height:9px;border-radius:50%;background:#c4c7c5;box-shadow:0 0 0 1.5px var(--bg)} .face .run.on{background:var(--good)} .face .run.st{background:var(--accent);animation:ind .6s ease-in-out infinite alternate}
-.grp{border-top:1px solid var(--line);padding:5px 0} .hero+.grp{border-top:0}
-.mi{display:flex;align-items:center;gap:14px;width:100%;height:34px;padding:0 16px;text-align:left} .mi:hover{background:var(--hover)} .mi>.ic{color:var(--sub)} .mi .k{color:var(--sub);font-size:11.5px;display:inline-flex}
-.lbl{display:flex;align-items:center;font-size:11.5px;color:var(--sub);padding:3px 16px 4px}
-.qs{display:flex;align-items:center;gap:6px;margin:0 10px 4px;height:30px;border-radius:99px;background:var(--card);padding:0 10px;color:var(--sub)} .qs input{border:0;background:none;padding:0;flex:1;min-width:0;font-size:12.5px;color:var(--fg)}
+/* 工具栏弹窗：Chrome 头像弹窗的样子（宽 380，最高 600），节点与出口等页面在同一个弹窗里换（决策 UI-1）。 */
+html{width:380px} body{max-height:600px;overflow-x:hidden}
+body.menu{background:var(--surf);--ring:var(--surf)} body.menu #root{padding:8px 0 10px}
+.amenu .hero{padding-top:10px} .amenu .ip{color:var(--on2)}
 .insts{max-height:236px;overflow-y:auto}
-.inst{display:flex;align-items:center;gap:11px;width:100%;min-height:44px;padding:4px 12px 4px 16px;text-align:left} .inst:hover{background:var(--hover)}
-.inst .tx{flex:1;min-width:0;display:flex;flex-direction:column} .inst .n,.inst .sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .inst .sub{font-size:11.5px}
-.inst .go{font-size:11.5px;color:var(--sub)} .inst:hover .go{color:var(--accent)}
-.stp{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--accent);white-space:nowrap} .stb{width:54px;height:4px;border-radius:4px;background:var(--line);overflow:hidden;flex:none} .stb i{display:block;height:100%;background:var(--accent);transition:width .4s}
-body.menu .empty{padding:10px}
 </style>
 </head><body><div id="root"></div><script type="module" src="popup.js"></script></body></html>

@@ -1,51 +1,93 @@
-import { api, shownExit, RESTART_WHY } from './api.js';
-import { h, icon, ibtn, flag, pill, toast, run } from './ui.js';
+import { api, shownExit } from './api.js';
+import { h, icon, ibtn, toast, run, applyTheme, appBar, sec, row, sw, choose, ask, confirmDlg } from './ui.js';
 import { instancesView } from './instances.js';
 import { syncIcons } from './sites.js';
-import { exitsView, settingsView } from './pages.js';
+import { panel } from './panel.js';
+import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView } from './pages.js';
 
-const TABS = [['instances', 'layers', '实例'], ['exits', 'list', '订阅与出口'], ['extensions', 'puzzle', '全局扩展'], ['settings', 'gear', '设置']];
+// 电脑版设置页的外壳：左边导航（照 Chrome 桌面设置页），右边一栏放共用的页面（pages.js / instances.js / panel.js，和手机同一份）。
+// 路由 = 地址 # 后面：settings（概览）、instances[/id|/import]、node、fp、exits、extensions、settings/adv|about|ntp、diag。
+const NAV = [['', [['settings', 'tune', '概览']]],
+  ['MaskTab', [['instances', 'layers', '实例'], ['node', 'globe', '节点与出口'], ['exits', 'sub', '订阅与地址库'], ['fp', 'finger', '指纹与伪装'], ['extensions', 'ext', '扩展'], ['settings/about', 'update', '组件与更新'], ['diag', 'bug', '诊断']]],
+  ['基本设置', [['settings/ntp', 'addhome', '新标签页'], ['settings/adv', 'tune', '高级']]]];
+const TITLES = Object.fromEntries(NAV.flatMap(([, l]) => l.map(([r, , t]) => [r, t])));
 let st = null;
-const tab = () => (TABS.find((t) => t[0] === location.hash.slice(1).split('/')[0]) || TABS[0])[0];
+const route = () => location.hash.slice(1) || 'settings';
+const page = () => { const r = route(); return r.startsWith('settings/') ? r : r.split('/')[0]; };
 const editing = () => document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
 const act = (fn, ok) => run(async () => { await fn(); await load(true); }, ok);
+const open = (r) => { location.hash = r; };
+const back = () => open('settings');
+const main = document.getElementById('main');
 
 async function load(force) {
-  try { st = await api('GET', '/api/state'); } catch (e) { document.getElementById('main').replaceChildren(h('div', { class: 'banner bad' }, '核心服务未连接：' + e.message)); return; }
+  try { st = await api('GET', '/api/state'); } catch (e) { main.replaceChildren(h('div', { class: 'warn bad', style: { marginTop: '24px' } }, icon('warn', 20), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
+  applyTheme(st.settings?.theme || 'dark');
   await syncIcons(st);
-  if (force || !editing()) render();
+  panel.set(st);
+  if (force || (!editing() && !document.querySelector('.scrim'))) render();
 }
 
-function instances() { return instancesView({ st, act, load, render }); }
+panel.init(main, { load: () => load(true), render: () => render(), open, back, backTitle: '返回设置' });
 
-function exits() { return exitsView({ st, act }); }
-
+// 全局扩展（电脑专有：Chrome 扩展库；手机是火狐扩展，在 app 里管）
 function extensions() {
   const masked = st.instances;
-  return [h('h2', {}, icon('puzzle'), '全局扩展'),
-    h('div', { class: 'sub', style: { marginBottom: '10px' } }, '扩展只需在这里加一次。"范围"决定哪些实例有它；"数据"选"共享"时各实例用同一份配置（在实例启动时拉取、退出时回写，不是实时的；两个实例都改过时后关闭的生效），选"独立"时各存各的。增删扩展后，运行中的实例需要重启才生效。'),
-    h('form', { class: 'item', onsubmit: (ev) => { ev.preventDefault(); const v = new FormData(ev.target).get('src').trim(); const isPath = /^([a-zA-Z]:\\|\/|\\\\)/.test(v); toast('正在获取扩展…'); act(async () => { await api('POST', '/api/extensions', isPath ? { path: v } : { store: v }); ev.target.reset(); }, '已加入全局库'); } },
-      h('input', { name: 'src', class: 'grow', required: true, placeholder: '粘贴 Chrome 应用商店网址 / 扩展 ID，或本机的 .crx、.zip、解包目录的完整路径' }), h('button', { class: 'ib on', title: '加入全局库' }, icon('plus'))),
-    st.extensions.map((x) => h('div', { class: 'item' },
-      h('label', { class: 'ck', title: '启用 / 停用' }, h('input', { type: 'checkbox', checked: x.enabled, onchange: (ev) => act(() => api('PATCH', `/api/extensions/${x.id}`, { enabled: ev.target.checked })) })),
-      h('span', { class: 'grow' }, h('div', {}, x.name, h('span', { class: 'sub' }, `  ${x.version}`)), h('div', { class: 'sub' }, x.extId, x.masterVersion ? ` · 共享数据第 ${x.masterVersion} 版，来自 #${x.masterFrom}，${new Date(x.masterAt).toLocaleString()}` : '')),
-      h('span', { class: 'sub' }, '范围'), pill([['all', '全部实例'], ['selected', '指定实例']], x.scope, (v) => act(() => api('PATCH', `/api/extensions/${x.id}`, { scope: v }))),
-      h('span', { class: 'sub' }, '数据'), pill([['shared', '共享', '各实例共用一份配置'], ['isolated', '独立', '各实例各存各的']], x.data, (v) => act(() => api('PATCH', `/api/extensions/${x.id}`, { data: v }))),
-      x.backups.length > 0 && ibtn('undo', `回滚共享数据到上一份（共 ${x.backups.length} 份备份）`, () => confirm('把共享数据回滚到上一份？') && act(() => api('POST', `/api/extensions/${x.id}/rollback`, { backup: x.backups[0] }), '已回滚，重启实例后生效')),
-      ibtn('trash', '从全局库移除', () => confirm(`移除"${x.name}"？`) && act(() => api('DELETE', `/api/extensions/${x.id}`)), 'danger'),
-      x.warn && h('div', { class: 'full mid' }, icon('warn', 14), ' ' + x.warn),
-      x.scope === 'selected' && h('div', { class: 'full' }, masked.map((i) => h('label', { class: 'ck' }, h('input', { type: 'checkbox', checked: x.instanceIds.includes(i.id), onchange: (ev) => { const ids = new Set(x.instanceIds); ev.target.checked ? ids.add(i.id) : ids.delete(i.id); act(() => api('PATCH', `/api/extensions/${x.id}`, { instanceIds: [...ids] })); } }), `#${i.no}`))))),
-    !st.extensions.length && h('div', { class: 'sub' }, '全局库里还没有扩展。')];
+  const addExt = async () => {
+    const v = await ask('添加扩展', { placeholder: 'Chrome 应用商店网址 / 扩展 ID，或 .crx、.zip、解包目录的完整路径', note: '只需在这里加一次；“范围”决定哪些实例有它。增删扩展后，运行中的实例需要重启才生效。', ok: '加入' });
+    if (!v || !v.trim()) return;
+    const t = v.trim(), isPath = /^([a-zA-Z]:\\|\/|\\\\)/.test(t);
+    toast('正在获取扩展…');
+    act(() => api('POST', '/api/extensions', isPath ? { path: t } : { store: t }), '已加入全局库');
+  };
+  const more = (x) => async () => {
+    const opts = [['scope', `范围：${x.scope === 'all' ? '全部实例' : '指定实例'}`], x.scope === 'selected' && ['pick', '选择实例'], ['data', `数据：${x.data === 'shared' ? '共享' : '独立'}`], x.backups.length > 0 && ['rollback', `回滚共享数据（共 ${x.backups.length} 份备份）`], ['del', '从全局库移除']].filter(Boolean);
+    const v = await choose(x.name, opts, null);
+    if (v === 'scope') { const s = await choose('范围', [['all', '全部实例'], ['selected', '指定实例']], x.scope); if (s) act(() => api('PATCH', `/api/extensions/${x.id}`, { scope: s })); }
+    else if (v === 'data') { const s = await choose('数据', [['shared', '共享', '各实例共用一份配置（启动时拉取、退出时回写）'], ['isolated', '独立', '各实例各存各的']], x.data); if (s) act(() => api('PATCH', `/api/extensions/${x.id}`, { data: s })); }
+    else if (v === 'pick') { const s = await choose('加一个 / 去掉一个实例', masked.map((i) => [i.id, `#${i.no} ${i.name || ''}`, x.instanceIds.includes(i.id) ? '已选（点一下去掉）' : '未选']), null); if (s) { const ids = new Set(x.instanceIds); ids.has(s) ? ids.delete(s) : ids.add(s); act(() => api('PATCH', `/api/extensions/${x.id}`, { instanceIds: [...ids] })); } }
+    else if (v === 'rollback' && await confirmDlg('把共享数据回滚到上一份？', '重启实例后生效。', '回滚')) act(() => api('POST', `/api/extensions/${x.id}/rollback`, { backup: x.backups[0] }), '已回滚，重启实例后生效');
+    else if (v === 'del' && await confirmDlg(`移除“${x.name}”？`, '', '移除', true)) act(() => api('DELETE', `/api/extensions/${x.id}`));
+  };
+  return [appBar(['扩展', h('span', { class: 'cnt' }, String(st.extensions.length))], back, h('button', { class: 'btn tonal', onclick: addExt }, icon('add', 18), '添加')),
+    st.extensions.map((x) => row({ ic: 'ext', t: [x.name, h('span', { class: 'sub' }, x.version)], s: [`${x.scope === 'all' ? '全部实例' : `${x.instanceIds.length} 个实例`} · 数据${x.data === 'shared' ? '共享' : '独立'}`, x.warn && h('span', { class: 'mid' }, ' · ' + x.warn)],
+      trail: [sw(x.enabled, x.enabled ? '停用' : '启用', (v) => act(() => api('PATCH', `/api/extensions/${x.id}`, { enabled: v }))), ibtn('more', '更多', more(x))] })),
+    !st.extensions.length && h('div', { class: 'empty' }, '全局库里还没有扩展。'),
+    h('div', { class: 'foot noic' }, '“数据”选“共享”时各实例用同一份配置（在实例启动时拉取、退出时回写，不是实时的；两个实例都改过时后关闭的生效），选“独立”时各存各的。')];
 }
 
-function settings() { return settingsView({ st, act }); }
+// 诊断信息（电脑）：按状态拼一份，不含密码；订阅地址只留域名
+async function diagText() {
+  const s = await api('GET', '/api/state');
+  const host = (u) => { try { return new URL(u).hostname; } catch { return '?'; } };
+  const lines = [`MaskTab ${s.version} · ${s.kernel.name} ${s.kernel.version} · mihomo ${s.core.version}${s.core.ok ? '' : '（未运行）'}${s.core.error ? '：' + s.core.error : ''}`,
+    `订阅：${s.subscriptions.map((x) => `${host(x.url)} ${x.kind} ${x.nodeCount} 个${x.lastError ? '（' + x.lastError + '）' : ''}`).join('；') || '无'}`,
+    ...s.instances.map((i) => { const ex = shownExit(i); return `#${i.no} ${i.proxy.state === 'on' ? '代理' : '直连'} · ${i.rt.running ? '运行中' : '未运行'} · 出口 ${ex ? ex.country + ' ' + ex.ip.replace(/\.\d+\.\d+$/, '.*.*') : '未知'} · 延迟 ${i.rt.latency}${i.rt.error ? ' · 问题：' + i.rt.error : ''}${i.checks ? ` · 一致性 ${i.checks.pass}/${i.checks.total}` : ''}`; })];
+  return lines.join('\n');
+}
 
 function render() {
-  const t = tab();
-  document.getElementById('nav').replaceChildren(...TABS.map(([id, ic, label]) => h('button', { class: 'ib' + (id === t ? ' on' : ''), title: label, 'aria-label': label, onclick: () => { location.hash = id; } }, icon(ic, 22))));
-  document.getElementById('main').replaceChildren(...({ instances, exits, extensions, settings })[t]().flat(Infinity).filter(Boolean));
-  document.title = 'MaskTab · ' + TABS.find((x) => x[0] === t)[2];
+  if (!st) return;
+  const p = page();
+  document.getElementById('nav').replaceChildren(h('div', { class: 'h' }, icon('gear', 26), '设置'),
+    ...NAV.flatMap(([g, l]) => [g && h('div', { class: 'g' }, g), ...l.map(([r, ic, t]) => h('button', { class: p === r ? 'on' : '', onclick: () => open(r) }, icon(ic, 20), t))]).filter(Boolean));
+  const c = { st, act, open, back, render, link: (u) => chrome.tabs.create({ url: u }), diag: diagText };
+  let kids;
+  if (p === 'node' || p === 'fp') {
+    if (lastPage !== p) panel.home(p === 'fp');
+    kids = panel.kids();
+  } else {
+    kids = ({ settings: () => settingsHome({ ...c, back: null }), instances: () => instancesView({ st, act, load, render }), exits: () => exitsView({ ...c, back }), extensions,
+      'settings/adv': () => settingsAdv({ ...c, back }), 'settings/about': () => settingsAbout({ ...c, back }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back }) }[p] || (() => settingsHome({ ...c, back: null })))();
+  }
+  main.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
+  if (p === 'node' || p === 'fp') panel.after();
+  if (lastPage !== p) scrollTo(0, 0);
+  lastPage = p;
+  document.title = 'MaskTab · ' + (TITLES[p] || '设置');
 }
+let lastPage = '';
 addEventListener('hashchange', () => render());
 await load(true);
+if (page() === 'node') panel.refreshSubs();
 (async () => { let seq = st?.seq || 0; for (;;) { try { const r = await api('GET', `/api/events?since=${seq}`); seq = r.seq; await load(false); } catch { await new Promise((r) => setTimeout(r, 2000)); } } })();

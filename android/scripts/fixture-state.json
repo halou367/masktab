@@ -61,6 +61,78 @@
    "acct": {
     "sites": [],
     "count": 0
+   },
+   "checks": {
+    "pass": 3,
+    "total": 4,
+    "items": [
+     {
+      "k": "proxy",
+      "t": "经代理出网",
+      "v": "直连：网站看到真实 IP",
+      "ok": false
+     },
+     {
+      "k": "exit",
+      "t": "出口可用",
+      "v": "直连",
+      "ok": false,
+      "na": true
+     },
+     {
+      "k": "tz",
+      "t": "时区与出口所在地一致",
+      "v": "系统时区",
+      "ok": false,
+      "na": true
+     },
+     {
+      "k": "lang",
+      "t": "语言与出口国家一致",
+      "v": "系统语言",
+      "ok": false,
+      "na": true
+     },
+     {
+      "k": "same",
+      "t": "两路出口在同一国家",
+      "v": "只有一路",
+      "ok": false,
+      "na": true
+     },
+     {
+      "k": "cf",
+      "t": "CF 网站可达",
+      "v": "—",
+      "ok": false,
+      "na": true
+     },
+     {
+      "k": "pure",
+      "t": "出口纯净度 ≥ 50",
+      "v": "查不到",
+      "ok": false,
+      "na": true
+     },
+     {
+      "k": "applied",
+      "t": "设置已生效",
+      "v": "无待生效的改动",
+      "ok": true
+     },
+     {
+      "k": "ua",
+      "t": "UA 与内核一致",
+      "v": "Firefox · android",
+      "ok": true
+     },
+     {
+      "k": "webrtc",
+      "t": "WebRTC 不暴露本机 IP",
+      "v": "只走代理",
+      "ok": true
+     }
+    ]
    }
   },
   {
@@ -142,6 +214,72 @@
      "chatgpt.com"
     ],
     "count": 3
+   },
+   "checks": {
+    "pass": 10,
+    "total": 10,
+    "items": [
+     {
+      "k": "proxy",
+      "t": "经代理出网",
+      "v": "代理已开",
+      "ok": true
+     },
+     {
+      "k": "exit",
+      "t": "出口可用",
+      "v": "203.0.113.11",
+      "ok": true
+     },
+     {
+      "k": "tz",
+      "t": "时区与出口所在地一致",
+      "v": "Asia/Tokyo",
+      "ok": true
+     },
+     {
+      "k": "lang",
+      "t": "语言与出口国家一致",
+      "v": "ja-JP",
+      "ok": true
+     },
+     {
+      "k": "same",
+      "t": "两路出口在同一国家",
+      "v": "JP",
+      "ok": true
+     },
+     {
+      "k": "cf",
+      "t": "CF 网站可达",
+      "v": "203.0.113.11",
+      "ok": true
+     },
+     {
+      "k": "pure",
+      "t": "出口纯净度 ≥ 50",
+      "v": "92",
+      "ok": true
+     },
+     {
+      "k": "applied",
+      "t": "设置已生效",
+      "v": "无待生效的改动",
+      "ok": true
+     },
+     {
+      "k": "ua",
+      "t": "UA 与内核一致",
+      "v": "Firefox · android",
+      "ok": true
+     },
+     {
+      "k": "webrtc",
+      "t": "WebRTC 不暴露本机 IP",
+      "v": "只走代理",
+      "ok": true
+     }
+    ]
    }
   },
   {
@@ -218,7 +356,73 @@
     "sites": [],
     "count": 0
    },
-   "name": "bob@outlook.com"
+   "name": "bob@outlook.com",
+   "checks": {
+    "pass": 10,
+    "total": 10,
+    "items": [
+     {
+      "k": "proxy",
+      "t": "经代理出网",
+      "v": "代理已开",
+      "ok": true
+     },
+     {
+      "k": "exit",
+      "t": "出口可用",
+      "v": "203.0.113.22",
+      "ok": true
+     },
+     {
+      "k": "tz",
+      "t": "时区与出口所在地一致",
+      "v": "America/Los_Angeles",
+      "ok": true
+     },
+     {
+      "k": "lang",
+      "t": "语言与出口国家一致",
+      "v": "en-US",
+      "ok": true
+     },
+     {
+      "k": "same",
+      "t": "两路出口在同一国家",
+      "v": "US",
+      "ok": true
+     },
+     {
+      "k": "cf",
+      "t": "CF 网站可达",
+      "v": "203.0.113.22",
+      "ok": true
+     },
+     {
+      "k": "pure",
+      "t": "出口纯净度 ≥ 50",
+      "v": "61",
+      "ok": true
+     },
+     {
+      "k": "applied",
+      "t": "设置已生效",
+      "v": "无待生效的改动",
+      "ok": true
+     },
+     {
+      "k": "ua",
+      "t": "UA 与内核一致",
+      "v": "Firefox · android",
+      "ok": true
+     },
+     {
+      "k": "webrtc",
+      "t": "WebRTC 不暴露本机 IP",
+      "v": "只走代理",
+      "ok": true
+     }
+    ]
+   }
   }
  ],
  "ipq": {
@@ -341,6 +545,72 @@
     "chatgpt.com"
    ],
    "count": 3
+  },
+  "checks": {
+   "pass": 10,
+   "total": 10,
+   "items": [
+    {
+     "k": "proxy",
+     "t": "经代理出网",
+     "v": "代理已开",
+     "ok": true
+    },
+    {
+     "k": "exit",
+     "t": "出口可用",
+     "v": "203.0.113.11",
+     "ok": true
+    },
+    {
+     "k": "tz",
+     "t": "时区与出口所在地一致",
+     "v": "Asia/Tokyo",
+     "ok": true
+    },
+    {
+     "k": "lang",
+     "t": "语言与出口国家一致",
+     "v": "ja-JP",
+     "ok": true
+    },
+    {
+     "k": "same",
+     "t": "两路出口在同一国家",
+     "v": "JP",
+     "ok": true
+    },
+    {
+     "k": "cf",
+     "t": "CF 网站可达",
+     "v": "203.0.113.11",
+     "ok": true
+    },
+    {
+     "k": "pure",
+     "t": "出口纯净度 ≥ 50",
+     "v": "92",
+     "ok": true
+    },
+    {
+     "k": "applied",
+     "t": "设置已生效",
+     "v": "无待生效的改动",
+     "ok": true
+    },
+    {
+     "k": "ua",
+     "t": "UA 与内核一致",
+     "v": "Firefox · android",
+     "ok": true
+    },
+    {
+     "k": "webrtc",
+     "t": "WebRTC 不暴露本机 IP",
+     "v": "只走代理",
+     "ok": true
+    }
+   ]
   }
  },
  "net": {
@@ -381,7 +651,22 @@
    "https://ipwho.is/{ip}",
    "http://ip-api.com/json/{ip}"
   ],
-  "tzSourceDefault": "exit-cf"
+  "tzSourceDefault": "exit-cf",
+  "theme": "dark",
+  "bookmarks": [
+   {
+    "title": "IPPure",
+    "url": "https://ippure.com/"
+   },
+   {
+    "title": "BrowserLeaks",
+    "url": "https://browserleaks.com/"
+   },
+   {
+    "title": "GitHub",
+    "url": "https://github.com/halou367/masktab"
+   }
+  ]
  },
  "setup": {
   "stage": "ready",

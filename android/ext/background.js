@@ -40,7 +40,7 @@ function applyState(s) {
 function connect() {
   try {
     const port = browser.runtime.connectNative(NATIVE);
-    port.onMessage.addListener((msg) => { if (msg?.t === 'state') applyState(msg); });
+    port.onMessage.addListener((msg) => { if (msg?.t === 'state') applyState(msg); else if (msg?.t === 'rec-start') recStart(String(msg.inst || '')); }); // rec-start：头像菜单（app 原生画的）里的“录入登录”
     port.onDisconnect.addListener(() => setTimeout(connect, 2000));
   } catch (e) { console.warn('connectNative 失败', e); setTimeout(connect, 2000); }
 }
@@ -205,13 +205,14 @@ browser.runtime.onMessage.addListener((m, sender) => {
   if (t.startsWith('vault:')) return vaultMsg(m, sender).then((r) => ({ ok: true, r }), (e) => ({ ok: false, error: e.message }));
   if (t === 'search') return Promise.resolve(searchUrl);
   // 实例菜单里的“录入登录”（扩展自己的页面发来）：转给这个实例正显示着的网页；没有就记下来，等下一个网页接手。
-  if (t === 'rec-start' && !sender.tab?.url?.startsWith('http')) {
-    const inst = String(m.inst || ''), tab = visTab.get(inst);
-    recWant.set(inst, Date.now());
-    if (tab == null) return Promise.resolve({ ok: true, later: true });
-    return browser.tabs.sendMessage(tab, { t: 'mt:rec-start' }).then(() => { recWant.delete(inst); return { ok: true }; }, () => ({ ok: true, later: true }));
-  }
+  if (t === 'rec-start' && !sender.tab?.url?.startsWith('http')) return recStart(String(m.inst || ''));
 });
+function recStart(inst) {
+  const tab = visTab.get(inst);
+  recWant.set(inst, Date.now());
+  if (tab == null) return Promise.resolve({ ok: true, later: true });
+  return browser.tabs.sendMessage(tab, { t: 'mt:rec-start' }).then(() => { recWant.delete(inst); return { ok: true }; }, () => ({ ok: true, later: true }));
+}
 
 // ---------- Cookie 汇总 ----------
 async function reportCookies() {

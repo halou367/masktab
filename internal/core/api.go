@@ -97,9 +97,10 @@ func body(r *http.Request, v any) error {
 
 type instView struct {
 	*model.Instance
-	RT   *Runtime  `json:"rt"`
-	Info *fpInfo   `json:"fpInfo,omitempty"`
-	Acct *acctView `json:"acct"`
+	RT     *Runtime  `json:"rt"`
+	Info   *fpInfo   `json:"fpInfo,omitempty"`
+	Acct   *acctView `json:"acct"`
+	Checks *checkSum `json:"checks,omitempty"` // 伪装一致性检查（checks.go）
 }
 
 // fpInfo 是界面上"指纹信息"展示的内容：按当前设置，下次启动时这个实例会呈现的样子。
@@ -220,6 +221,7 @@ func (a *App) State(me string) map[string]any {
 			if a.hosted() { // 手机：系统和浏览器固定（UA 必须和内核一致）
 				v.Info.Platform, v.Info.Brand, v.Info.Seed64 = a.Host.Name, "Firefox", seed64(in.FP.Seed)
 			}
+			v.Checks = a.checksLocked(in, &r, v.Info)
 		}
 		insts = append(insts, v)
 		if in.ID == me {

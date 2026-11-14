@@ -2,7 +2,7 @@
 // 卡片只显示国旗，悬停国旗才看到 IP；记住账号的站点画成小图标；长按卡片拖动排序；
 // 点卡片打开右侧抽屉看账号、密码、Cookie；“导入邮箱”批量建实例。
 import { api, shownExit, RESTART_WHY } from './api.js';
-import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname } from './ui.js';
+import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, appBar } from './ui.js';
 import { siteIcon, siteName, siteKey, uniqSites } from './sites.js';
 import { face, stepLine } from './menu.js';
 
@@ -15,16 +15,17 @@ export function instancesView(c) {
   ctx = c;
   const { st } = c;
   const [, sub] = route();
+  // 顶栏（2026-11-15 起照 Chrome 设置页，决策 UI-1）：手机是图标按钮，电脑多两个带字的按钮
   const head = c.lite
-    ? h('h2', {}, c.back, icon('layers'), '实例', h('span', { class: 'sub' }, String(st.instances.length)), h('span', { class: 'grow' }),
-      ibtn('mail', '导入邮箱：一个邮箱一个实例', () => setRoute('import')), ibtn('plus', '新建伪装实例', () => c.act(() => api('POST', '/api/instances', {}), '正在创建…'), 'on'))
-    : h('h2', {}, icon('layers'), '实例', h('span', { class: 'sub' }, `  ${st.instances.length} 个 · 长按卡片拖动排序`), h('span', { class: 'grow' }),
-      h('button', { class: 'btn', title: '批量导入邮箱，一个邮箱一个实例', onclick: () => setRoute('import') }, icon('mail', 16), '导入邮箱'),
-      h('button', { class: 'btn pri', title: '新建伪装实例（Ctrl+M）', onclick: () => c.act(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('mask', 16), '新建'));
+    ? appBar(['实例', h('span', { class: 'cnt' }, String(st.instances.length))], c.back,
+      ibtn('mail', '导入邮箱：一个邮箱一个实例', () => setRoute('import')), ibtn('add', '新建伪装实例', () => c.act(() => api('POST', '/api/instances', {}), '正在创建…'), 'on'))
+    : appBar(['实例', h('span', { class: 'cnt' }, `${st.instances.length} 个 · 长按卡片拖动排序`)], c.back,
+      h('button', { class: 'btn', title: '批量导入邮箱，一个邮箱一个实例', onclick: () => setRoute('import') }, icon('mail', 18), '导入邮箱'),
+      h('button', { class: 'btn tonal', title: '新建伪装实例（Ctrl+M）', onclick: () => c.act(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('add', 18), '新建'));
   const grid = h('div', { class: 'grid' + (c.lite ? ' lt' : '') }, st.instances.map(c.lite ? cardLite : card));
   dragSort(grid);
-  const out = [head, st.vault?.error ? h('div', { class: 'banner bad' }, icon('warn'), st.vault.error) : null, grid,
-    c.lite ? h('div', { class: 'sub tipl' }, '点卡片：账号与密码、颜色、删除。长按拖动排序。') : null, rulesBox(st)];
+  const out = [head, st.vault?.error ? h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, st.vault.error)) : null, grid,
+    c.lite ? h('div', { class: 'foot noic' }, '点卡片：账号与密码、颜色、删除。长按拖动排序。') : null, rulesBox(st)];
   const cur = sub && sub !== 'import' && st.instances.find((i) => i.id === sub);
   if (cur) out.push(drawer(cur));
   if (sub === 'import') out.push(importBox());
@@ -180,11 +181,10 @@ function drawer(i) {
   const cookies = i.acct?.cookies || [];
   return h('div', { class: 'scrim', onclick: (ev) => ev.target === ev.currentTarget && close() },
     h('aside', { class: 'drawer', style: { '--c': i.color } },
-      h('div', { class: 'dh' }, face(i, true), h('div', { class: 'grow' },
+      h('div', { class: 'dh' }, ibtn('back', '收起', close), face(i, true), h('div', { class: 'grow' },
         h('input', { class: 'name', value: i.name || '', placeholder: nameOf(i), title: '名称（回车保存）', onchange: (ev) => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { name: ev.target.value })) }),
-        h('div', { class: 'sub' }, `#${i.no} · `, i.proxy.state === 'on' ? (shownExit(i) ? `${shownExit(i).ip} · ${cname(shownExit(i).country)}` : '代理') : '直连')),
-      ibtn('chevR', '收起', close)),
-      h('div', { class: 'sw' }, ctx.st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, title: '实例颜色', onclick: () => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
+        h('div', { class: 'sub', style: { paddingLeft: '8px' } }, `#${i.no} · `, i.proxy.state === 'on' ? (shownExit(i) ? `${shownExit(i).ip} · ${cname(shownExit(i).country)}` : '代理') : '直连'))),
+      h('div', { class: 'sw2', style: { padding: '4px 16px 0' }, title: '实例颜色' }, ctx.st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, title: '实例颜色', onclick: () => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
       h('h3', {}, icon('key', 16), '账号与密码', h('span', { class: 'grow' }), ibtn('plus', '手动添加一条', () => { editing = 'new'; ctx.render(); })),
       h('div', { class: 'sub hint' }, '在这个实例里登录过的账号会自动记住；网站不让浏览器记密码也照样记。下次打开登录页自动填好，不会替你点登录。'),
       editing === 'new' && form(null),

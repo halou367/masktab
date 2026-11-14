@@ -58,12 +58,21 @@ sleep 1; shot 2-startup-done
 A shell am start -n $ACT
 sleep 8; shot 3-newtab
 
-# 3. 头像菜单
+# 3. 头像菜单、三点菜单、标签页切换器：浮在网页上的三样是原生画的（决策 UI-2），各截一张
 A shell am start -n $ACT --es mt_open menu
-sleep 6; shot 4-avatar-menu
+sleep 4; shot 4-avatar-menu
+A shell input keyevent KEYCODE_BACK; sleep 1
+A shell am start -n $ACT --es mt_open appmenu
+sleep 3; shot 4b-app-menu
+A shell input keyevent KEYCODE_BACK; sleep 1
+A shell am start -n $ACT --es mt_open tabs
+sleep 3; shot 4c-tab-switcher
 A shell input keyevent KEYCODE_BACK; sleep 1
 
-# 4. 实例管理
+# 4. 设置首页、实例管理、节点与出口、指纹与伪装（内置页面，和电脑版同一份代码）
+A shell am start -n $ACT --es mt_open settings
+sleep 6; shot 5a-settings
+A shell input keyevent KEYCODE_BACK; sleep 1
 A shell am start -n $ACT --es mt_open instances
 sleep 6; shot 5-instances
 A shell input keyevent KEYCODE_BACK; sleep 1
@@ -72,10 +81,13 @@ A shell input keyevent KEYCODE_BACK; sleep 1
 A shell am start -n $ACT --es mt_open node
 sleep 6; shot 6-node
 A shell input keyevent KEYCODE_BACK; sleep 1
+A shell am start -n $ACT --es mt_open fp
+sleep 6; shot 6b-fp
+A shell input keyevent KEYCODE_BACK; sleep 1
 
-# 5b. 真点击：点工具栏头像 → 在菜单里点每一项，页面要真的打开并就绪。用户在真机上反馈的就是这条路
-#     （账号与密码、节点与出口、指纹与时区、新建实例、导入邮箱、管理实例，点了白屏或闪退），所以每一项都点一遍。
-#     头像坐标按 pixel_6（1080x2400）量的：(904,202)；菜单里的项按无障碍标签找位置。
+# 5b. 真点击：点工具栏头像 → 在头像菜单里点每一项，页面要真的打开并就绪。用户在真机上反馈过的就是这条路
+#     （账号与密码、节点与出口、指纹与伪装、新建实例、导入邮箱、管理实例，点了白屏或闪退），所以每一项都点一遍。
+#     头像和菜单项是原生控件，按无障碍标签找位置，坐标不用修正；内置页面里的控件（网页）按 OFFMODE 修正，见 tap_desc。
 ready() { grep -c "MaskTab 页面就绪 $1" "$OUT/logcat-live.txt"; }
 count() { grep -c "$1" "$OUT/logcat-live.txt"; }
 PID0=$(A shell pidof $PKG | tr -d '\r')
@@ -87,9 +99,9 @@ tap_desc() {
   A shell cat /sdcard/mt-ui.xml > "$OUT/ui-dump.xml" 2>/dev/null || return 1
   b=$(grep -o "<node[^>]*\(content-desc\|text\)=\"$1[^\"]*\"[^>]*>" "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1)
   [ -n "$b" ] || return 1
-  # 内置页面的无障碍坐标比实际位置偏下一个状态栏的高度（页面容器按状态栏留了内边距，GeckoView 报坐标时又加了一次；
-  # 模拟器实测：WebView 报的顶边 256，实际 128）。所以纵坐标减掉 WebView 顶边的一半（OFFMODE=half）。
-  # 这个偏差是量出来的而不是算出来的，所以下面第一次点菜单时会校准：按 half 点不中就换 none（不减）。
+  # 内置页面（网页）的无障碍坐标可能比实际位置偏下一个状态栏的高度（GeckoView 报坐标时把外面留的边又加了一次；
+  # 旧版模拟器实测：WebView 报的顶边 256，实际 128）。所以纵坐标减掉 WebView 顶边的一半（OFFMODE=half）。
+  # 这个偏差是量出来的而不是算出来的，所以下面第一次点页面里的控件时会校准：按 half 点不中就换 none（不减）。
   local wt off
   wt=$(grep -o '<node[^>]*class="android.webkit.WebView"[^>]*>' "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]' | grep -o '[0-9]*\]$' | tr -d ']')
   if [ "$OFFMODE" = half ]; then off=$(( ${wt:-0} / 2 )); else off=0; fi
@@ -98,54 +110,83 @@ tap_desc() {
   echo "点“$UI_LABEL”：($(( ($1 + $3) / 2 )),$(( ($2 + $4) / 2 - off )))（WebView 顶边 ${wt:-?}，$OFFMODE）"
   A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 - off ))
 }
-# 收起内置页面（测试参数 mt_open=close；不用返回键：页面没开着时返回键会把应用退到后台）
+# 原生控件（工具栏、头像菜单、三点菜单）：坐标就是实际位置
+tap_native() { local s=$OFFMODE r; OFFMODE=none; tap_desc "$1"; r=$?; OFFMODE=$s; return $r; }
+# 收起内置页面和浮层（测试参数 mt_open=close；不用返回键：什么都没开着时返回键会把应用退到后台）
 closepanel() { A shell am start -n $ACT --es mt_open close > /dev/null; sleep 2; }
-# 点头像打开菜单，等菜单就绪；返回 1 = 菜单没出来
+# 点头像打开头像菜单，等它打开；返回 1 = 菜单没出来。头像的无障碍标签是“实例 #编号 名称”
+AV=""
 openmenu() {
   local n0 k
   closepanel
-  n0=$(ready menu)
-  A shell input tap 904 202
-  for k in 1 2 3 4 5 6; do sleep 1; [ "$(ready menu)" -gt "$n0" ] && return 0; done
+  n0=$(count "头像菜单已打开")
+  if [ -n "$AV" ]; then A shell input tap $AV; else tap_native "实例 #" || return 1; fi
+  for k in 1 2 3 4 5 6; do sleep 1; [ "$(count "头像菜单已打开")" -gt "$n0" ] && return 0; done
   return 1
 }
-# 从菜单点一项，等对应页面就绪。参数：名字 菜单项文字 就绪标记（页面就绪 后面的路由）
+# 从头像菜单点一项，等对应页面就绪。参数：名字 菜单项文字 就绪标记（页面就绪 后面的路由）
 tapitem() {
   local n0 k
-  if ! openmenu; then echo "失败：点头像后菜单没有就绪（$1）"; shot "t-$1-nomenu"; fail=1; return 1; fi
+  if ! openmenu; then echo "失败：点头像后菜单没有打开（$1）"; shot "t-$1-nomenu"; fail=1; return 1; fi
   sleep 1; n0=$(ready "$3")
-  if ! tap_desc "$2"; then echo "失败：菜单里没找到“$2”"; shot "t-$1-noitem"; fail=1; return 1; fi
+  if ! tap_native "$2"; then echo "失败：菜单里没找到“$2”"; shot "t-$1-noitem"; fail=1; return 1; fi
   for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready "$3")" -gt "$n0" ] && break; done
   sleep 2; shot "t-$1"
   [ "$(ready "$3")" -gt "$n0" ]
 }
 tapflow() {
-  if tapitem "$@"; then echo "通过：从菜单点开 $1"; else echo "失败：从菜单点开 $1 后页面没有就绪"; fail=1; fi
+  if tapitem "$@"; then echo "通过：从头像菜单点开 $1"; else echo "失败：从头像菜单点开 $1 后页面没有就绪"; fail=1; fi
 }
-# 校准：先按 half 点“节点与出口”，不中就换 none 再点一次
-if openmenu; then sleep 1; shot t-0menu; else echo "失败：点头像后菜单没有就绪"; shot t-0menu; fail=1; fi
-if tapitem node "节点与出口" node; then echo "通过：从菜单点开 node"
-else
-  OFFMODE=none; echo "按 half 没点中，换 none 再试"
-  if tapitem node "节点与出口" node; then echo "通过：从菜单点开 node（坐标不用修正）"; fail=0; else echo "失败：从菜单点开 node 后页面没有就绪"; fail=1; fi
-fi
-tapflow fp "指纹与时区" fp
+if openmenu; then sleep 1; shot t-0menu; echo "通过：点工具栏头像打开头像菜单"
+  # 记下头像的位置，后面反复开关时直接点
+  AV=$(grep -o '<node[^>]*content-desc="实例 #[^"]*"[^>]*>' "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | grep -o '[0-9]\+' | tr '\n' ' ' | awk '{print int(($1+$3)/2), int(($2+$4)/2)}')
+  echo "头像位置：$AV"
+else echo "失败：点头像后菜单没有打开"; shot t-0menu; fail=1; fi
+tapflow node "节点与出口" node
+tapflow fp "指纹与伪装" fp
 tapflow acct "账号与密码" "instances/"
-tapflow manage "管理" "instances 有状态"   # 菜单底部那排的“管理”（无障碍标签是“管理实例”）
+tapflow manage "管理实例" "instances 有状态"
 # 新建实例：菜单收起、切到新实例、开出它的新标签页
 if openmenu; then
   n0=$(count "新建实例 #"); t0=$(count "MaskTab 新标签页就绪")
-  if tap_desc "新建"; then   # 头像那排最后的“新建”（无障碍标签是“新建伪装实例”）
+  if tap_native "新建实例"; then
     for k in 1 2 3 4 5 6 7 8 9 10; do sleep 1; [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ] && break; done
     sleep 2; shot t-newinst
-    if [ "$(count "新建实例 #")" -gt "$n0" ] && [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ]; then echo "通过：从菜单新建实例（建好并打开了它的新标签页）"; else echo "失败：从菜单新建实例（新建 $n0 -> $(count "新建实例 #")，新标签页 $t0 -> $(count "MaskTab 新标签页就绪")）"; fail=1; fi
-  else echo "失败：菜单里没找到“新建伪装实例”"; fail=1; fi
-else echo "失败：点头像后菜单没有就绪（新建实例）"; fail=1; fi
-# 在菜单里切回实例 #1（点列表里的另一个实例）不单独测；用测试参数切回去（实例 id 是核心服务编的，这里按编号 #1 找），后面的检查都按实例 #1
+    if [ "$(count "新建实例 #")" -gt "$n0" ] && [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ]; then echo "通过：从头像菜单新建实例（建好并打开了它的新标签页）"; else echo "失败：从头像菜单新建实例（新建 $n0 -> $(count "新建实例 #")，新标签页 $t0 -> $(count "MaskTab 新标签页就绪")）"; fail=1; fi
+  else echo "失败：头像菜单里没找到“新建实例”"; fail=1; fi
+else echo "失败：点头像后菜单没有打开（新建实例）"; fail=1; fi
+# 切回实例 #1（实例 id 是核心服务编的，这里按编号 #1 找），后面的检查都按实例 #1；切换后头像的位置不变
 A shell am start -n $ACT --es mt_inst '#1' > /dev/null; sleep 3
+# 三点菜单：点工具栏的“更多选项”打开，点“设置”进设置首页
+n0=$(count "三点菜单已打开"); s0=$(ready settings)
+closepanel
+if tap_native "更多选项"; then
+  for k in 1 2 3 4 5; do sleep 1; [ "$(count "三点菜单已打开")" -gt "$n0" ] && break; done
+  shot t-appmenu
+  if tap_native "设置"; then for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready settings)" -gt "$s0" ] && break; done; fi
+  shot t-appmenu-settings
+  if [ "$(count "三点菜单已打开")" -gt "$n0" ] && [ "$(ready settings)" -gt "$s0" ]; then echo "通过：三点菜单 → 设置"; else echo "失败：三点菜单 → 设置（菜单 $n0 -> $(count "三点菜单已打开")，设置页 $s0 -> $(ready settings)）"; fail=1; fi
+else echo "失败：工具栏上没找到“更多选项”"; fail=1; fi
+# 页面里的控件（网页）：在设置首页点“节点与出口”这一行，校准坐标修正（按 half 点不中就换 none）
+n0=$(ready node)
+tap_desc "节点与出口"
+for k in 1 2 3 4 5 6; do sleep 1; [ "$(ready node)" -gt "$n0" ] && break; done
+if [ "$(ready node)" -gt "$n0" ]; then echo "通过：设置首页 → 节点与出口（页面里点击，坐标修正 $OFFMODE）"
+else
+  OFFMODE=none; A shell am start -n $ACT --es mt_open settings > /dev/null; sleep 3
+  tap_desc "节点与出口"
+  for k in 1 2 3 4 5 6; do sleep 1; [ "$(ready node)" -gt "$n0" ] && break; done
+  if [ "$(ready node)" -gt "$n0" ]; then echo "通过：设置首页 → 节点与出口（页面里点击，坐标不用修正）"; else echo "失败：设置首页里点“节点与出口”没有反应"; shot t-settings-tap; fail=1; fi
+fi
+shot t-settings-node
+# 系统返回键：节点页 → 设置首页（页面自己的返回栈）→ 收起
+n0=$(ready settings)
+A shell input keyevent KEYCODE_BACK; sleep 3
+if [ "$(ready settings)" -gt "$n0" ]; then echo "通过：返回键从节点页回到设置首页"; else echo "失败：返回键没有回到设置首页"; shot t-back; fail=1; fi
+closepanel
 # 反复开关：头像 → 菜单 → 某一页 → 关，连做 12 轮，不停顿等待。应用不能死、内置页面不能崩
 for k in $(seq 1 12); do
-  A shell input tap 904 202; sleep 0.7
+  if [ -n "$AV" ]; then A shell input tap $AV; fi; sleep 0.7
   case $((k % 3)) in 0) r=node;; 1) r=fp;; 2) r=instances;; esac
   A shell am start -n $ACT --es mt_open $r > /dev/null; sleep 0.7
   A shell am start -n $ACT --es mt_open close > /dev/null; sleep 0.4
@@ -162,24 +203,24 @@ for k in 1 2 3 4 5 6 7 8; do sleep 1; A logcat -d -s MaskTab:I | grep -q "诊断
 sleep 1; shot t-diag
 if A logcat -d -s MaskTab:I | grep -q "诊断信息已收集"; then echo "通过：诊断信息窗口"; else echo "失败：诊断信息没有收集出来"; fail=1; fi
 A shell input keyevent KEYCODE_BACK; sleep 2
-# 导入邮箱：这一页以前让 GPU 进程卡死、整个模拟器不响应（弹框是带圆角的可滚动容器，见 app.css 里的说明）。
+# 导入邮箱：这一页以前让 GPU 进程卡死、整个模拟器不响应（弹框是带圆角的可滚动容器）。
 # 打开后多等一会儿再截图：截得出来、GPU 进程没被杀，才算过。
 tapflow import "导入邮箱" "instances/import"
 sleep 8; if shot t-import-later; then echo "通过：导入邮箱页开着时系统照常响应"; fi
 closepanel
-# 扩展页（以前没开过）
+# 扩展页
 n0=$(ready addons)
 A shell am start -n $ACT --es mt_open addons > /dev/null; sleep 6; shot t-addons
 if [ "$(ready addons)" -gt "$n0" ]; then echo "通过：扩展页"; else echo "失败：扩展页没有就绪"; fail=1; fi
 closepanel
-# 在页面里打字：点节点面板的订阅地址框（还没有订阅时它直接摆在“订阅”那一行下面），弹出键盘、输入、收起键盘。
-# 位置先按无障碍标签“订阅地址”找；找不到再按 pixel_6 上量出来的坐标点（preview-pages 的版面 × 2.625 + 状态栏）。
-# 键盘弹出会让 GeckoView 改大小，是另一条容易出问题的路。
+# 在页面里打字：节点页（还没有订阅）点“添加订阅”，弹出输入框，点它弹出键盘、输入、收起。
+# 键盘弹出会让 GeckoView 改大小（insets 里的 ime），是另一条容易出问题的路。
 A shell am start -n $ACT --es mt_open node > /dev/null; sleep 5
-tap_desc "订阅地址" || A shell input tap 457 796; sleep 4; shot t-type-1focus
+if tap_desc "添加订阅"; then sleep 2; tap_desc "订阅地址" || true; fi; sleep 3; shot t-type-1focus
 A shell input text "https://sub.example.invalid/x"; sleep 3; shot t-type-2typed
 if grep -q "InsetsController: show(ime" "$OUT/logcat-live.txt" || grep -q "ImeTracker.*onShown\|ImeTracker.*onRequestShow" "$OUT/logcat-live.txt"; then echo "通过：点输入框弹出了键盘"; else echo "跳过：没看到键盘弹出的日志（坐标可能没点中输入框）"; fi
-A shell input keyevent KEYCODE_BACK; sleep 3   # 收起键盘
+A shell input keyevent KEYCODE_BACK; sleep 2   # 收起键盘
+A shell input keyevent KEYCODE_BACK; sleep 2   # 关掉输入框
 n0=$(ready fp)
 A shell am start -n $ACT --es mt_open fp > /dev/null
 for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready fp)" -gt "$n0" ] && break; done
@@ -199,6 +240,14 @@ closepanel
 # 6. 打开一个网页（外部链接进当前实例）
 A shell am start -a android.intent.action.VIEW -d https://example.com -n $ACT
 sleep 12; shot 7-web
+# 6b. 下拉刷新：页面在最顶上，从网页上部往下拉，松手后刷新（logcat 里有“下拉刷新”，页面重新加载）
+n0=$(count "下拉刷新")
+A shell input swipe 540 700 540 1700 900; sleep 0.3; shot 7b-pull-refresh; sleep 4
+if [ "$(count "下拉刷新")" -gt "$n0" ]; then echo "通过：网页顶部下拉刷新"; else echo "失败：网页顶部往下拉没有触发刷新"; fail=1; fi
+# 往上滑（滚动网页）不能触发刷新
+n0=$(count "下拉刷新")
+A shell input swipe 540 1700 540 700 600; sleep 2
+if [ "$(count "下拉刷新")" -eq "$n0" ]; then echo "通过：往上滑不会触发刷新"; else echo "失败：往上滑也触发了刷新"; fail=1; fi
 
 # 检查（第一轮）
 if A shell pidof $PKG > /dev/null; then echo "进程在运行"; else echo "进程不在了"; fail=1; fi
@@ -212,10 +261,12 @@ A shell "run-as $PKG cat files/core/core.out" > "$OUT/core-out-1.txt" 2>&1 || tr
 need "启动步骤 3 启动核心服务：2" "核心服务和 mihomo 启动"
 need "MaskTab 后台就绪" "扩展后台拿到 app 状态"
 need "MaskTab 新标签页就绪" "新标签页"
-need "MaskTab 页面就绪 menu 有状态" "头像菜单"
+need "头像菜单已打开" "头像菜单（原生）"
+need "三点菜单已打开" "三点菜单（原生）"
+need "标签页切换器已打开" "标签页切换器（原生）"
 need "MaskTab 页面就绪 instances 有状态" "实例管理页"
 need "MaskTab 页面就绪 node 有状态" "节点与出口页"
-need "MaskTab 页面就绪 fp 有状态" "指纹与时区页"
+need "MaskTab 页面就绪 fp 有状态" "指纹与伪装页"
 need "MaskTab 页面就绪 settings 有状态" "设置页"
 if grep -q "MaskTab 页面报错\|页面报错：" "$OUT/logcat.txt"; then echo "失败：内置页面有报错："; grep "MaskTab 页面报错\|页面报错：" "$OUT/logcat.txt" | cut -c1-240 | head -5; fail=1; fi
 need "MaskTab 标签页登记" "标签页登记到实例"
@@ -311,7 +362,8 @@ Y
   A shell am start -a android.intent.action.VIEW -d https://example.com -n $ACT
   sleep 12; shot 10-bad-node-blocked
   A shell am start -n $ACT --es mt_open node; sleep 6; shot 11-proxy-node-page
-  # 节点面板里点“测延迟”（闪电）：请求转给核心服务，后台测，页面不能卡住。按钮位置靠无障碍信息找（找不到就跳过这一项，不算失败）
+  # 节点页的“订阅”那一行点进订阅线路，那里有“测延迟”（闪电）：请求转给核心服务，后台测，页面不能卡住。按钮位置靠无障碍信息找（找不到就跳过这一项，不算失败）
+  tap_desc "订阅线路" || true; sleep 3
   if tap_desc "测延迟"; then
     sleep 8; shot 12-proxy-node-tested
     if A logcat -d -s MaskTab:I | grep -q "接口 POST /api/subscriptions/.*/test → 200"; then echo "通过：点“测延迟”后请求到了核心服务"; else echo "失败：点了“测延迟”但核心服务没收到（坐标可能没点中，见截图 12）"; fail=1; fi
@@ -332,9 +384,9 @@ Y
   fpcheck p4 "tz=Europe/Berlin\\&off=-60\\&lang=de-DE" 14-fpcheck-berlin
   fpcheck p3 "tz=Asia/Tokyo\\&off=-540\\&lang=ja-JP\\&again=1" 15-fpcheck-tokyo-again
   A shell am start -n $ACT --es mt_inst p1; sleep 3
-  # 订阅与出口、设置两页（和电脑版同一份 pages.js）在有订阅时也要画得出来
+  # 订阅与地址库、设置两页（和电脑版同一份 pages.js）在有订阅时也要画得出来
   n0=$(ready exits); A shell am start -n $ACT --es mt_open exits > /dev/null; sleep 6; shot 16-exits
-  if [ "$(ready exits)" -gt "$n0" ]; then echo "通过：订阅与出口页"; else echo "失败：订阅与出口页没有就绪"; fail=1; fi
+  if [ "$(ready exits)" -gt "$n0" ]; then echo "通过：订阅与地址库页"; else echo "失败：订阅与地址库页没有就绪"; fail=1; fi
   A shell am start -n $ACT --es mt_open settings > /dev/null; sleep 5; shot 17-settings
   closepanel
   A logcat -d > "$OUT/logcat-proxy.txt"

@@ -8,14 +8,14 @@
 | 部分 | 做法 |
 |---|---|
 | 内核 | GeckoView 160（Mozilla Maven，`org.mozilla.geckoview:geckoview:160.0.20261104181552`，固定版本），单 Activity，Kotlin，没有 Compose / AndroidX UI 依赖 |
-| 界面 | 顶部地址栏；右侧依次是标签数、**头像（当前实例的彩色编号圆点 + 出口国旗）**、菜单。点头像弹出实例菜单 |
+| 界面 | 照安卓 Chrome 深色风格（decisions UI-1，附浅色主题）。顶部一条工具栏：主页、地址栏（新标签页上没有）、**头像（实例色编号圆 + 出口国旗）**、标签页数、三点菜单；底部没有工具栏。头像菜单（底部弹出）、三点菜单、标签页切换器是原生画的（UI-2）；全面屏、状态栏 / 导航栏跟着页面变色（UI-4）；网页顶部下拉刷新（UI-5） |
 | 多实例 | 每个实例 = `GeckoSessionSettings.contextId("mt-<id>")` 的容器，Cookie / 存储 / 缓存隔离；每实例一组标签页，切实例只换显示的那组，后台实例的会话一直活着 |
 | 核心服务 | **和电脑版是同一个程序**（`cmd/masktab`，随包 `jniLibs/<abi>/libmasktab.so`，app 把它当子进程以 `-host android` 启动，决策 D-4）：实例、订阅（含 edgetunnel）、出口 / 入口选线、测速、密码库都是它管 |
 | 代理 | mihomo 安卓二进制随包（`jniLibs/<abi>/libmihomo.so`），由核心服务生成配置并启动；每个实例一个本地 mixed 入站（端口 21000 + 编号）；内置扩展用 `proxy.onRequest` 按标签所属实例分流 |
 | 指纹 | 每实例种子；UA 是安卓火狐（只换 Android 版本号）；内置扩展在 document_start 改页面：画布 / 音频噪声、核数、屏幕、语言、时区；Gecko 指纹保护打开 |
 | 密码库 | 核心服务的密码库（和电脑版同一份代码）；密钥由 Android Keystore 包着，启动时交给核心服务；按实例隔离；复用桌面 `autofill.js` |
 | 实例管理 | 复用桌面 `instances.js` 的 `lite` 模式（一行一张卡片、站点图标、长按拖动排序、账号与 Cookie 抽屉、导入邮箱） |
-| 界面 | 节点面板、订阅与出口、设置、实例管理、实例菜单的内容都和电脑版共用同一份文件（`panel.js` `pages.js` `instances.js` `menu.js`），手机只有外壳（底部标签、返回、触屏尺寸）是自己的 |
+| 界面 | 新标签页、设置各页、节点与出口、指纹与伪装、订阅与地址库、实例管理、诊断的内容都和电脑版共用同一份文件（`ntp.js` `pages.js` `panel.js` `instances.js`，样式 `ui.css`），手机只有外壳（工具栏、浮层、返回键、系统栏）是自己的 |
 | 启动 | 原生启动页：准备内核 → 加载内置扩展 → 启动核心服务 → 加载订阅 → 网络检测，每步动画与结果 |
 | 扩展 | 从 addons.mozilla.org 安装（安装前确认权限），“扩展”页里启用 / 停用 / 移除 / 打开弹窗 / 设置页 |
 | 不做 | 双端同步（第二版）、下载文件 |
@@ -44,8 +44,8 @@ android/
     fixture-state.json    上面用的状态：从真的核心服务（宿主模式）抓的，只改了数值
 ```
 
-复用桌面伴随扩展的文件（构建时拷贝，不复制进仓库）：`ui.js`、`ui.css`、`sites.js`、`menu.js`、`instances.js`、`autofill.js`、`common.js`、`vaultmsg.js`、`panel.js`、`panel.css`、`pages.js`、`assets/flags`。
-`menu.js` 为此加了两行：手机上头像写编号、不显示键盘快捷键。改这些文件时，桌面和安卓两边都要看。
+复用桌面伴随扩展的文件（构建时拷贝，不复制进仓库）：`ui.js`、`ui.css`、`sites.js`、`menu.js`、`instances.js`、`autofill.js`、`common.js`、`vaultmsg.js`、`panel.js`、`panel.css`、`pages.js`、`ntp.js`、`assets/flags`。
+`menu.js` 在手机上只用于兜底的 `menu` 路由（平时头像菜单是原生的）：手机上头像写编号、不显示键盘快捷键。改这些文件时，桌面和安卓两边都要看。
 
 本地构建：装 JDK 21、安卓 SDK（platforms;android-37.2）、NDK、Go、Gradle 9.9.1，然后
 `bash android/scripts/fetch-mihomo.sh && bash android/scripts/build-core.sh && cd android && gradle assembleDebug`。

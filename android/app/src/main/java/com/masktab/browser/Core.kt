@@ -27,6 +27,52 @@ class Tab(val inst: String, val session: GeckoSession) {
     var progress = 100
     var canBack = false
     var canFwd = false
+    /** 页面滚动位置（GeckoSession 的滚动回调给的；下拉刷新只在 0 时触发）。 */
+    var scrollY = 0
+    /** 标签页切换器里的缩略图（切换器打开时截的，只留在内存里）。 */
+    var thumb: android.graphics.Bitmap? = null
+}
+
+/**
+ * 最近访问（新标签页“最近访问”、三点菜单“历史记录”）：浏览器外壳的事，按实例分开记，每个实例最多 60 条，存 files/recent.json。
+ * 电脑版用内核自己的历史记录（每个实例是独立的用户目录，天然分开）。
+ */
+object Recent {
+    class Visit(val url: String, var title: String, var at: Long)
+    private val map = HashMap<String, ArrayDeque<Visit>>()
+    private val file get() = File(Core.app.filesDir, "recent.json")
+    private var loaded = false
+    private fun load() {
+        if (loaded) return
+        loaded = true
+        try {
+            val j = JSONObject(file.readText())
+            for (k in j.keys()) map[k] = ArrayDeque((j.optJSONArray(k)?.objects() ?: emptyList()).map { Visit(it.str("url"), it.str("title"), it.optLong("at")) })
+        } catch (e: Exception) { }
+    }
+    private fun save() {
+        val j = JSONObject()
+        synchronized(map) { for ((k, l) in map) j.put(k, JSONArray(l.map { jsonOf("url" to it.url, "title" to it.title, "at" to it.at) })) }
+        bg { writeAtomic(file, j.toString().toByteArray()) }
+    }
+    fun add(inst: String, url: String, title: String) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+        load()
+        synchronized(map) {
+            val l = map.getOrPut(inst) { ArrayDeque() }
+            l.removeAll { it.url == url }
+            l.addFirst(Visit(url, title, System.currentTimeMillis()))
+            while (l.size > 60) l.removeLast()
+        }
+        save()
+    }
+    fun title(inst: String, url: String, title: String) {
+        load()
+        synchronized(map) { map[inst]?.firstOrNull { it.url == url }?.let { if (title.isNotEmpty() && it.title != title) it.title = title else return } ?: return }
+        save()
+    }
+    fun list(inst: String, max: Int): JSONArray { load(); return synchronized(map) { JSONArray((map[inst] ?: ArrayDeque()).take(max).map { jsonOf("url" to it.url, "title" to it.title, "at" to it.at) }) } }
+    fun clear(inst: String) { load(); synchronized(map) { map.remove(inst) }; save() }
 }
 
 /** Activity 实现它来刷新界面。 */
@@ -37,6 +83,10 @@ interface CoreUi {
     fun closeSheet()
     fun showPopup(session: GeckoSession)
     fun toast(msg: String)
+    /** 页面（内置页面 / 新标签页）报上来：盖了一层遮罩（dim）、底部有表单（sheet），状态栏和导航栏跟着变色（决策 UI-4）。 */
+    fun pageBars(src: String, dim: Boolean, sheet: Boolean) {}
+    /** 一个标签页加载完了（下拉刷新收起指示器用）。 */
+    fun onPageStopped(t: Tab) {}
     val prompts: Prompts?
 }
 
@@ -146,6 +196,7 @@ object Core {
         s.progressDelegate = Progress(t)
         s.contentDelegate = Content(t)
         s.promptDelegate = PromptBridge
+        s.scrollDelegate = Scroll(t)
         s.open(ensureRuntime())
         ext?.let { s.webExtensionController.setMessageDelegate(it, sessionMsg(t.inst), NATIVE) }
     }
@@ -172,6 +223,7 @@ object Core {
         t.session.progressDelegate = Progress(t)
         t.session.contentDelegate = Content(t)
         t.session.promptDelegate = PromptBridge
+        t.session.scrollDelegate = Scroll(t)
         ext?.let { t.session.webExtensionController.setMessageDelegate(it, sessionMsg(t.inst), NATIVE) }
         tabsOf(i.id).add(t)
         active[i.id] = t
@@ -179,7 +231,11 @@ object Core {
         return t.session
     }
 
+    /** 最近关闭的标签页（三点菜单 → 最近打开的标签页），最多 10 个，只在内存里。 */
+    val closed = ArrayDeque<Pair<String, String>>() // 实例 id → 网址
+
     fun closeTab(t: Tab) {
+        if (t.url.startsWith("http")) { closed.addFirst(t.inst to t.url); while (closed.size > 10) closed.removeLast() }
         val l = tabsOf(t.inst)
         val k = l.indexOf(t)
         l.remove(t)
@@ -332,6 +388,7 @@ object Core {
                 val r = CoreProc.json("POST", "/api/instances", JSONObject())
                 val id = r.str("id")
                 Host.refresh()
+                logi("新建实例 #${Host.get(id)?.no ?: "?"}")
                 ui { Host.saveCurrent(id); pendingOpen = id; pendingAt = System.currentTimeMillis(); Host.get(id)?.let { if (it.running) switchTo(id) } }
             } catch (e: Exception) { logw("新建实例失败：${e.message}"); ui { ui?.toast("新建实例失败：${e.message}") } } finally { creating = false }
         }
@@ -460,12 +517,19 @@ object Core {
 
     private class Progress(val t: Tab) : GeckoSession.ProgressDelegate {
         override fun onProgressChange(session: GeckoSession, progress: Int) { t.progress = progress; ui?.onTabUpdated(t) }
-        override fun onPageStart(session: GeckoSession, url: String) { t.progress = 5; ui?.onTabUpdated(t) }
-        override fun onPageStop(session: GeckoSession, success: Boolean) { t.progress = 100; ui?.onTabUpdated(t) }
+        override fun onPageStart(session: GeckoSession, url: String) { t.progress = 5; t.scrollY = 0; ui?.onTabUpdated(t) }
+        override fun onPageStop(session: GeckoSession, success: Boolean) {
+            t.progress = 100; ui?.onTabUpdated(t); ui?.onPageStopped(t)
+            if (success) Recent.add(t.inst, t.url, t.title)
+        }
+    }
+
+    private class Scroll(val t: Tab) : GeckoSession.ScrollDelegate {
+        override fun onScrollChanged(session: GeckoSession, scrollX: Int, scrollY: Int) { t.scrollY = scrollY }
     }
 
     private class Content(val t: Tab) : GeckoSession.ContentDelegate {
-        override fun onTitleChange(session: GeckoSession, title: String?) { t.title = title ?: ""; ui?.onTabUpdated(t) }
+        override fun onTitleChange(session: GeckoSession, title: String?) { t.title = title ?: ""; ui?.onTabUpdated(t); Recent.title(t.inst, t.url, t.title) }
         override fun onCloseRequest(session: GeckoSession) { closeTab(t) }
         override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
             val type = response.headers.entries.firstOrNull { it.key.equals("content-type", true) }?.value ?: ""

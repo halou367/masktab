@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { h, icon, run } from './ui.js';
+import { h, icon, run, applyTheme } from './ui.js';
 import { menuView } from './menu.js';
 import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
@@ -19,7 +19,8 @@ const record = () => run(async () => {
 });
 
 async function load() {
-  try { st = await api('GET', '/api/state'); } catch (e) { root.replaceChildren(h('div', { class: 'banner bad', style: { marginTop: '8px' } }, icon('warn'), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
+  try { st = await api('GET', '/api/state'); } catch (e) { root.replaceChildren(h('div', { class: 'warn bad', style: { marginTop: '8px' } }, icon('warn', 20), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
+  applyTheme(st.settings?.theme || 'dark');
   await syncIcons(st);
   panel.set(st);
   render();
@@ -32,17 +33,14 @@ function render() {
   const toPanel = (fp) => () => { menu = false; panel.home(fp); render(); };
   const nav = { node: toPanel(false), fp: toPanel(true), open, render, record };
   const kids = menu && me ? menuView(st, nav) : panel.kids();
-  const v = menu ? '' : panel.view;
-  document.body.classList.toggle('pk', !!v);
   document.body.classList.toggle('menu', menu);
-  document.body.classList.toggle('tall', v === 'entry' || v === 'exit'); // 地址列表占满面板；国家列表有几行占几行
-  root.className = menu ? '' : 'np' + (v ? ' pk' : '');
+  root.className = menu ? '' : 'np';
   root.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
   if (!menu) panel.after();
 }
-panel.init(root, { load, render, open, back: () => { menu = true; render(); }, backTitle: '返回实例菜单', keys: true });
+panel.init(root, { load, render, open, back: () => { menu = true; render(); scrollTo(0, 0); }, backTitle: '返回实例菜单', keys: true });
 
-const idle = () => !document.querySelector('input:focus, select:focus, textarea:focus');
+const idle = () => !document.querySelector('input:focus, select:focus, textarea:focus, .scrim');
 async function poll() {
   let seq = st?.seq || 0;
   for (;;) {

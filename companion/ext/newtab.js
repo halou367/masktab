@@ -1,22 +1,16 @@
-import { api, config, shownExit } from './api.js';
+// 电脑版新标签页的外壳：页面本身在 ntp.js（和手机同一份，决策 D-4）。这里只给电脑才有的东西：
+// 最近访问取内核自己的历史记录（每个实例是独立的用户目录，历史天然按实例分开）；“节点与出口”在设置页里打开。
+import { api, config } from './api.js';
+import { h } from './ui.js';
+import { renderNtp } from './ntp.js';
 try { chrome.runtime.sendMessage('wake').catch(() => {}); } catch { /* 忽略 */ } // 新标签页打开时叫醒后台
-const c = await config();
-document.getElementById('dot').style.background = c.color;
-document.getElementById('no').textContent = '#' + c.no;
-document.title = `#${c.no} 新标签页`;
-document.getElementById('f').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const q = document.getElementById('q').value.trim();
-  if (!q) return;
-  const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(q) || (/^[^\s]+\.[^\s]{2,}$/.test(q) && !q.includes(' '));
-  location.href = isUrl ? (q.includes('://') ? q : 'https://' + q) : (c.searchUrl || 'https://www.bing.com/search?q=%s').replace('%s', encodeURIComponent(q));
+const root = document.getElementById('root');
+const c = await config().catch(() => ({}));
+if (c.no) document.title = `#${c.no} 新标签页`;
+const recent = () => new Promise((res) => {
+  try { chrome.history.search({ text: '', maxResults: 30, startTime: Date.now() - 30 * 86400e3 }, (l) => res((l || []).filter((x) => /^https?:/.test(x.url)).slice(0, 6).map((x) => ({ url: x.url, title: x.title, at: x.lastVisitTime })))); } catch { res([]); }
 });
 try {
-  const st = await api('GET', '/api/state'), me = st.me, ex = shownExit(me);
-  const parts = [];
-  if (me.rt.cut) parts.push('已断流：' + me.rt.cut);
-  else if (me.proxy.state !== 'on') parts.push('直连');
-  else if (ex) parts.push(`${ex.country} · ${ex.ip}`);
-  if (me.rt.launchedTz) parts.push(me.rt.launchedTz);
-  document.getElementById('info').textContent = parts.join('  ·  ');
-} catch { document.getElementById('info').textContent = '核心服务未连接'; }
+  const st = await api('GET', '/api/state');
+  await renderNtp(root, st, st.me, { pc: true, recent, openNode: () => chrome.tabs.create({ url: chrome.runtime.getURL('app.html#node') }) });
+} catch (e) { root.replaceChildren(h('div', { class: 'empty' }, '核心服务未连接：' + e.message)); }

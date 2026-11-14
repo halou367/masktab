@@ -1,9 +1,10 @@
 // 在没有安卓环境的地方预览内置扩展页面：用 Playwright 的 Chromium 打开 app.html / newtab.html，
 // 把 GeckoView 原生消息换成一个假的 Bridge（数据写死），截图并检查页面上有没有脚本错误；顺带检查 fp.js 的伪装效果。
 // 用法：node android/scripts/preview-pages.mjs <合成好的扩展目录> <截图输出目录> [电脑版扩展目录]
-//   合成扩展目录：companion/ext 里的 ui.js ui.css sites.js menu.js instances.js autofill.js common.js panel.js panel.css pages.js vaultmsg.js assets/ + android/ext/*
-//   给了第三个参数（companion/ext）：再用同一份状态把电脑版的工具栏弹窗画一遍，检查两端的节点面板内容一致。
+//   合成扩展目录：companion/ext 里的 ui.js ui.css sites.js menu.js instances.js autofill.js common.js panel.js panel.css pages.js ntp.js vaultmsg.js assets/ + android/ext/*
+//   给了第三个参数（companion/ext）：再用同一份状态把电脑版的工具栏弹窗、设置页、新标签页画一遍，检查两端的节点面板内容一致。
 // 需要 playwright（npm i playwright && npx playwright install chromium）。
+// 2026-11-15 起页面照 Chrome 设置页排版（决策 UI-1），这里的走法跟着改：设置首页 → 各分页 → 返回；节点页的子视图；系统返回键（#__back）；状态栏颜色上报。
 import { chromium } from 'playwright';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -21,6 +22,7 @@ const base = `http://127.0.0.1:${srv.address().port}/`;
 
 // 假的 app：只顶替“把请求送到核心服务”这一段。状态不是手写的——fixture-state.json 是本机联调时从真的核心服务
 // （宿主模式，和安卓版里跑的是同一个程序）GET /api/state 抓下来的，形状原样；只把延迟、IP、纯净度这些数值改成了截图里好看的。
+// 2026-11-15 补了 checks（按 internal/core/checks.go 的规则算的）和 settings 的 theme / bookmarks 两个新键。
 // 核心服务的状态改了形状，就重新抓一份（见 docs/android.md“本机联调”）。
 const fixture = JSON.parse(fs.readFileSync(new URL('./fixture-state.json', import.meta.url), 'utf8'));
 // 在抓来的状态上加两样用来检查的东西：一个两位数编号、没有名字的实例（头像要写得下“14”），
@@ -33,9 +35,13 @@ const ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9h
   fixture.vault.icons = 7;
   fixture.__icons = { 'login.shop.test': ICON };
 }
+const light = JSON.parse(JSON.stringify(fixture)); light.settings.theme = 'light';
+// 两路出口不同国家的样子（黄色提示）
+const split = JSON.parse(JSON.stringify(fixture)); { const m = split.instances.find((x) => x.id === split.me.id); m.rt.probe.direct = { ...m.rt.probe.direct, country: 'HK', city: 'Hong Kong', timezone: 'Asia/Hong_Kong' }; split.me = m; }
 const mock = (state) => {
   const vault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' }], hasDefault: true };
   const addons = [{ id: 'ublock0@raymondhill.net', name: 'uBlock Origin', version: '1.62.0', enabled: true, desc: '高效的广告拦截器', action: true, options: true }];
+  const recent = [{ url: 'https://github.com/halou367/masktab', title: 'halou367/masktab', at: Date.now() - 180e3 }, { url: 'https://ippure.com/', title: 'IPPure · 浏览器指纹检测', at: Date.now() - 720e3 }, { url: 'https://mail.google.com/mail/u/0/', title: 'Gmail - 收件箱', at: Date.now() - 3600e3 }];
   const reply = (m, p) => {
     const k = `${m} ${p.split('?')[0]}`;
     if (k === 'GET /api/state') return state;
@@ -44,6 +50,7 @@ const mock = (state) => {
     if (k === 'GET /api/addons') return addons;
     if (k === 'GET /api/diag') return { text: 'MaskTab 诊断信息（示例）' };
     if (k === 'GET /api/events') return { seq: state.seq };
+    if (k === 'GET /ui/recent') return recent;
     return { ok: true };
   };
   window.__calls = [];
@@ -52,165 +59,191 @@ const mock = (state) => {
     sendMessage: async () => ({ ok: true, reg: 'sync' }),
   };
   window.browser = { runtime: rt };
-  // 电脑版的面板（第三个参数给了电脑版扩展目录时才用到）：chrome.* 只要这几样
+  // 电脑版的页面（第三个参数给了电脑版扩展目录时才用到）：chrome.* 只要这几样
   window.chrome = { runtime: { sendMessage: (m, cb) => { cb && cb(null); return Promise.resolve(); }, lastError: null, getURL: (x) => new URL(x, location.href).href },
-    tabs: { create: (o) => { window.__calls.push({ m: 'TAB', p: o.url }); }, query: async () => [] } };
+    tabs: { create: (o) => { window.__calls.push({ m: 'TAB', p: o.url }); }, query: async () => [] },
+    history: { search: (q, cb) => cb(recent.map((r) => ({ url: r.url, title: r.title, lastVisitTime: r.at }))) } };
 };
 
 const br = await chromium.launch();
-const ctx = await br.newContext({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 2, userAgent: 'Mozilla/5.0 (Android 14; Mobile; rv:160.0) Gecko/160.0 Firefox/160.0', locale: 'zh-CN' });
-await ctx.addInitScript(mock, fixture);
+const UA = 'Mozilla/5.0 (Android 14; Mobile; rv:160.0) Gecko/160.0 Firefox/160.0';
+const mkctx = async (state) => { const c = await br.newContext({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, state); return c; };
+const ctx = await mkctx(fixture);
 const errors = [];
-const shots = [['menu', 'app.html#menu', { width: 380, height: 700 }], ['node', 'app.html#node'], ['fp', 'app.html#fp'],
+const watch = (pg, name) => { pg.on('pageerror', (e) => errors.push(`${name}: ${e.message}`)); pg.on('console', (m) => { if (m.type() === 'error') errors.push(`${name}: ${m.text()}`); }); };
+// 截图：[名字, 地址, 上下文]
+const shots = [['settings', 'app.html#settings'], ['node', 'app.html#node'], ['fp', 'app.html#fp'],
   ['instances', 'app.html#instances'], ['drawer', 'app.html#instances/p2'], ['import', 'app.html#instances/import'],
-  ['exits', 'app.html#exits'], ['addons', 'app.html#addons'], ['settings', 'app.html#settings'], ['newtab', 'app.html'.replace('app', 'newtab') + '#inst=p2']];
-for (const [name, url, vp] of shots) {
+  ['exits', 'app.html#exits'], ['addons', 'app.html#addons'], ['diag', 'app.html#diag'], ['history', 'app.html#history'],
+  ['settings-adv', 'app.html#settings/adv'], ['settings-ntp', 'app.html#settings/ntp'], ['menu-page', 'app.html#menu'], ['newtab', 'newtab.html#inst=p2']];
+for (const [name, url] of shots) {
   const pg = await ctx.newPage();
-  if (vp) await pg.setViewportSize(vp);
-  pg.on('pageerror', (e) => errors.push(`${name}: ${e.message}`));
-  pg.on('console', (m) => { if (m.type() === 'error') errors.push(`${name}: ${m.text()}`); });
+  watch(pg, name);
   await pg.goto(base + url);
   await pg.waitForTimeout(700);
-  await pg.screenshot({ path: path.join(out, name + '.png'), fullPage: name !== 'menu' });
+  await pg.screenshot({ path: path.join(out, name + '.png'), fullPage: true });
   await pg.close();
 }
-// 常驻页面的走法（与 app 里一样）：一个页面先停在 #idle，之后只改 # 后面的路由。
-// 从菜单把每一项点一遍：路由要变、页面要画出对应的标题、返回要回到菜单；回到 idle 后不再向 app 要状态。
+for (const [name, st, url] of [['light-newtab', light, 'newtab.html#inst=p2'], ['light-node', light, 'app.html#node'], ['light-settings', light, 'app.html#settings'], ['split-node', split, 'app.html#node'], ['split-newtab', split, 'newtab.html#inst=p2']]) {
+  const c = await mkctx(st); const pg = await c.newPage(); watch(pg, name);
+  await pg.goto(base + url); await pg.waitForTimeout(700);
+  await pg.screenshot({ path: path.join(out, name + '.png'), fullPage: true });
+  await c.close();
+}
+
+// 常驻页面的走法（与 app 里一样）：一个页面先停在 #idle，之后只改 # 后面的路由；系统返回键 = 把路由改成 __back。
 const flow = [];
+const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${name}${ok ? '' : ' ' + JSON.stringify(got)}`); if (!ok) errors.push(`flow: ${name}`); };
 {
   const pg = await ctx.newPage();
-  pg.on('pageerror', (e) => errors.push(`flow: ${e.message}`));
-  pg.on('console', (m) => { if (m.type() === 'error') errors.push(`flow: ${m.text()}`); });
+  watch(pg, 'flow');
   await pg.goto(base + 'app.html#idle');
   await pg.waitForTimeout(500);
-  // title = 页面顶上的标题：菜单是“#编号 名称”，管理页是 h2 的第一段文字，节点页是 #编号
   const info = () => pg.evaluate(() => ({ hash: location.hash.slice(1), cls: document.body.className, page: document.getElementById('root').dataset.page || '',
-    title: (document.querySelector('.who1 .t, .top h1, main.pg h2, .np header .no, .np .pkh b')?.childNodes[0]?.textContent || document.querySelector('main.pg h2')?.textContent || '').trim(),
-    h2: [...(document.querySelector('main.pg h2')?.childNodes || [])].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(''),
-    fp: !!document.querySelector('.np .fpbox'), np: document.getElementById('root').className, tab: document.querySelector('.tabs button.on')?.textContent || '', kids: document.getElementById('root').childElementCount }));
-  const setHash = async (r) => { await pg.evaluate((x) => { location.hash = x; }, r); await pg.waitForTimeout(250); };
-  const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${name}${ok ? '' : ' ' + JSON.stringify(got)}`); if (!ok) errors.push(`flow: ${name}`); };
-  const back = () => pg.locator('#root button[title="返回"]').first().click();
+    title: (document.querySelector('.appbar h1')?.childNodes[0]?.textContent || '').trim(), kids: document.getElementById('root').childElementCount,
+    chk: document.querySelectorAll('.chk').length, scrim: !!document.querySelector('.scrim') }));
+  const setHash = async (r) => { await pg.evaluate((x) => { location.hash = x; }, r); await pg.waitForTimeout(300); };
+  const calls = () => pg.evaluate(() => window.__calls.splice(0));
+  const back = async () => { await pg.locator('.appbar button[title="返回"]').first().click(); await pg.waitForTimeout(300); };
+  const sysBack = async () => { await setHash('__back'); };
   let i = await info();
   check('idle 是空页面', i.kids === 0 && i.cls === 'pg-idle', i);
-  // [菜单上的字, 选择器, 路由, 到了以后的检查]
-  const items = [
-    ['账号与密码', 'button.mi', 'instances/p2', (x) => x.h2 === '实例' && x.tab === '实例'],
-    ['节点与出口', 'button.mi', 'node', (x) => x.page === 'node' && x.np === 'np' && !x.fp],
-    ['指纹与时区', 'button.mi', 'fp', (x) => x.page === 'fp' && x.fp],
-    ['导入邮箱', 'button.act1', 'instances/import', (x) => x.h2 === '实例'],
-    ['管理', 'button.act1', 'instances', (x) => x.h2 === '实例' && x.tab === '实例'],
-    ['设置', 'button.act1', 'settings', (x) => x.h2 === '设置' && x.tab === '设置'],
-  ];
-  for (const [label, sel, route, ok] of items) {
-    await setHash('menu');
-    i = await info();
-    check(`菜单画出来（去 ${label} 之前）`, i.cls === 'menu' && i.title.startsWith('#2') && i.kids > 3, i);
-    await pg.locator(sel, { hasText: label }).first().click();
-    await pg.waitForTimeout(300);
-    i = await info();
-    check(`菜单 → ${label}`, i.hash === route && ok(i), i);
-    if (label === '节点与出口') await pg.screenshot({ path: path.join(out, 'flow-node.png') });
-    if (route.includes('/')) {
-      // 抽屉 / 导入框盖在实例页上：先收起（回到实例页），再点返回
-      await pg.locator(route.endsWith('import') ? '.modal button[title="关闭"]' : '.drawer button[title="收起"]').first().click();
-      await pg.waitForTimeout(250);
-      i = await info();
-      check(`${label} 收起后是实例页`, i.hash === 'instances', i);
-    }
-    await back();
-    await pg.waitForTimeout(250);
-    i = await info();
-    check(`${label} 点返回回到菜单`, i.hash === 'menu' && i.cls === 'menu', i);
-  }
-  await pg.screenshot({ path: path.join(out, 'flow-menu.png') });
-  // 节点面板（和电脑版同一份 panel.js）：出口那一格点“换国家”→ 出口国家列表 → 点日本 → 发出 PATCH（region=JP、自动），回到面板
-  await pg.locator('button.mi', { hasText: '节点与出口' }).first().click();
-  await pg.waitForTimeout(400);
-  const patched = () => pg.evaluate(() => window.__calls.filter((c) => c.m === 'PATCH' && c.p === '/api/instances/p2').pop()?.b?.proxy);
-  await pg.locator('.np button.v[aria-label="换国家"]').click();
-  await pg.waitForTimeout(300);
+  await setHash('settings');
   i = await info();
-  let rows = await pg.locator('.np .r.g').count();
-  check('面板 → 出口国家列表', i.hash === 'node' && i.np === 'np pk' && i.title === '出口国家' && rows === 4, { ...i, rows }); // 三个国家 + “不限”
-  await pg.screenshot({ path: path.join(out, 'flow-region.png') });
-  await pg.evaluate(() => { window.__calls.length = 0; });
-  await pg.locator('.np .r.g', { hasText: '美国' }).click();
-  await pg.waitForTimeout(400);
-  i = await info();
-  let px = await patched();
-  check('点一个国家：发出切换请求并回到面板', i.np === 'np' && px?.region === 'US' && px?.exitMode === 'auto' && px?.state === 'on', { ...i, px });
-  // 出口的“自动”关掉 = 手动：发出 exitMode=manual
-  await pg.evaluate(() => { window.__calls.length = 0; });
-  await pg.locator('.np .pick').first().locator('.tg').click();
-  await pg.waitForTimeout(300);
-  px = await patched();
-  check('出口的自动开关：发出 exitMode=manual', px?.exitMode === 'manual', { px });
-  // 线路那一行点开：列出订阅里的线路
-  await pg.locator('.np button.cur').click();
-  await pg.waitForTimeout(250);
-  const lines = await pg.locator('.np .lines button.sl').count();
-  check('点线路一行展开线路列表', lines >= 1, { lines });
-  await pg.locator('.np button.cur').click();
-  await pg.waitForTimeout(200);
-  // 代理总开关：发出 state=off
-  await pg.evaluate(() => { window.__calls.length = 0; });
-  await pg.locator('.np header .tg').click();
-  await pg.waitForTimeout(300);
-  px = await patched();
-  check('代理开关：发出 state=off', px?.state === 'off', { px });
-  // “伪装”一行点开 / 收起指纹与时区
-  await pg.locator('button.idr').click();
-  await pg.waitForTimeout(200);
-  check('点“伪装”一行展开指纹与时区', (await info()).fp, await info());
-  await pg.locator('button.idr').click();
-  await pg.waitForTimeout(200);
-  check('再点收起', !(await info()).fp, await info());
-  await back();
-  await pg.waitForTimeout(250);
-  i = await info();
-  check('节点页点返回回到菜单', i.hash === 'menu', i);
-  // 管理页底部四个标签：来回切换，返回仍回菜单
-  await pg.locator('button.act1', { hasText: '管理' }).click();
-  await pg.waitForTimeout(300);
-  for (const [t, r, h2] of [['订阅与出口', 'exits', '订阅'], ['扩展', 'addons', '扩展'], ['设置', 'settings', '设置'], ['实例', 'instances', '实例']]) {
-    await pg.locator('.tabs button', { hasText: t }).click();
+  check('设置首页画出来', i.page === 'settings' && i.title === '设置' && await pg.locator('.sec', { hasText: 'MaskTab' }).count() === 1, i);
+  // 设置首页的每一项：点进去 → 对应页面 → 返回回到设置首页
+  const items = [['实例', 'instances', '实例'], ['节点与出口', 'node', '节点与出口'], ['订阅与地址库', 'exits', '订阅与地址库'], ['指纹与伪装', 'fp', '指纹与伪装'],
+    ['扩展', 'addons', '扩展'], ['组件与更新', 'settings/about', '组件与更新'], ['诊断', 'diag', '诊断'], ['新标签页', 'settings/ntp', '自定义新标签页'], ['高级', 'settings/adv', '高级']];
+  for (const [label, route, title] of items) {
+    await pg.locator('button.row', { has: pg.locator('.t', { hasText: new RegExp(`^${label}$`) }) }).first().click();
     await pg.waitForTimeout(350);
     i = await info();
-    check(`标签 → ${t}`, i.hash === r && i.h2 === h2 && i.tab === t, i);
+    check(`设置 → ${label}`, i.hash === route && i.title === title, i);
+    if (label === '指纹与伪装') check('指纹与伪装：列出 10 项一致性检查', i.chk === 10, i);
+    await back();
+    i = await info();
+    check(`${label} 返回回到设置首页`, i.hash === 'settings' && i.title === '设置', i);
   }
-  await back();
-  await pg.waitForTimeout(250);
-  i = await info();
-  check('标签页点返回回到菜单', i.hash === 'menu' && i.cls === 'menu', i);
-  // 新建实例：发出 POST /api/instances
-  await pg.evaluate(() => { window.__calls.length = 0; });
-  await pg.locator('button.av1[aria-label="新建伪装实例"]').click();
+  // 节点与出口的子视图：订阅线路、出口国家（选一个国家）、出口自动开关、代理开关、指纹与伪装
+  await pg.locator('button.row', { hasText: '节点与出口' }).first().click();
+  await pg.waitForTimeout(400);
+  await pg.screenshot({ path: path.join(out, 'flow-node.png') });
+  await pg.locator('button.row[aria-label="订阅线路"]').click();
   await pg.waitForTimeout(300);
-  const posted = await pg.evaluate(() => window.__calls.some((c) => c.m === 'POST' && c.p === '/api/instances'));
-  check('菜单 → 新建伪装实例 发出请求', posted, {});
+  i = await info();
+  const lines = await pg.locator('button.sl').count();
+  check('节点页 → 订阅线路', i.title === '订阅线路' && lines >= 1 && i.hash === 'node', { ...i, lines });
+  await back();
+  i = await info();
+  check('订阅线路返回回到节点页', i.title === '节点与出口', i);
+  await pg.locator('button.row[aria-label="换国家"]').click();
+  await pg.waitForTimeout(300);
+  i = await info();
+  const rows = await pg.locator('.ls .iprow').count();
+  check('节点页 → 出口国家列表', i.title === '出口国家' && rows === 4, { ...i, rows }); // 三个国家 + “不限”
+  await pg.screenshot({ path: path.join(out, 'flow-region.png') });
+  await calls();
+  await pg.locator('.ls .iprow', { hasText: '美国' }).click();
+  await pg.waitForTimeout(400);
+  let px = (await calls()).filter((c) => c.m === 'PATCH' && c.p === '/api/instances/p2').pop()?.b?.proxy;
+  i = await info();
+  check('点一个国家：发出切换请求并回到节点页', i.title === '节点与出口' && px?.region === 'US' && px?.exitMode === 'auto' && px?.state === 'on', { ...i, px });
+  await pg.locator('button.sw[aria-label="出口自动选择"]').click();
+  await pg.waitForTimeout(300);
+  px = (await calls()).filter((c) => c.m === 'PATCH').pop()?.b?.proxy;
+  check('出口的自动开关：发出 exitMode=manual', px?.exitMode === 'manual', { px });
+  await pg.locator('button.row[aria-label="选出口"]').click();
+  await pg.waitForTimeout(300);
+  i = await info();
+  check('节点页 → 出口列表（ProxyIP）', i.title === '出口 ProxyIP' && await pg.locator('.ls .iprow').count() >= 3, i);
+  await pg.screenshot({ path: path.join(out, 'flow-exit.png') });
+  await sysBack();
+  i = await info();
+  check('系统返回键：出口列表回到节点页', i.title === '节点与出口' && i.hash === 'node', i);
+  await pg.locator('button.row[aria-label="选入口"]').click();
+  await pg.waitForTimeout(300);
+  i = await info();
+  check('节点页 → 入口列表', i.title === '入口 优选 IP', i);
+  await pg.screenshot({ path: path.join(out, 'flow-entry.png') });
+  await back();
+  await pg.locator('button.sw[aria-label="关闭代理"]').click();
+  await pg.waitForTimeout(300);
+  px = (await calls()).filter((c) => c.m === 'PATCH').pop()?.b?.proxy;
+  check('代理开关：发出 state=off', px?.state === 'off', { px });
+  await pg.locator('button.row[aria-label="指纹与伪装"]').click();
+  await pg.waitForTimeout(300);
+  i = await info();
+  check('节点页 → 指纹与伪装', i.title === '指纹与伪装' && i.chk === 10 && i.hash === 'node', i);
+  // 对话框：点“时区”弹出选择框，遮罩盖上时告诉 app 压暗状态栏、导航栏
+  await calls();
+  await pg.locator('button.row', { has: pg.locator('.t', { hasText: /^时区$/ }) }).click();
+  await pg.waitForTimeout(300);
+  i = await info();
+  let bars = (await calls()).filter((c) => c.p === '/ui/bars').pop()?.b;
+  check('对话框打开：页面上报压暗状态栏', i.scrim && bars?.dim === true && bars?.src === 'panel', { ...i, bars });
+  await pg.screenshot({ path: path.join(out, 'flow-dialog.png') });
+  await sysBack();
+  i = await info();
+  bars = (await calls()).filter((c) => c.p === '/ui/bars').pop()?.b;
+  check('系统返回键先关对话框，并上报不再压暗', !i.scrim && i.title === '指纹与伪装' && bars?.dim === false, { ...i, bars });
+  await sysBack();
+  i = await info();
+  check('系统返回键：指纹与伪装回到节点页', i.title === '节点与出口', i);
+  await sysBack();
+  i = await info();
+  check('系统返回键：节点页回到设置首页（从设置点进来的）', i.hash === 'settings' && i.title === '设置', i);
+  await calls();
+  await sysBack();
+  check('系统返回键：设置首页（app 直接打开的）= 收起', (await calls()).some((c) => c.p === '/ui/close'), await info());
+  // app 直接打开一页（头像菜单 / 三点菜单的入口）：返回 = 收起
+  await setHash('node');
+  await calls();
+  await back();
+  check('直接打开的整页点返回 = 收起', (await calls()).some((c) => c.p === '/ui/close'), await info());
+  // 实例页：新建实例发出请求；抽屉收起
+  await setHash('instances');
+  await calls();
+  await pg.locator('.appbar button[title="新建伪装实例"]').click();
+  await pg.waitForTimeout(300);
+  check('实例页 → 新建实例发出请求', (await calls()).some((c) => c.m === 'POST' && c.p === '/api/instances'), {});
+  await pg.locator('.cardi[data-id="p2"]').click();
+  await pg.waitForTimeout(300);
+  i = await info();
+  check('点卡片打开账号抽屉', i.hash === 'instances/p2' && await pg.locator('.drawer').count() === 1, i);
+  await pg.locator('.drawer button[title="收起"]').click();
+  await pg.waitForTimeout(300);
+  check('抽屉收起回到实例页', (await info()).hash === 'instances', await info());
   // 回到 idle：清空、之后 9 秒内不再取状态（轮询停了）
   await setHash('idle');
-  await pg.evaluate(() => { window.__calls.length = 0; });
+  await calls();
   await pg.waitForTimeout(9000);
-  const n = await pg.evaluate(() => window.__calls.filter((c) => c.p && c.p.startsWith('/api/')).length);
+  const n = (await calls()).filter((c) => c.p && c.p.startsWith('/api/')).length;
   i = await info();
   check('回到 idle 后清空并停止轮询', i.kids === 0 && n === 0, { ...i, calls: n });
-  // 从 idle 直接开整页（三点菜单的入口）：返回是关闭（发 /ui/close），不是回菜单
-  await setHash('node');
-  await pg.evaluate(() => { window.__calls.length = 0; });
-  await back();
-  await pg.waitForTimeout(250);
-  const closed = await pg.evaluate(() => window.__calls.some((c) => c.p === '/ui/close'));
-  check('直接打开的整页点返回 = 关闭', closed, await info());
   await pg.close();
 }
-// 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点面板比内容。
-// 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹表单里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
+// 新标签页：搜索框、伪装概况卡（三个小圆环）、书签、最近访问、已存账号；点卡片 = 去节点与出口
+{
+  const pg = await ctx.newPage(); watch(pg, 'newtab');
+  await pg.goto(base + 'newtab.html#inst=p2'); await pg.waitForTimeout(800);
+  const nt = await pg.evaluate(() => ({ q: !!document.querySelector('.nq input'), rings: document.querySelectorAll('.nstat .ring').length, cf: !!document.querySelector('.nstat .cfbig.good'),
+    tiles: document.querySelectorAll('.tiles .tile').length, recent: document.querySelectorAll('.nlist .nrow').length, accs: document.querySelectorAll('.accs .acc').length }));
+  check('新标签页：搜索框、伪装度和纯净度两个圆环、CF 色点、书签、最近访问、已存账号', nt.q && nt.rings === 2 && nt.cf && nt.tiles === 4 && nt.recent === 3 && nt.accs >= 3, nt);
+  await pg.evaluate(() => window.__calls.splice(0));
+  await pg.locator('.nstat').click(); await pg.waitForTimeout(200);
+  check('新标签页：点伪装概况卡去“节点与出口”', await pg.evaluate(() => window.__calls.some((c) => c.p === '/ui/open' && c.b?.route === 'node')), {});
+  await pg.close();
+  const c2 = await mkctx(split); const p2 = await c2.newPage(); watch(p2, 'newtab-split');
+  await p2.goto(base + 'newtab.html#inst=p2'); await p2.waitForTimeout(800);
+  check('两路出口不同国家：新标签页卡片上出现黄色提示', await p2.locator('.nstat .nswarn', { hasText: '两路出口不在同一国家' }).count() === 1, {});
+  await c2.close();
+}
+// 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点页比内容。
+// 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹页里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
 if (desk) {
   const dsrv = http.createServer((q, r) => {
     const u = new URL(q.url, 'http://x');
-    if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2' })); return; }
+    if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
     if (u.pathname.startsWith('/api/')) {
       const st = { ...fixture, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
       r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : { ok: true })); return;
@@ -220,52 +253,63 @@ if (desk) {
     r.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream' }); r.end(fs.readFileSync(f));
   }).listen(0);
   const dbase = `http://127.0.0.1:${dsrv.address().port}/`;
-  const dctx = await br.newContext({ viewport: { width: 320, height: 600 }, deviceScaleFactor: 2, locale: 'zh-CN' });
+  const dctx = await br.newContext({ viewport: { width: 380, height: 600 }, deviceScaleFactor: 2, locale: 'zh-CN' });
   await dctx.addInitScript(mock, fixture);
   const dp = await dctx.newPage();
   dp.on('pageerror', (e) => errors.push(`电脑版弹窗: ${e.message}`));
   dp.on('console', (m) => { if (m.type() === 'error' && !/events/.test(m.text())) errors.push(`电脑版弹窗: ${m.text()}`); });
   await dp.goto(dbase + 'popup.html');
   await dp.waitForTimeout(600);
-  const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${name}${ok ? '' : ' ' + JSON.stringify(got)}`); if (!ok) errors.push(`flow: ${name}`); };
-  check('电脑版：弹窗首页是实例菜单', await dp.evaluate(() => document.body.classList.contains('menu') && !!document.querySelector('.hero')), {});
-  await dp.screenshot({ path: path.join(out, 'desk-menu.png') });
+  check('电脑版：弹窗首页是头像菜单（大头像、纯净度圆环、其它实例）', await dp.evaluate(() => document.body.classList.contains('menu') && !!document.querySelector('.amenu .hero .ring') && document.querySelectorAll('.amenu .ai').length === 2), {});
+  await dp.screenshot({ path: path.join(out, 'desk-menu.png'), fullPage: true });
   await dp.locator('button.mi', { hasText: '节点与出口' }).click();
   await dp.waitForTimeout(400);
   await dp.screenshot({ path: path.join(out, 'desk-node.png'), fullPage: true });
-  // 面板上的文字（去掉会跳的流量数字、只有电脑有的快捷键提示）
-  const words = (p) => p.evaluate(() => [...document.querySelectorAll('.np header, .np .exit, .np .idr, .np .sec, .np .banner')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()).filter(Boolean));
+  // 节点页上的文字（去掉会跳的流量数字和设备名）
+  const words = (p) => p.evaluate(() => [...document.querySelectorAll('#root .sec, #root .row, #root .card, #root .warn')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()).filter((t) => t && !/↑|Android|Windows|Linux|macOS/.test(t)));
   const mp = await ctx.newPage();
   await mp.goto(base + 'app.html#node');
   await mp.waitForTimeout(600);
   const a = await words(dp), b = await words(mp);
-  // 伪装那一行：设备名跟内核走（电脑 Linux/Windows，手机 Android），其余一样；只比别的块
-  const strip = (l) => l.filter((x) => !/UTC|Android|Windows|Linux|macOS/.test(x));
-  check('两端节点面板的内容一致（出口、订阅、出口 / 入口）', a.length > 2 && JSON.stringify(strip(a)) === JSON.stringify(strip(b)), { 电脑: a, 手机: b });
-  await dp.locator('.np button.v[aria-label="换国家"]').click();
+  check('两端节点页的内容一致（出口卡、订阅、出口 / 入口）', a.length > 6 && JSON.stringify(a) === JSON.stringify(b), { 电脑: a, 手机: b });
+  await dp.locator('button.row[aria-label="换国家"]').click();
   await dp.waitForTimeout(300);
-  await mp.locator('.np button.v[aria-label="换国家"]').click();
+  await mp.locator('button.row[aria-label="换国家"]').click();
   await mp.waitForTimeout(300);
-  const rows = (p) => p.evaluate(() => [...document.querySelectorAll('.np .r')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
+  const rows = (p) => p.evaluate(() => [...document.querySelectorAll('.ls .iprow')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
   const ra = await rows(dp), rb = await rows(mp);
   check('两端出口国家列表一致', ra.length === 4 && JSON.stringify(ra) === JSON.stringify(rb), { 电脑: ra, 手机: rb });
-  await dp.screenshot({ path: path.join(out, 'desk-region.png') });
-  await dp.locator('.np .pkh button[title="返回"]').click();
+  await dp.locator('.appbar button[title="返回"]').click();
   await dp.waitForTimeout(200);
-  await dp.locator('.np header button[title="返回实例菜单"]').click();
+  await dp.locator('.appbar button[title="返回实例菜单"]').click();
   await dp.waitForTimeout(200);
-  check('电脑版：面板返回回到实例菜单', await dp.evaluate(() => document.body.classList.contains('menu')), {});
-  // 电脑版管理页：订阅与出口、设置两页和手机是同一份 pages.js
-  for (const [tab, name] of [['exits', '订阅'], ['settings', '设置']]) {
+  check('电脑版：节点页返回回到头像菜单', await dp.evaluate(() => document.body.classList.contains('menu')), {});
+  // 电脑版指纹页：系统、浏览器可选，伪装项逐项开关（手机上是“固定”）
+  await dp.locator('button.mi', { hasText: '指纹与伪装' }).click();
+  await dp.waitForTimeout(300);
+  const fpd = await dp.evaluate(() => ({ title: document.querySelector('.appbar h1')?.textContent, sw: document.querySelectorAll('.row .sw').length, fixed: document.querySelectorAll('.fixed').length }));
+  check('电脑版指纹与伪装：五个伪装项开关、没有“固定”', fpd.title === '指纹与伪装' && fpd.sw === 5 && fpd.fixed === 0, fpd);
+  const fpm = await (async () => { await mp.evaluate(() => { location.hash = 'fp'; }); await mp.waitForTimeout(400); return mp.evaluate(() => ({ sw: document.querySelectorAll('.row .sw').length, fixed: document.querySelectorAll('.fixed').length })); })();
+  check('手机指纹与伪装：系统、浏览器、伪装项标“固定”并写明原因', fpm.sw === 0 && fpm.fixed === 3, fpm);
+  // 电脑版设置页：左边导航 + 共用的页面
+  for (const [hash, title] of [['settings', '设置'], ['exits', '订阅与地址库'], ['node', '节点与出口'], ['settings/adv', '高级'], ['extensions', '扩展']]) {
     const ap = await dctx.newPage();
-    ap.on('pageerror', (e) => errors.push(`电脑版管理页 ${tab}: ${e.message}`));
-    await ap.setViewportSize({ width: 1100, height: 800 });
-    await ap.goto(dbase + 'app.html#' + tab);
+    ap.on('pageerror', (e) => errors.push(`电脑版设置页 ${hash}: ${e.message}`));
+    await ap.setViewportSize({ width: 1280, height: 820 });
+    await ap.goto(dbase + 'app.html#' + hash);
     await ap.waitForTimeout(500);
-    const h2 = await ap.evaluate(() => document.querySelector('main h2')?.textContent || '');
-    check(`电脑版管理页：${name}`, h2.includes(name), { h2 });
-    await ap.screenshot({ path: path.join(out, `desk-${tab}.png`), fullPage: true });
+    const got = await ap.evaluate(() => ({ h1: (document.querySelector('.appbar h1')?.childNodes[0]?.textContent || '').trim(), nav: document.querySelectorAll('.pnav button').length, on: document.querySelector('.pnav button.on')?.textContent }));
+    check(`电脑版设置页：${title}`, got.h1 === title && got.nav === 10, got);
+    await ap.screenshot({ path: path.join(out, `desk-${hash.replace('/', '-')}.png`) });
     await ap.close();
+  }
+  {
+    const np = await dctx.newPage(); np.on('pageerror', (e) => errors.push(`电脑版新标签页: ${e.message}`));
+    await np.setViewportSize({ width: 1280, height: 820 });
+    await np.goto(dbase + 'newtab.html'); await np.waitForTimeout(600);
+    check('电脑版新标签页：同一份 ntp.js（伪装概况卡、书签一行四个、最近访问来自内核历史）', await np.evaluate(() => !!document.querySelector('.nstat .ring') && document.querySelectorAll('.nlist .nrow').length === 3 && getComputedStyle(document.querySelector('.tiles')).gridTemplateColumns.split(' ').length === 4), {});
+    await np.screenshot({ path: path.join(out, 'desk-newtab.png') });
+    await np.close();
   }
   // 实例页：两端是同一份 instances.js。两位数编号写得进头像；记住账号的站点用它自己的网页图标。
   const cards = (pg2) => pg2.evaluate(() => {
@@ -275,7 +319,7 @@ if (desk) {
   });
   const ip = await dctx.newPage();
   ip.on('pageerror', (e) => errors.push(`电脑版实例页: ${e.message}`));
-  await ip.setViewportSize({ width: 1100, height: 800 });
+  await ip.setViewportSize({ width: 1280, height: 820 });
   await ip.goto(dbase + 'app.html#instances');
   await ip.waitForTimeout(700);
   const dc = await cards(ip);

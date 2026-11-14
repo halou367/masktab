@@ -29,3 +29,26 @@ export function letterOf(i, mobile) {
   const m = mobile ? null : /[A-Za-z]|\d{1,3}/.exec(i?.name || '');
   return (m ? m[0] : String(i?.no ?? 0)).toUpperCase();
 }
+// 伪装概况（新标签页的卡片、头像菜单、指纹与伪装页共用，决策 UI-3）：
+//   伪装度 = 核心服务算好的一致性检查通过的比例（inst.checks，见 internal/core/checks.go）；
+//   纯净度 = 出口 IP 的纯净度（核心服务查好放在 st.ipq）；CF 信誉 = Cloudflare 上的网站那一路探不探得到出口。
+// 都只读核心服务给的数据，不在页面里另算一套。
+export function disguise(inst) {
+  const c = inst?.checks;
+  if (!c || !c.total) return { pass: 0, total: 0, pct: null };
+  return { pass: c.pass, total: c.total, pct: Math.round((100 * c.pass) / c.total) };
+}
+export function exitQ(st, inst) {
+  const ex = inst?.proxy?.state === 'on' ? shownExit(inst) : null;
+  const q = ex && st?.ipq ? st.ipq[ex.ip] : null;
+  return { ex, type: q?.type || '', score: q && q.score >= 0 ? q.score : null };
+}
+// CF 信誉：good = CF 那一路有出口；bad = 只有普通网站那一路（CF 网站打不开或被拦）；'' = 还不知道 / 直连。
+export function cfRep(inst) {
+  const p = inst?.rt?.probe;
+  if (inst?.proxy?.state !== 'on' || !p) return { st: '', text: '未知' };
+  if (p.cf) return { st: 'good', text: '良好' };
+  if (p.direct) return { st: 'bad', text: '不可达' };
+  return { st: '', text: '未知' };
+}
+export const TYPE_NAME = { res: '住宅', dc: '机房', mobile: '移动' };

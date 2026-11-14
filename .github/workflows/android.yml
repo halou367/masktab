@@ -23,6 +23,7 @@ on:
       - 'companion/ext/panel.js'
       - 'companion/ext/panel.css'
       - 'companion/ext/pages.js'
+      - 'companion/ext/ntp.js'
       - 'companion/ext/vaultmsg.js'
       - 'companion/ext/assets/flags/**'
       # 核心服务（和电脑版同一份 Go 代码）也打进 APK，决策 D-4
@@ -66,7 +67,7 @@ jobs:
         run: bash android/scripts/build-core.sh "0.1.${GITHUB_RUN_NUMBER}"
       - name: 检查内置扩展脚本语法
         run: |
-          for f in android/ext/*.js companion/ext/menu.js companion/ext/instances.js companion/ext/autofill.js companion/ext/ui.js companion/ext/sites.js companion/ext/common.js companion/ext/panel.js companion/ext/pages.js companion/ext/vaultmsg.js; do
+          for f in android/ext/*.js companion/ext/menu.js companion/ext/instances.js companion/ext/autofill.js companion/ext/ui.js companion/ext/sites.js companion/ext/common.js companion/ext/panel.js companion/ext/pages.js companion/ext/ntp.js companion/ext/vaultmsg.js; do
             node --check "$f" 2>/dev/null || node --input-type=module --check < "$f" || { echo "语法错误：$f"; exit 1; }
           done
       # 两端一致性检查：同一份核心服务状态，分别画电脑版的工具栏弹窗和手机的页面，节点面板的内容必须一样；
@@ -74,7 +75,7 @@ jobs:
       - name: 两端界面一致性检查
         run: |
           mkdir -p /tmp/ext /tmp/pw
-          cp -r companion/ext/{ui.js,ui.css,sites.js,menu.js,instances.js,autofill.js,common.js,panel.js,panel.css,pages.js,vaultmsg.js,assets} /tmp/ext/
+          cp -r companion/ext/{ui.js,ui.css,sites.js,menu.js,instances.js,autofill.js,common.js,panel.js,panel.css,pages.js,ntp.js,vaultmsg.js,assets} /tmp/ext/
           cp -r android/ext/* /tmp/ext/
           cp android/scripts/preview-pages.mjs android/scripts/fixture-state.json /tmp/pw/
           cd /tmp/pw && npm init -y > /dev/null && npm i playwright@1.65.1 > /dev/null && npx playwright install --with-deps chromium > /dev/null

@@ -11,9 +11,11 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.animation.LinearInterpolator
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -37,12 +39,18 @@ fun flagBitmap(ctx: Context, cc: String?): Bitmap? {
     }
 }
 
-/** 头像：当前实例的彩色圆点 + 编号，右下角出口国旗。 */
+/** 头像：实例色圆 + 编号，右下角出口国旗，右上角运行点（Chrome 风格界面，决策 UI-1）。[ring] = 国旗和运行点的描边色（等于所在底色）。 */
 class AvatarView(ctx: Context) : View(ctx) {
     var color = Color.GRAY
     var label = "1"
     var flag: Bitmap? = null
     var busy = false
+    /** 0 不画 | 1 运行中（绿）| 2 启动中（强调色）| 3 休眠（灰） */
+    var dot = 0
+    var ring = Color.parseColor("#0d0e13")
+    var dotColors = intArrayOf(Color.parseColor("#81c995"), Color.parseColor("#bdc5ea"), Color.parseColor("#9a9ba4"))
+    /** 圆占控件短边的比例（工具栏上留点边，列表里撑满）。 */
+    var scale = 0.68f
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
 
@@ -52,19 +60,27 @@ class AvatarView(ctx: Context) : View(ctx) {
         val s = minOf(width, height).toFloat()
         val cx = width / 2f
         val cy = height / 2f
-        val r = s * 0.34f
+        val r = s * scale / 2f
         p.style = Paint.Style.FILL
         p.color = color
         c.drawCircle(cx, cy, r, p)
-        tp.textSize = r * (if (label.length > 2) 0.8f else 1.0f)
+        tp.textSize = r * (if (label.length > 2) 0.62f else if (label.length > 1) 0.78f else 0.9f)
         c.drawText(label, cx, cy - (tp.descent() + tp.ascent()) / 2, tp)
         flag?.let {
             val fw = r * 1.0f
-            val fh = fw * 0.7f
-            val dst = RectF(cx + r * 0.35f, cy + r * 0.45f, cx + r * 0.35f + fw, cy + r * 0.45f + fh)
-            p.color = Color.WHITE
-            c.drawRoundRect(RectF(dst.left - 2, dst.top - 2, dst.right + 2, dst.bottom + 2), 4f, 4f, p)
+            val fh = fw * 0.74f
+            val dst = RectF(cx + r * 0.48f, cy + r * 0.52f, cx + r * 0.48f + fw, cy + r * 0.52f + fh)
+            p.color = ring
+            val b = s * 0.03f
+            c.drawRoundRect(RectF(dst.left - b, dst.top - b, dst.right + b, dst.bottom + b), b * 1.5f, b * 1.5f, p)
             c.drawBitmap(it, null, dst, null)
+        }
+        if (dot in 1..3) {
+            val dr = r * 0.27f
+            val dx = cx + r * 0.78f
+            val dy = cy - r * 0.78f
+            p.color = ring; c.drawCircle(dx, dy, dr + s * 0.03f, p)
+            p.color = dotColors[dot - 1]; c.drawCircle(dx, dy, dr, p)
         }
     }
 }
@@ -104,7 +120,7 @@ class DotsView(ctx: Context) : View(ctx) {
 }
 
 /** 启动页上的面具标志（缓慢呼吸）。 */
-class MaskLogo(ctx: Context) : View(ctx) {
+class MaskLogo(ctx: Context, private val fg: Int = Color.parseColor("#bdc5ea"), private val ink: Int = Color.parseColor("#2c3557")) : View(ctx) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private var phase = 0f
     private val anim = ValueAnimator.ofFloat(0f, 1f).apply {
@@ -118,8 +134,8 @@ class MaskLogo(ctx: Context) : View(ctx) {
         val h = height.toFloat()
         val s = minOf(w, h)
         p.style = Paint.Style.FILL
-        p.color = Color.parseColor("#1A73E8")
-        p.alpha = (40 + 50 * phase).toInt()
+        p.color = fg
+        p.alpha = (30 + 50 * phase).toInt()
         c.drawCircle(w / 2, h / 2, s * (0.42f + 0.06f * phase), p)
         p.alpha = 255
         c.drawCircle(w / 2, h / 2, s * 0.36f, p)
@@ -136,22 +152,22 @@ class MaskLogo(ctx: Context) : View(ctx) {
         m.cubicTo(X(11f), oy + 15.5f * u, X(10.5f), oy + 17 * u, X(9f), oy + 17 * u)
         m.cubicTo(X(6f), oy + 17 * u, X(3f), oy + 13 * u, X(3f), oy + 8 * u)
         m.close()
-        p.color = Color.WHITE
+        p.color = ink
         c.drawPath(m, p)
-        p.color = Color.parseColor("#1A73E8")
+        p.color = fg
         c.drawCircle(X(8.5f), oy + 11 * u, 1.3f * u, p)
         c.drawCircle(X(15.5f), oy + 11 * u, 1.3f * u, p)
     }
 }
 
-/** 步骤状态图标：等待（灰圈）、进行中（转圈）、完成（勾）、跳过（横线）、失败（叉）。 */
-class StepIcon(ctx: Context) : View(ctx) {
+/** 步骤状态图标：等待（小灰点）、进行中（转圈）、完成（绿勾）、跳过（横线）、失败（红叉）。 */
+class StepIcon(ctx: Context, private val pal: Pal) : View(ctx) {
     var state = 0 // 0 等待 1 进行中 2 完成 3 跳过 4 失败
         set(v) { field = v; if (v == 1) spin.start() else spin.cancel(); invalidate() }
     private var angle = 0f
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
     private val spin = ValueAnimator.ofFloat(0f, 360f).apply {
-        duration = 900; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
+        duration = 800; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
         addUpdateListener { angle = it.animatedValue as Float; invalidate() }
     }
     override fun onDetachedFromWindow() { spin.cancel(); super.onDetachedFromWindow() }
@@ -160,20 +176,20 @@ class StepIcon(ctx: Context) : View(ctx) {
         val r = s * 0.38f
         val cx = width / 2f
         val cy = height / 2f
-        p.strokeWidth = s * 0.09f
+        p.strokeWidth = s * 0.1f
         when (state) {
-            0 -> { p.color = Color.parseColor("#DADCE0"); c.drawCircle(cx, cy, r, p) }
-            1 -> { p.color = Color.parseColor("#D2E3FC"); c.drawCircle(cx, cy, r, p); p.color = Color.parseColor("#1A73E8"); c.drawArc(RectF(cx - r, cy - r, cx + r, cy + r), angle, 100f, false, p) }
+            0 -> { p.style = Paint.Style.FILL; p.color = pal.div; c.drawCircle(cx, cy, s * 0.17f, p); p.style = Paint.Style.STROKE }
+            1 -> { p.color = pal.div; c.drawCircle(cx, cy, r, p); p.color = pal.acc; c.drawArc(RectF(cx - r, cy - r, cx + r, cy + r), angle, 100f, false, p) }
             2 -> {
-                p.style = Paint.Style.FILL; p.color = Color.parseColor("#188038"); c.drawCircle(cx, cy, r + p.strokeWidth / 2, p)
-                p.style = Paint.Style.STROKE; p.color = Color.WHITE
+                p.style = Paint.Style.FILL; p.color = pal.good; c.drawCircle(cx, cy, r + p.strokeWidth / 2, p)
+                p.style = Paint.Style.STROKE; p.color = pal.bg
                 val path = Path().apply { moveTo(cx - r * 0.45f, cy); lineTo(cx - r * 0.1f, cy + r * 0.35f); lineTo(cx + r * 0.5f, cy - r * 0.35f) }
                 c.drawPath(path, p)
             }
-            3 -> { p.color = Color.parseColor("#9AA0A6"); c.drawCircle(cx, cy, r, p); c.drawLine(cx - r * 0.45f, cy, cx + r * 0.45f, cy, p) }
+            3 -> { p.color = pal.on3; c.drawCircle(cx, cy, r, p); c.drawLine(cx - r * 0.45f, cy, cx + r * 0.45f, cy, p) }
             else -> {
-                p.style = Paint.Style.FILL; p.color = Color.parseColor("#D93025"); c.drawCircle(cx, cy, r + p.strokeWidth / 2, p)
-                p.style = Paint.Style.STROKE; p.color = Color.WHITE
+                p.style = Paint.Style.FILL; p.color = pal.bad; c.drawCircle(cx, cy, r + p.strokeWidth / 2, p)
+                p.style = Paint.Style.STROKE; p.color = pal.bg
                 val d = r * 0.4f
                 c.drawLine(cx - d, cy - d, cx + d, cy + d, p); c.drawLine(cx + d, cy - d, cx - d, cy + d, p)
             }
@@ -181,40 +197,69 @@ class StepIcon(ctx: Context) : View(ctx) {
     }
 }
 
-/** 启动进度页：标志 + 步骤列表（每步一个状态图标、名称、结果说明）。 */
-class StartupView(ctx: Context, steps: List<String>) : LinearLayout(ctx) {
+/**
+ * 启动核验页（照已确认的演示 13-boot）：标志呼吸、名称、每一步一行（状态图标、名称、右边的结果），底部一条进度条。
+ * 最后一步“网络检测”开始时，标志换成当前实例的头像（实例色、编号、出口国旗）。
+ */
+class StartupView(ctx: Context, steps: List<String>, private val pal: Pal) : FrameLayout(ctx) {
     private val icons = mutableListOf<StepIcon>()
     private val details = mutableListOf<TextView>()
+    private val names = mutableListOf<TextView>()
+    private val logoBox = FrameLayout(ctx)
+    private val sub: TextView
+    private val prog = View(ctx)
+    private val col = LinearLayout(ctx)
+    val content: LinearLayout get() = col
 
     init {
-        orientation = VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL
-        setBackgroundColor(Color.WHITE)
+        setBackgroundColor(pal.bg)
         isClickable = true
-        setPadding(ctx.dp(32), ctx.dp(96), ctx.dp(32), ctx.dp(32))
-        addView(MaskLogo(ctx), LayoutParams(ctx.dp(96), ctx.dp(96)))
-        addView(TextView(ctx).apply {
-            text = "MaskTab"; textSize = 22f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.parseColor("#202124"))
-            gravity = Gravity.CENTER; setPadding(0, ctx.dp(12), 0, ctx.dp(28))
+        col.orientation = LinearLayout.VERTICAL
+        col.gravity = Gravity.CENTER_HORIZONTAL
+        col.setPadding(ctx.dp(32), ctx.dp(112), ctx.dp(32), ctx.dp(32))
+        logoBox.addView(MaskLogo(ctx, pal.acc, pal.onacc), LayoutParams(-1, -1))
+        col.addView(logoBox, LinearLayout.LayoutParams(ctx.dp(96), ctx.dp(96)))
+        col.addView(TextView(ctx).apply {
+            text = "MaskTab"; textSize = 22f; setTextColor(pal.on); gravity = Gravity.CENTER; setPadding(0, ctx.dp(18), 0, 0)
         })
+        sub = TextView(ctx).apply { text = "正在核验运行环境"; textSize = 14f; setTextColor(pal.on2); gravity = Gravity.CENTER; setPadding(0, ctx.dp(6), 0, ctx.dp(30)) }
+        col.addView(sub)
         for (s in steps) {
-            val row = LinearLayout(ctx).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, ctx.dp(7), 0, ctx.dp(7)) }
-            val ic = StepIcon(ctx)
-            row.addView(ic, LayoutParams(ctx.dp(22), ctx.dp(22)))
-            val col = LinearLayout(ctx).apply { orientation = VERTICAL; setPadding(ctx.dp(14), 0, 0, 0) }
-            col.addView(TextView(ctx).apply { text = s; textSize = 15f; setTextColor(Color.parseColor("#202124")) })
-            val d = TextView(ctx).apply { textSize = 12f; setTextColor(Color.parseColor("#5F6368")); visibility = GONE }
-            col.addView(d)
-            row.addView(col, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(row, LayoutParams(ctx.dp(260), LayoutParams.WRAP_CONTENT))
-            icons.add(ic); details.add(d)
+            val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; minimumHeight = ctx.dp(44) }
+            val ic = StepIcon(ctx, pal)
+            row.addView(ic, LinearLayout.LayoutParams(ctx.dp(24), ctx.dp(24)))
+            val nm = TextView(ctx).apply { text = s; textSize = 15f; setTextColor(pal.on3); setPadding(ctx.dp(14), 0, ctx.dp(8), 0) }
+            row.addView(nm, LinearLayout.LayoutParams(-2, -2))
+            val d = TextView(ctx).apply { textSize = 13f; setTextColor(pal.on2); gravity = Gravity.END; setSingleLine(); ellipsize = TextUtils.TruncateAt.END }
+            row.addView(d, LinearLayout.LayoutParams(0, -2, 1f))
+            col.addView(row, LinearLayout.LayoutParams(ctx.dp(320).coerceAtMost(ctx.resources.displayMetrics.widthPixels - ctx.dp(48)), -2))
+            icons.add(ic); details.add(d); names.add(nm)
         }
+        addView(col, LayoutParams(-1, -1))
+        prog.setBackgroundColor(pal.acc)
+        addView(prog, LayoutParams(0, ctx.dp(3), Gravity.BOTTOM))
     }
+
+    /** 底部留出导航栏的位置（insets 由外面给）。 */
+    fun insets(top: Int, bottom: Int) { (prog.layoutParams as LayoutParams).bottomMargin = bottom; col.setPadding(col.paddingLeft, context.dp(96) + top, col.paddingRight, context.dp(24) + bottom); requestLayout() }
 
     fun set(k: Int, state: Int, detail: String = "") {
         if (k !in icons.indices) return
         icons[k].state = state
         details[k].text = detail
-        details[k].visibility = if (detail.isEmpty()) GONE else VISIBLE
+        names[k].setTextColor(if (state == 0) pal.on3 else pal.on)
+        val done = icons.count { it.state >= 2 }
+        prog.layoutParams = (prog.layoutParams as LayoutParams).apply { width = this@StartupView.width * done / icons.size.coerceAtLeast(1) }
+        prog.requestLayout()
+        if (state == 4) sub.text = "有一步没过，点底部的版本号看诊断信息"
+    }
+
+    /** 换成实例头像（网络检测那一步）。 */
+    fun showInst(color: Int, no: String, flag: Bitmap?) {
+        logoBox.removeAllViews()
+        logoBox.addView(AvatarView(context).apply { set(color, no, flag); scale = 0.8f; ring = pal.bg }, LayoutParams(-1, -1))
+        logoBox.scaleX = 0.5f; logoBox.scaleY = 0.5f
+        logoBox.animate().scaleX(1f).scaleY(1f).setDuration(300).start()
+        sub.text = "#$no 正在核验出口"
     }
 }

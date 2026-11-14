@@ -26,7 +26,7 @@ object Bridge {
         val fail = { e: String -> reply(jsonOf("error" to e).toString()) }
         ui {
             try {
-                if (!native(m, seg, b ?: JSONObject(), ok, fail)) forward(m, p, seg, b, req.str("inst"), reply, fail)
+                if (!native(m, seg, b ?: JSONObject(), uri, ok, fail)) forward(m, p, seg, b, req.str("inst"), reply, fail)
             } catch (e: Exception) {
                 logw("接口出错 $m $p", e)
                 fail(e.message ?: e.toString())
@@ -35,8 +35,9 @@ object Bridge {
     }
 
     /** app 自己处理的接口。返回 false = 不归这里管，转给核心服务。 */
-    private fun native(m: String, seg: List<String>, b: JSONObject, ok: (Any?) -> Unit, fail: (String) -> Unit): Boolean {
+    private fun native(m: String, seg: List<String>, b: JSONObject, uri: Uri, ok: (Any?) -> Unit, fail: (String) -> Unit): Boolean {
         val k = "$m /" + seg.joinToString("/")
+        val q = { name: String -> uri.getQueryParameter(name) ?: "" }
         when {
             k == "GET /ext/state" -> ok(Core.extState())
             // ---------- 扩展 ----------
@@ -49,6 +50,11 @@ object Bridge {
             k == "POST /ui/close" -> { ok(null); mainHandler.post { Core.ui?.closeSheet() } }
             k == "POST /ui/tab" -> { val u = b.str("url").ifEmpty { null }; ok(null); mainHandler.post { Core.ui?.closeSheet(); Host.cur()?.let { Core.openTab(it.id, u) } } }
             k == "POST /ui/log" -> { Core.pageLog(b.str("msg")); ok(null) }
+            // 状态栏、导航栏跟着页面变色（盖了遮罩、底部表单），决策 UI-4
+            k == "POST /ui/bars" -> { ok(null); val src = b.str("src"); val dim = b.optBoolean("dim"); val sheet = b.optBoolean("sheet"); mainHandler.post { Core.ui?.pageBars(src, dim, sheet) } }
+            // 最近访问（按实例，app 记的；新标签页、历史记录页用）
+            k == "GET /ui/recent" -> ok(Recent.list(q("inst").ifEmpty { Host.current }, if (q("all") == "1") 60 else 6))
+            k == "POST /ui/recent/clear" -> { Recent.clear(q("inst").ifEmpty { Host.current }); ok(null) }
             k == "GET /api/diag" -> bg { val t = try { Core.diag() } catch (e: Exception) { "诊断信息没取全：$e" }; ui { ok(jsonOf("text" to t)) } }
             // ---------- 实例的开关：核心服务管代理，app 管标签页 ----------
             seg.size == 4 && seg[1] == "instances" && m == "POST" && seg[3] == "launch" -> {

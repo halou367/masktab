@@ -26,8 +26,11 @@
 电脑和手机用的是**同一个核心服务**（`cmd/masktab` + `internal/…`，手机上以 `-host android` 作为 app 的子进程运行）和**同一批页面文件**。改功能时只改一处：
 
 - 逻辑（实例、订阅、选线、探测、密码库、接口）→ 改 Go。不要在 `android/…/*.kt` 里再实现一遍；Kotlin 只管浏览器外壳（标签页、工具栏、GeckoView、把请求转给核心服务）。
-- 节点面板 → `companion/ext/panel.js` + `panel.css`；订阅与出口、设置 → `pages.js`；实例管理 → `instances.js`；实例菜单 → `menu.js`；自动填写、录入登录、登录页提示 → `autofill.js`（网页里）+ `vaultmsg.js`（后台里：存账号、存规则、存网页图标；两端后台各自只提供“怎么发请求、标签页属于哪个实例”）；实例卡片下的站点图标 → `sites.js`；两端共用的小函数 → `common.js`。
-  `companion/ext/popup.js`、`app.js` 和 `android/ext/main.js` 只是外壳，不要往里写功能。
+- 界面样式和组件（Chrome 风格，decisions UI-1）→ `ui.css` + `ui.js`（开关、行、分组标题、圆环、对话框、主题），不要在页面里另写一套；新标签页 → `ntp.js`。
+- 节点与出口、指纹与伪装 → `companion/ext/panel.js`（`panel.css` 只剩个别规则）；设置各页、订阅与地址库、诊断 → `pages.js`；实例管理 → `instances.js`；实例菜单 → `menu.js`；自动填写、录入登录、登录页提示 → `autofill.js`（网页里）+ `vaultmsg.js`（后台里：存账号、存规则、存网页图标；两端后台各自只提供“怎么发请求、标签页属于哪个实例”）；实例卡片下的站点图标 → `sites.js`；两端共用的小函数 → `common.js`。
+  `companion/ext/popup.js`、`app.js`、`newtab.js` 和 `android/ext/main.js`、`newtab.js` 只是外壳，不要往里写功能。
+  手机上浮在网页上的头像菜单、三点菜单、标签页切换器是原生画的（decisions UI-2），只读核心服务的状态、只调核心服务的接口或打开内置页面的路由，不在 Kotlin 里实现业务。
+- 新增共用文件要同步改三处：`android/app/build.gradle.kts` 的 BuildExt 拷贝清单，`.github/workflows/android.yml` 的 paths、语法检查清单、preview 的拷贝清单。
 - 两端确实不同的地方（内核做不到的）用状态里的 `kernel.caps` / `host` 判断后显示或隐藏，写在共用文件里，不要分叉成两份。
 - 共用文件里的类名、请求路径改了，两端一起受影响：跑 `android/scripts/preview-pages.mjs`（CI 也跑），它拿同一份状态画两端的面板并比对内容。
 - 核心服务状态（`GET /api/state`）的形状改了，重新抓一份 `android/scripts/fixture-state.json`（做法见 docs/android.md“本机联调”）。
