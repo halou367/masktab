@@ -50,9 +50,9 @@ jobs:
           ram-size: 4096M
           disk-size: 8G
           disable-animations: true
-          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -tcpdump /tmp/emu.pcap
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: timeout 1700 bash android/scripts/turnstile-probe.sh out/MaskTab-android-x86_64.apk out shots "${{ inputs.url }}" "${{ inputs.phases }}"
-      # 模拟器网卡上的全部流量（-tcpdump）：经节点的流量只会是发往 10.0.2.2:18388 的密文；
+      # 经代理那一段在模拟器里抓的包（不含发往节点 10.0.2.2:18388 的密文和本机回环）：
       # 这里列出“没走节点、直接出去”的 TLS 域名和 DNS 查询——网页的域名出现在这里就是漏了。
       - name: 列出没走节点的流量
         if: always()

@@ -132,7 +132,13 @@ if has mtproxy || has mtproxyoff; then
   A shell am force-stop $PKG; sleep 1
   if proxy_setup; then
     if has mtproxy; then
+      # 抓包：除了发往节点的密文和本机回环，其余离开模拟器的流量都记下来（看有没有网页的请求绕过了节点）
+      A root > /dev/null 2>&1; sleep 4; timeout 60 adb wait-for-device
+      adb shell "tcpdump -i any -U -s 0 -w /data/local/tmp/mt.pcap 'not (host 10.0.2.2 and port 18388) and not net 127.0.0.0/8 and not port 5555'" > "$OUT/tcpdump.txt" 2>&1 &
+      sleep 2
       PRE=25 start_mt; view mt-proxy; proxy_report mt-proxy
+      A shell pkill -INT tcpdump; sleep 2
+      A pull /data/local/tmp/mt.pcap /tmp/emu.pcap; ls -la /tmp/emu.pcap; cat "$OUT/tcpdump.txt"
       A shell am force-stop $PKG; sleep 2
     else start_mt; sleep 8; A shell am force-stop $PKG; sleep 2; fi
     if has mtproxyoff; then
