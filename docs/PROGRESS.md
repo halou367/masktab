@@ -351,3 +351,10 @@
   - 不能说明的：模拟器 + 机房 IP 本来就过不了，MaskTab 这层如果有额外扣分会被盖住。真手机上的原因仍未确定。
   - 日志里 MaskTab 独有的一条：`postMessage … target origin (challenges.cloudflare.com) does not match the recipient window’s origin`（每次 1~2 条，参照为 0），像是验证框加载被拖慢了；是否有影响未验证。
   - 注意：“伪装全关”时 `fp-boot.js` 仍在每个页面、每个内嵌框架（包括验证框）里运行：一条消息、一个同步请求（`fp.masktab.invalid`）、一条原生消息；后台的 `webRequest` 阻塞监听和 `proxy.onRequest` 也都还在。这一层没有开关。
+- 用户再反馈：手机**直连能过**，一走代理就 600010；**同一个节点电脑能过**。所以不是伪装那一层，是“手机 + 代理”这条路。
+- 探针加了“经代理”两段（runner 上起一个 ss 节点，出口 IP 与直连相同）和模拟器内抓包（运行 43721710588、43723819283）：
+  - 走代理后失败的样子和直连一样（约 90~110 秒后 600010，托管模式先给勾选框），**没有复现**手机上“7 秒失败、不给勾选框”的样子。
+  - 抓包：测试页相关的域名（ip.net.coffee、challenges.cloudflare.com 等）没有一条绕过节点直接出去，也没有 STUN。模拟器只有 IPv4，这个结论只对 IPv4 成立。
+  - 抓包里有本机发出的 DNS 查询：`www.cloudflare.com`、`ipinfo.io`、`ippure.com`（带 HTTPS 记录类型，看起来是内核发的；是 app 自己测出口用的域名，不是网页的域名）。待查，未改。
+  - Turnstile 会去连 `brunhild.challenges.cloudflare.com`（只有 AAAA 记录）/ `hagen.challenges.cloudflare.com`（只有 A 记录），即主动探测访客另一种地址族的出口。
+  - 代码上手机和电脑走同一个节点时的一处不同：宿主模式下 mihomo 用自己的解析服务器解析节点域名（`configgen.go` 的 `hostedDNS`），电脑用系统解析——节点域名挂在 Cloudflare 上时，两端可能进不同的入口，Worker 类节点的出口（尤其 Cloudflare 站点走的反代出口）就可能不同。**未证实**，等用户对比两端在测试页顶部看到的出口 IP 和边缘节点。
