@@ -343,3 +343,11 @@
 - 本地验证：`go vet`（含 Windows）、`go test ./...`、`node --check` 通过；`preview-pages.mjs` 69 项全过（新增：诊断页 11 个开关、“全部关掉”写进设置、被拒绝的请求列得出来、`fp.js` 关掉的项保持原样）。
 - 未验证：Kotlin 没有在本地编译（靠 CI）；开关在真机上的效果、重启按钮、内核偏好是否按开关写入——都要需求方在真机上试。
 - CI（提交 54cd622，#48）：六个任务全部通过（APK 编译通过；模拟器里设置首页出现“人机验证诊断”入口）。模拟器这次没有出现“认不出实例的请求”，对手机上的原因没有提供线索。已发布 `v0.1.48`。开关的实际效果等需求方真机反馈。
+- 用户反馈：手机上 11 项全关后仍然不过（ip.net.coffee/cloudflare：非交互 600010，7.4 秒；托管模式直接“验证失败”）。
+- 加了一个**只在 CI 里手动触发的探针**（`.github/workflows/probe.yml` + `android/scripts/turnstile-probe.sh`、`find-widget.py`，不改 app、不发布）：
+  同一台模拟器、同一个出口 IP、直连，依次用 Mozilla 的 GeckoView 示例壳（同内核、没有 MaskTab 的改动）、MaskTab 默认、MaskTab 伪装全关 打开同一个测试页，并点一下托管模式的勾选框。
+  - 结果（运行 43718908005、43719849700，Azure 机房 IP）：**三者表现一样**——非交互 60~110 秒后 600010；托管模式先出勾选框，点了之后“验证失败”。
+  - 能说明的：在这个环境里看不出 MaskTab 比原版内核多出什么差别；用户手机上看到的画面就是原版内核在“环境不被信任”时的画面。
+  - 不能说明的：模拟器 + 机房 IP 本来就过不了，MaskTab 这层如果有额外扣分会被盖住。真手机上的原因仍未确定。
+  - 日志里 MaskTab 独有的一条：`postMessage … target origin (challenges.cloudflare.com) does not match the recipient window’s origin`（每次 1~2 条，参照为 0），像是验证框加载被拖慢了；是否有影响未验证。
+  - 注意：“伪装全关”时 `fp-boot.js` 仍在每个页面、每个内嵌框架（包括验证框）里运行：一条消息、一个同步请求（`fp.masktab.invalid`）、一条原生消息；后台的 `webRequest` 阻塞监听和 `proxy.onRequest` 也都还在。这一层没有开关。
