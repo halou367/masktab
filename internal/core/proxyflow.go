@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/halou367/masktab/internal/exits"
@@ -276,6 +277,13 @@ func (a *App) firstETLocked() *model.Subscription {
 	return nil
 }
 
+// cfEgress：这个出口是不是 Cloudflare 自己的出站地址（edgetunnel 的 Workers 访问非 CF 网站时用的 104.28.x 等，
+// 归属显示为 Cloudflare WARP）。它的地理位置跟着 Workers 当次运行的机房走，几分钟内就能在韩国、日本之间来回变，
+// 不能拿来定时区和语言；网页里真正要紧的 Cloudflare 验证看到的是 CF 那一路（ProxyIP）。
+func cfEgress(x *model.IPInfo) bool {
+	return x != nil && strings.Contains(strings.ToLower(x.Org), "cloudflare")
+}
+
 // expectTZ 计算实例此刻应有的时区与语言（计划 8.5）。直连或普通窗口返回空（用系统值）。
 func expectTZ(in *model.Instance, pr *model.ExitProbe) (tz, lang, country string) {
 	if in.Kind == "normal" {
@@ -284,7 +292,7 @@ func expectTZ(in *model.Instance, pr *model.ExitProbe) (tz, lang, country string
 	var src *model.IPInfo
 	if pr != nil {
 		src = pr.CF
-		if in.TZ.Source == "exit-direct" && pr.Direct != nil {
+		if in.TZ.Source == "exit-direct" && pr.Direct != nil && !(cfEgress(pr.Direct) && pr.CF != nil) {
 			src = pr.Direct
 		}
 		if src == nil {
@@ -402,15 +410,21 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	}
 	a.mu.Lock()
 	r.Probe, r.Latency = &pr, lat
-	tz, _, _ := expectTZ(in, &pr)
+	tz, lang, _ := expectTZ(in, &pr)
 	r.NeedRestart = without(r.NeedRestart, "timezone")
 	switch {
 	case want.want == "REJECT":
 		r.Cut, r.Error = "", want.err // 主策略组本就停在 REJECT
 	case pr.Error != "" && state == "on":
 		r.Cut, r.Error = "出口探测失败", pr.Error
-	case masked && r.Running && tz != r.LaunchedTZ && a.adapter.Caps().Live:
-		r.LaunchedTZ, r.Cut, r.Error = tz, "", "" // 宿主随时把新时区交给页面，不用重启
+	case masked && r.Running && a.adapter.Caps().Live && (tz != r.LaunchedTZ || lang != r.LaunchedLang):
+		// 宿主（手机）：不再热换。运行中改时区 / 语言，内核里已有的会话状态（会话 Cookie、TLS 会话、内核指纹保护的会话随机数、
+		// 已打开网页里注入的旧时区）会和新值混在一起；真机上热换之后 Turnstile 一直 300010，彻底重启 app 才过（decisions A-11）。
+		// 网页继续用启动时的时区和语言（State 里按 LaunchedTZ / LaunchedLang 给），提示“需重启”；不断流——值和出口暂时对不上不会被拦，
+		// 而断流会让用户什么都打不开。
+		r.Cut, r.Error = "", ""
+		r.NeedRestart = append(r.NeedRestart, "timezone")
+		log.Printf("实例 #%d 出口时区 / 语言变了（%q %q → %q %q），网页沿用启动时的值，重启 MaskTab 后生效", in.No, r.LaunchedTZ, r.LaunchedLang, tz, lang)
 	case masked && r.Running && tz != r.LaunchedTZ:
 		r.Cut = "出口时区已变化，需要重启该实例"
 		r.NeedRestart = append(r.NeedRestart, "timezone")

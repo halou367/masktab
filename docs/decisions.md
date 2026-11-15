@@ -551,6 +551,20 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - **代价**：GeckoRuntime 只有一份，后台实例的标签页也跟着当前实例的语言；GeckoView 会把系统语言追加在 `navigator.languages` 后面（computeAcceptLanguages）。
 - **回退**：恢复 fp.js 语言段的条件、后台的 Accept-Language 监听，去掉 `applyLocale()` 调用。
 
+### A-11 手机：运行中不再热换时区 / 语言；edgetunnel 不按 Workers 出口定时区（2026-11-16，分支 fix/turnstile-hotswitch，未发布、未真机验证）
+
+- **现象（真机 v0.1.50，edgetunnel + ProxyIP）**：CF 网站出口一直是 ProxyIP 210.138.37.53（日本），“普通网站”出口是 Workers 的 104.28.x（Cloudflare WARP 段），
+  一会儿韩国一会儿日本。韩国时 Turnstile 过；变成日本后一直 300010，**彻底重启 app 才过**。
+- **推断**：实例的时区跟的是“普通网站”那一路（启动日志时区 Asia/Seoul 只能来自 104.28.164.13），Workers 换机房 → 核心服务热换时区和语言 →
+  手机上热换后某种只在进程内的状态和新值混在一起。沙箱（官方火狐 160 + 同款注入 + 韩/日语言包）实测：热换后新开 / 刷新的网页里，主线程和 Worker 的
+  navigator.language、Intl 默认语言都正确更新，热换前后 Turnstile 都 PASS——所以**残留的不是网页能看到的语言 / 时区值**，而是会话级状态
+  （会话 Cookie、TLS 会话、指纹保护的会话随机数、没刷新的网页里注入的旧时区）或核心服务 / mihomo 的状态。哪一样没定，等真机二分（work/turnstile-diag/REPORT-300010.md）。
+- **做法**：宿主模式下实例运行中出口时区 / 语言变了，不再热换：网页继续用启动时的值（`LaunchedTZ` / `LaunchedLang`），标“需重启”，不断流；
+  手机上“立即重启”重启整个 app（`/ui/restart`），因为 GeckoRuntime 一个进程只能建一次、内容进程没有接口单独重启。
+  `expectTZ` 跟“普通网站”那一路时，如果那一路归属是 Cloudflare（WARP / Workers 出口）且有 CF 那一路，改用 CF 那一路。
+- **代价**：手机上运行中改固定时区 / 语言、开关代理，也要重启 app 才生效。
+- **回退**：恢复 `refreshTry` 里 `Caps().Live` 那一支的热换、`State` 里按 Launched 值给的分支。
+
 ### UI-1 两端全部界面换成 Chrome 风格，一套组件
 
 - **结论**：电脑和手机的全部页面照安卓 Chrome 设置页的样子：分组标题（强调色小字）+ 一行一项（图标、标题、副标题、右边的开关或“>”），点开是选择框 / 输入框 / 底部表单。

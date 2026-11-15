@@ -211,6 +211,9 @@ func (a *App) State(me string) map[string]any {
 		}
 		if in.Kind != "normal" {
 			tz, lang, _ := expectTZ(in, r.Probe)
+			if a.hosted() && r.Running { // 手机：运行中不热换（decisions A-11），网页拿到的是本次启动时的值
+				tz, lang = r.LaunchedTZ, r.LaunchedLang
+			}
 			v.Info = &fpInfo{Seed: seed32(in.FP.Seed), Platform: in.FP.Platform, Brand: in.FP.Brand, Cores: cores(in), TZ: tz, Lang: lang}
 			if v.Info.Platform == "" {
 				v.Info.Platform = kernel.HostPlatform()

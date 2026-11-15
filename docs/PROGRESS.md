@@ -384,3 +384,9 @@
   - 抓包里有本机发出的 DNS 查询：`www.cloudflare.com`、`ipinfo.io`、`ippure.com`（带 HTTPS 记录类型，看起来是内核发的；是 app 自己测出口用的域名，不是网页的域名）。待查，未改。
   - Turnstile 会去连 `brunhild.challenges.cloudflare.com`（只有 AAAA 记录）/ `hagen.challenges.cloudflare.com`（只有 A 记录），即主动探测访客另一种地址族的出口。
   - 代码上手机和电脑走同一个节点时的一处不同：宿主模式下 mihomo 用自己的解析服务器解析节点域名（`configgen.go` 的 `hostedDNS`），电脑用系统解析——节点域名挂在 Cloudflare 上时，两端可能进不同的入口，Worker 类节点的出口（尤其 Cloudflare 站点走的反代出口）就可能不同。**未证实**，等用户对比两端在测试页顶部看到的出口 IP 和边缘节点。
+
+## 2026-11-16 Turnstile 300010（热换出口时区）排查
+
+- 真机 v0.1.50：600010 没了，换成 300010；切代理 / Workers 出口换国家后一直不过，彻底重启 app 才过。
+- 本地分支 `fix/turnstile-hotswitch`（未推送）：手机运行中不热换时区 / 语言，改提示重启 app；edgetunnel 不按 Workers（Cloudflare WARP）出口定时区。见 decisions A-11。
+- 报告与真机二分步骤：项目 work/turnstile-diag/REPORT-300010.md。下一步：等真机二分结果再决定是否要更细的“热更新”。

@@ -271,7 +271,9 @@ function mainView(me, sub) {
   const allAuto = () => { const curId = pipIdOf(px), pip = et && curId ? (sub.pips || []).find((x) => x.id === curId) : null; patch({ proxy: { exitMode: 'auto', entryMode: 'auto', region: (pip && pcc(pip)) || (px.region || ''), state: 'on' } }); };
   if (st.core.error) kids.push(banner(true, st.core.error, lk('重试', () => run(() => api('POST', '/api/setup/retry'), '正在重试…'))));
   const noexit = on && rt.notice?.startsWith('noexit:'), pipGone = on && sub && et && !exitAuto && p && p.direct && !p.cf;
-  if (rt.needRestart?.length) kids.push(banner(false, '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、'), lk('立即重启', () => run(() => api('POST', `/api/instances/${me.id}/restart`)))));
+  // 手机：重启实例换不掉内核里的会话状态，出口时区变了要重启整个 app 才算数（decisions A-11）
+  const restartNow = st.host === 'android' && rt.needRestart?.includes('timezone') ? () => api('POST', '/ui/restart') : () => api('POST', `/api/instances/${me.id}/restart`);
+  if (rt.needRestart?.length) kids.push(banner(false, '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、'), lk('立即重启', () => run(restartNow))));
   else if (noexit) kids.push(banner(true, noticeText(rt.notice, cname), lk('换国家', go('region'))));
   else if (pipGone) kids.push(banner(true, '出口不通：CF 网站连不上', lk('选别的', go('exit')), lk('改自动', allAuto)));
   else if (rt.cut || rt.error) kids.push(banner(true, rt.error || ('已断流：' + rt.cut), on && sub && !(exitAuto && entryAuto) && lk('改自动', allAuto)));

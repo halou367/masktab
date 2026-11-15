@@ -207,7 +207,7 @@ func (a *App) Launch(id string) error {
 	if a.hosted() { // 浏览器由宿主管：到这里代理、出口、时区都已就绪
 		in.LastUsedAt = now()
 		a.saveLocked("instances")
-		a.hostLaunched(id, in, r, tz)
+		a.hostLaunched(id, in, r, tz, lang)
 		if hostErr != "" {
 			r.Error = hostErr
 			a.bumpLocked("state", id)

@@ -26,23 +26,24 @@ import (
 
 // Runtime 是实例的运行期状态（不落盘，随接口下发给伴随扩展）。
 type Runtime struct {
-	Running     bool             `json:"running"`
-	Starting    bool             `json:"starting"`
-	Pid         int              `json:"pid,omitempty"`
-	Probe       *model.ExitProbe `json:"probe,omitempty"`
-	Latency     int              `json:"latency"` // 毫秒；0 未测；-1 失败
-	Want        string           `json:"want"`    // 策略组当前应选项：REJECT | DIRECT | 出站名
-	Cut         string           `json:"cut,omitempty"`
-	NeedRestart []string         `json:"needRestart,omitempty"`
-	Error       string           `json:"error,omitempty"`
-	Notice      string           `json:"notice,omitempty"`
-	LaunchedTZ  string           `json:"launchedTz"`
-	Up          int64            `json:"up"`   // 累计上传字节
-	Down        int64            `json:"down"` // 累计下载字节
-	UpRate      int64            `json:"upRate"`
-	DownRate    int64            `json:"downRate"`
-	Seen        int64            `json:"companionSeen,omitempty"`
-	Step        int              `json:"step,omitempty"` // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
+	Running      bool             `json:"running"`
+	Starting     bool             `json:"starting"`
+	Pid          int              `json:"pid,omitempty"`
+	Probe        *model.ExitProbe `json:"probe,omitempty"`
+	Latency      int              `json:"latency"` // 毫秒；0 未测；-1 失败
+	Want         string           `json:"want"`    // 策略组当前应选项：REJECT | DIRECT | 出站名
+	Cut          string           `json:"cut,omitempty"`
+	NeedRestart  []string         `json:"needRestart,omitempty"`
+	Error        string           `json:"error,omitempty"`
+	Notice       string           `json:"notice,omitempty"`
+	LaunchedTZ   string           `json:"launchedTz"`
+	LaunchedLang string           `json:"launchedLang,omitempty"` // 宿主模式：本次启动交给网页的语言（运行中不热换，见 decisions A-11）
+	Up           int64            `json:"up"`                     // 累计上传字节
+	Down         int64            `json:"down"`                   // 累计下载字节
+	UpRate       int64            `json:"upRate"`
+	DownRate     int64            `json:"downRate"`
+	Seen         int64            `json:"companionSeen,omitempty"`
+	Step         int              `json:"step,omitempty"` // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
 
 	active     bool // 是否已写入 mihomo 配置
 	probePort  int
