@@ -15,7 +15,15 @@ has() { case ",$PHASES," in *",$1,"*) return 0;; esac; return 1; }
 view() {
   sleep 25; shot "$1-early"
   sleep "${WAIT:-75}"; shot "$1-0"
-  for k in 1 2 3 4 5 6; do A shell input swipe 540 1700 540 800 600; sleep 1.5; shot "$1-$k"; done
+  for k in 1 2 3; do A shell input swipe 540 1700 540 800 600; sleep 1.5; shot "$1-$k"; done
+  # 托管模式的验证框这时在屏幕上：点一下“请验证您是真人”，看点了之后过不过
+  local xy; xy=$(python3 "$(dirname "$0")/find-widget.py" "$OUT/$1-3.png" 2>/dev/null)
+  if [ -n "$xy" ]; then
+    echo "$1：点勾选框 $xy"
+    # shellcheck disable=SC2086
+    A shell input tap $xy
+    sleep 6; shot "$1-tap-6s"; sleep 24; shot "$1-tap-30s"
+  else echo "$1：截图里没找到验证框"; fi
   A logcat -d -v time > "$OUT/$1-logcat.txt" 2>/dev/null
   grep -a -i "turnstile\|认不出实例\|MaskTab 指纹参数" "$OUT/$1-logcat.txt" | cut -c1-300 | head -40 > "$OUT/$1-notes.txt"
   echo "---- $1：日志里和验证有关的行"; cat "$OUT/$1-notes.txt"

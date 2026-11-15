@@ -32,6 +32,7 @@ jobs:
           curl -fsSL --retry 3 -m 300 -o out/ref.apk "https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/gecko.v2.mozilla-release.latest.mobile.android-x86_64-opt/artifacts/public/build/geckoview_example.apk" || echo "GeckoView 示例壳没下到"
           curl -fsSL --retry 3 -m 300 -o out/fenix.apk "https://archive.mozilla.org/pub/fenix/releases/160.0/android/fenix-160.0-android-x86_64/fenix-160.0.multi.android-x86_64.apk" || echo "Firefox 没下到"
           ls -la out
+          python3 -c "import PIL" 2>/dev/null || pip install --quiet pillow
       - name: 打开 KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
