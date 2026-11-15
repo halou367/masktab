@@ -4,7 +4,7 @@
 # 参照过、MaskTab 不过 → 问题在 MaskTab 这层壳，可以在这里继续二分；参照也不过 → 模拟器 / 机房 IP 本身过不去，这个办法测不出来。
 # 用法：turnstile-probe.sh <MaskTab.apk> <参照 apk 所在目录> <输出目录> [网址] [要跑的阶段，逗号分隔，默认全部]
 set -u
-APK=$1; REFDIR=$2; OUT=$3; URL=${4:-https://ip.net.coffee/cloudflare/}; PHASES=${5:-ref,fenix,mt,mtoff}
+APK=$1; REFDIR=$2; OUT=$3; URL=${4:-https://ip.net.coffee/cloudflare/}; PHASES=${5:-ref,mt,mtoff,mtproxy,mtproxyoff}
 PKG=com.masktab.browser; ACT=$PKG/.MainActivity
 ALL='["canvas","audio","hw","lang","tz","cfframe","block","ua","tp","fpp","sw"]'
 mkdir -p "$OUT"
@@ -59,17 +59,11 @@ start_mt() {
   A logcat -c
   T=90 A shell am start -W -n $ACT
   for k in $(seq 1 45); do sleep 2; A logcat -d -s MaskTab:I | grep -q "启动完成" && break; done
-  sleep 6
+  sleep "${PRE:-6}"
   A shell am start -a android.intent.action.VIEW -d "$URL" -n $ACT
 }
-if has mt || has mtoff; then T=300 A install -r -g "$APK" || { echo "MaskTab 安装失败"; exit 1; }; fi
-if has mt; then
-  start_mt; view mt-default
-  A shell am force-stop $PKG; sleep 2
-fi
-if has mtoff; then
-  # 伪装全关：直接改核心服务的设置文件和 app 的 host.json（等于在“人机验证诊断”里点全部关掉再重启）
-  if ! A shell "run-as $PKG ls files/core/config/settings.json" > /dev/null 2>&1; then start_mt; sleep 5; A shell am force-stop $PKG; sleep 2; fi
+# 伪装全关：直接改核心服务的设置文件和 app 的 host.json（等于在“人机验证诊断”里点全部关掉再重启）
+alloff() {
   A shell "run-as $PKG cat files/core/config/settings.json" > /tmp/s0.json 2>/dev/null
   A shell "run-as $PKG cat files/host.json" > /tmp/h0.json 2>/dev/null
   python3 - "$ALL" <<'PY'
@@ -83,9 +77,70 @@ for src, dst in (('/tmp/s0.json', '/tmp/s1.json'), ('/tmp/h0.json', '/tmp/h1.jso
 PY
   A push /tmp/s1.json /data/local/tmp/mt-s1.json > /dev/null; A push /tmp/h1.json /data/local/tmp/mt-h1.json > /dev/null
   A shell "run-as $PKG sh -c 'cp /data/local/tmp/mt-s1.json files/core/config/settings.json; cp /data/local/tmp/mt-h1.json files/host.json'" || echo "写设置失败"
+}
+# ---- 经代理：runner 上起一个节点（出口还是 runner 的 IP，和直连同一个 IP），实例 #1 走它 ----
+# 用户手机上是“直连能过、一走代理就 600010（7 秒、托管模式连勾选框都不给）”，这里看模拟器里走代理后失败的样子会不会从“直连那种”变成“手机那种”。
+BGPIDS=()
+proxy_setup() {
+  local W=/tmp/mt-node; mkdir -p $W
+  curl -fsSL --retry 3 -m 120 -o $W/mh.gz https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-linux-amd64-v1.19.34.gz || return 1
+  gunzip -f $W/mh.gz; chmod +x $W/mh
+  cat > $W/server.yaml <<'Y'
+log-level: info
+listeners:
+  - {name: ss-in, type: shadowsocks, listen: 0.0.0.0, port: 18388, cipher: aes-128-gcm, password: masktab-test, udp: false}
+rules: ["MATCH,DIRECT"]
+Y
+  setsid nohup $W/mh -d $W -f $W/server.yaml > $W/server.log 2>&1 < /dev/null & BGPIDS+=($!)
+  cat > $W/sub.yaml <<'Y'
+proxies:
+  - {name: "测试节点-runner", type: ss, server: 10.0.2.2, port: 18388, cipher: aes-128-gcm, password: masktab-test, udp: false}
+Y
+  setsid nohup python3 -m http.server 18080 --bind 0.0.0.0 --directory $W > $W/http.log 2>&1 < /dev/null & BGPIDS+=($!)
+  sleep 2
+  cat > $W/state.json <<'Y'
+{"instances":[
+ {"id":"p1","no":1,"name":"经代理","color":"#1A73E8","order":1,"node":"auto","seed":1234567,"tz":"","lang":"","createdAt":1}],
+ "subUrl":"http://10.0.2.2:18080/sub.yaml","searchUrl":"https://www.bing.com/search?q=%s","current":"p1","nextNo":2}
+Y
+  A shell am force-stop $PKG; sleep 1
+  A push $W/state.json /data/local/tmp/mt-state.json || return 1
+  A shell "run-as $PKG sh -c 'rm -rf files/core files/host.json files/tabs.json files/state.json.old; cp /data/local/tmp/mt-state.json files/state.json'" || return 1
+}
+proxy_report() {
+  local W=/tmp/mt-node
+  cp $W/server.log "$OUT/$1-node-server.log" 2>/dev/null
+  echo "$1：节点服务端日志里 ip.net.coffee $(grep -c 'ip.net.coffee' $W/server.log) 行，challenges.cloudflare.com $(grep -c 'challenges.cloudflare.com' $W/server.log) 行"
+  A shell "run-as $PKG cat files/core/config/instances.json" > "$OUT/$1-instances.json" 2>&1 || true
+  A shell "run-as $PKG cat files/host.json" > "$OUT/$1-host.json" 2>&1 || true
+}
+if has mt || has mtoff || has mtproxy || has mtproxyoff; then T=300 A install -r -g "$APK" || { echo "MaskTab 安装失败"; exit 1; }; fi
+if has mt; then
+  start_mt; view mt-default
+  A shell am force-stop $PKG; sleep 2
+fi
+if has mtoff; then
+  # 伪装全关：直接改核心服务的设置文件和 app 的 host.json（等于在“人机验证诊断”里点全部关掉再重启）
+  if ! A shell "run-as $PKG ls files/core/config/settings.json" > /dev/null 2>&1; then start_mt; sleep 5; A shell am force-stop $PKG; sleep 2; fi
+  alloff
   start_mt; view mt-alloff
   A shell "run-as $PKG cat files/geckoview-config.yaml" > "$OUT/mt-alloff-gecko-config.txt" 2>&1 || true
   A shell "run-as $PKG cat files/host.json" > "$OUT/mt-alloff-host.json" 2>&1 || true
   echo "---- 伪装全关时写给内核的偏好"; cat "$OUT/mt-alloff-gecko-config.txt"
+fi
+if has mtproxy || has mtproxyoff; then
+  A shell am force-stop $PKG; sleep 1
+  if proxy_setup; then
+    if has mtproxy; then
+      PRE=25 start_mt; view mt-proxy; proxy_report mt-proxy
+      A shell am force-stop $PKG; sleep 2
+    else start_mt; sleep 8; A shell am force-stop $PKG; sleep 2; fi
+    if has mtproxyoff; then
+      : > /tmp/mt-node/server.log
+      alloff
+      PRE=25 start_mt; view mt-proxy-alloff; proxy_report mt-proxy-alloff
+    fi
+  else echo "节点没搭起来，跳过经代理的两段"; fi
+  for p in "${BGPIDS[@]}"; do kill "$p" 2>/dev/null; done
 fi
 echo "探针跑完"
