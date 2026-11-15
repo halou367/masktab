@@ -105,7 +105,7 @@ Y
 Y
   A shell am force-stop $PKG; sleep 1
   A push $W/state.json /data/local/tmp/mt-state.json || return 1
-  A shell "run-as $PKG sh -c 'rm -rf files/core files/host.json files/tabs.json files/state.json.old; cp /data/local/tmp/mt-state.json files/state.json'" || return 1
+  A shell "run-as $PKG sh -c 'mkdir -p files; rm -rf files/core files/host.json files/tabs.json files/state.json.old; cp /data/local/tmp/mt-state.json files/state.json'" || return 1
 }
 proxy_report() {
   local W=/tmp/mt-node
