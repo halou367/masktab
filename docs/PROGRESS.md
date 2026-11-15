@@ -34,7 +34,10 @@
 - **没有验证的**：**没在真机验证，需要需求方用手机开代理测 ip.net.coffee/cloudflare**（非交互和托管模式各一次），再试一次切换不同语言的实例后刷新。
   沙箱里的通过是在官方火狐 160 桌面版上，CI 只有模拟器 + 机房 IP（那里 Turnstile 本来就过不了，只能验证语言一致，不能验证验证码能过）。
 - **推送记录**（需求方担心 GitHub 风控，本轮最多推 3 次）：
-  - 第 1 次：分支 `fix/turnstile-locale`，结果下次推送时补记。
+  - 第 1 次：分支 `fix/turnstile-locale` 92f2483。CI #49：单元测试、Linux 冒烟、Windows 安装程序与冒烟全部通过；Android #18：APK 构建通过（Kotlin 改动编译通过，两端界面一致性检查通过），
+    模拟器冒烟 0 项失败：切到 #3 / #4 时内核语言设成 ja-JP / de-DE；指纹自检三次全过，`languages` 为 `ja-JP/ja/en-US`、`de-DE/de/en-US`，
+    Worker 里的语言与主线程一致（ja-JP / de-DE），Worker 里的时区仍是 UTC（已知，见上）。
+  - 第 2 次：`fix/turnstile-locale` 快进合并进 `main`（需求方已批准正式发布），本条随这次合并一起提交。`main` 上的 CI 与 Release 结果写这条时还没跑完，下次推送时补记。
 
 ## 2026-11-15：Chrome 风格界面（decisions UI-1 ~ UI-6）
 
