@@ -1,0 +1,57 @@
+# 人机验证探针：手动触发，不参与发布。在模拟器里用参照浏览器和 MaskTab 各开一遍 Turnstile 测试页并截图，见 android/scripts/turnstile-probe.sh。
+name: Probe
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 从哪一次运行取 MaskTab-android-x86_64 产物（运行 id）
+        required: true
+      url:
+        description: 测试页
+        default: https://ip.net.coffee/cloudflare/
+      phases:
+        description: 要跑的阶段（ref,fenix,mt,mtoff）
+        default: ref,fenix,mt,mtoff
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  probe:
+    name: Turnstile 探针（模拟器）
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: 取 APK（MaskTab 用已有的构建产物；参照浏览器从 Mozilla 下载）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.run_id }}" -n MaskTab-android-x86_64 -D out --repo "$GITHUB_REPOSITORY"
+          curl -fsSL --retry 3 -m 300 -o out/ref.apk "https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/gecko.v2.mozilla-release.latest.mobile.android-x86_64-opt/artifacts/public/build/geckoview_example.apk" || echo "GeckoView 示例壳没下到"
+          curl -fsSL --retry 3 -m 300 -o out/fenix.apk "https://archive.mozilla.org/pub/fenix/releases/160.0/android/fenix-160.0-android-x86_64/fenix-160.0.multi.android-x86_64.apk" || echo "Firefox 没下到"
+          ls -la out
+      - name: 打开 KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: 启动模拟器并测试
+        timeout-minutes: 35
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: timeout 1700 bash android/scripts/turnstile-probe.sh out/MaskTab-android-x86_64.apk out shots "${{ inputs.url }}" "${{ inputs.phases }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turnstile-probe
+          path: shots
