@@ -50,8 +50,23 @@ jobs:
           ram-size: 4096M
           disk-size: 8G
           disable-animations: true
-          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -tcpdump /tmp/emu.pcap
           script: timeout 1700 bash android/scripts/turnstile-probe.sh out/MaskTab-android-x86_64.apk out shots "${{ inputs.url }}" "${{ inputs.phases }}"
+      # 模拟器网卡上的全部流量（-tcpdump）：经节点的流量只会是发往 10.0.2.2:18388 的密文；
+      # 这里列出“没走节点、直接出去”的 TLS 域名和 DNS 查询——网页的域名出现在这里就是漏了。
+      - name: 列出没走节点的流量
+        if: always()
+        run: |
+          ls -la /tmp/emu.pcap || exit 0
+          sudo apt-get install -y -qq tshark > /dev/null 2>&1 || true
+          mkdir -p shots
+          tshark -r /tmp/emu.pcap -Y 'tls.handshake.type == 1' -T fields -e frame.time_relative -e ip.dst -e ipv6.dst -e tcp.dstport -e tls.handshake.extensions_server_name 2>/dev/null > shots/direct-tls.txt || true
+          tshark -r /tmp/emu.pcap -Y 'quic' -T fields -e frame.time_relative -e ip.dst -e udp.dstport -e tls.handshake.extensions_server_name 2>/dev/null | awk '$4 != ""' > shots/direct-quic.txt || true
+          tshark -r /tmp/emu.pcap -Y 'dns.flags.response == 0' -T fields -e frame.time_relative -e dns.qry.name -e dns.qry.type 2>/dev/null > shots/direct-dns.txt || true
+          tshark -r /tmp/emu.pcap -Y 'stun || (udp && !dns && !quic && !mdns && !dhcp)' -T fields -e frame.time_relative -e ip.dst -e udp.dstport 2>/dev/null | sort -k2 -u > shots/direct-udp.txt || true
+          echo "== 直接出去的 TLS 域名（次数）"; awk '{print $NF}' shots/direct-tls.txt | sort | uniq -c | sort -rn | head -60
+          echo "== DNS 查询（次数）"; awk '{print $2}' shots/direct-dns.txt | sort | uniq -c | sort -rn | head -80
+          echo "== 其它 UDP 目的地"; head -30 shots/direct-udp.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
