@@ -10,6 +10,9 @@
 const NATIVE = 'masktab';
 let insts = {};          // 实例 id → {id,no,port,direct,seed,tz,lang}
 let searchUrl = '';
+let off = new Set();     // 人机验证诊断里关掉的项（设置 fpOff，app 随状态一起给）
+let lastInst = '';       // 最近一个认得出实例的网页请求属于谁（诊断：“认不出的请求不拒绝”时借它的线路）
+const blocked = { n: 0, list: [], seen: new Set() }; // 认不出实例而被拒绝（或诊断时放行）的请求：条数、最近 20 条
 const tabInst = new Map(); // tabId → 实例 id
 const tabCs = new Map();   // tabId → cookieStoreId
 const csInst = new Map();  // cookieStoreId（容器）→ 实例 id
@@ -34,6 +37,7 @@ function applyState(s) {
   for (const x of s.insts) m[x.id] = x;
   insts = m;
   if (s.searchUrl) searchUrl = s.searchUrl;
+  off = new Set(Array.isArray(s.off) ? s.off : []);
   for (const id of Object.keys(m)) csInst.set(csOf(id), id);
   for (const [cs, id] of csInst) if (!m[id]) csInst.delete(cs);
 }
@@ -96,19 +100,34 @@ browser.proxy.onRequest.addListener(async (d) => {
   await ready;
   let id = await instOfTab(d.tabId);
   if (!id) id = idOfCs(d.cookieStoreId) || (isContainer(d.cookieStoreId) && csInst.get(d.cookieStoreId)) || null;
-  if (id) return routeFor(id);
+  if (id) { if (d.tabId >= 0) lastInst = id; return routeFor(id); }
   // 不属于任何网页标签：扩展自己、app 内部的请求（来源是 moz-extension 或没有来源）直连；其余认不出实例的一律拒绝
   const from = d.documentUrl || d.originUrl || '';
   if (d.tabId < 0 && (!from || from.startsWith('moz-extension:') || from.startsWith('resource:') || from.startsWith('chrome:'))) return { type: 'direct' };
-  return BLOCK;
+  // 记下来（设置 → 人机验证诊断里能看到，也进诊断信息）：网页的后台线程发的请求如果认不出实例，验证组件就会卡死，这是要排查的可疑点之一
+  const pass = off.has('block') && insts[lastInst] ? lastInst : '';
+  noteBlocked(d, from, pass);
+  return pass ? routeFor(pass) : BLOCK; // 诊断时放行也只走实例的线路，绝不直连
 }, { urls: ['<all_urls>'] });
+function noteBlocked(d, from, pass) {
+  const host = (u) => { try { return new URL(u).host; } catch { return ''; } };
+  const e = { t: Date.now(), host: host(d.url), type: d.type || '', from: host(from), tab: d.tabId, cs: d.cookieStoreId || '', pass: !!pass };
+  blocked.n++;
+  blocked.list.push(e);
+  if (blocked.list.length > 20) blocked.list.shift();
+  const k = `${e.host}|${e.type}|${e.from}`;
+  if (blocked.seen.size < 40 && !blocked.seen.has(k)) { // 每种只进一次日志，免得刷屏
+    blocked.seen.add(k);
+    console.warn(`MaskTab 认不出实例的请求（${pass ? '诊断放行' : '已拒绝'}）`, e.host, e.type, '来自', e.from || '—', 'tab=' + e.tab, 'cs=' + e.cs);
+  }
+}
 browser.proxy.onError.addListener((e) => console.warn('代理错误', e?.message));
 
 // ---------- Accept-Language ----------
 browser.webRequest.onBeforeSendHeaders.addListener(async (d) => {
   const id = await instOfTab(d.tabId);
   const lang = id && insts[id]?.lang;
-  if (!lang) return {};
+  if (!lang || off.has('lang')) return {};
   const base = lang.split('-')[0];
   const v = base !== lang ? `${lang},${base};q=0.9,en;q=0.8` : `${lang},en;q=0.8`;
   const hs = d.requestHeaders.filter((x) => x.name.toLowerCase() !== 'accept-language');
@@ -202,6 +221,7 @@ browser.runtime.onMessage.addListener((m, sender) => {
   }
   if (t === 'fp:cfg' && sender.tab) return instOfTab(sender.tab.id).then((id) => (id ? fpCfg(id) : null));
   if (t === 'fp:who' && sender.tab && typeof m.n === 'string') { ready.then(() => instOfTab(sender.tab.id)).then((id) => fpAnnounce(m.n, id), () => fpAnnounce(m.n, null)); return; }
+  if (t === 'diag:blocked' && !sender.tab?.url?.startsWith('http')) return Promise.resolve({ n: blocked.n, list: blocked.list.slice().reverse() }); // 只给扩展自己的页面
   if (t.startsWith('vault:')) return vaultMsg(m, sender).then((r) => ({ ok: true, r }), (e) => ({ ok: false, error: e.message }));
   if (t === 'search') return Promise.resolve(searchUrl);
   // 实例菜单里的“录入登录”（扩展自己的页面发来）：转给这个实例正显示着的网页；没有就记下来，等下一个网页接手。

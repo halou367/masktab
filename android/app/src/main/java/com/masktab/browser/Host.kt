@@ -63,12 +63,13 @@ object Fp {
      */
     fun userAgent(seed: Long): String {
         val base = GeckoSession.getDefaultUserAgent()
+        if ("ua" in Host.fpOff) return base // 人机验证诊断：用内核原本的 UA
         val v = listOf(12, 13, 14, 15)[((seed ushr 5) % 4).toInt()]
         return base.replace(Regex("Android [0-9.]+"), "Android $v")
     }
 
     /** 交给内置扩展的每实例参数（页面里的伪装由扩展的 fp.js 按种子推导）。 */
-    fun cfg(i: Inst): JSONObject = jsonOf("id" to i.id, "no" to i.no, "seed" to i.seed, "tz" to i.tz, "lang" to i.lang, "port" to i.port, "direct" to false)
+    fun cfg(i: Inst): JSONObject = jsonOf("id" to i.id, "no" to i.no, "seed" to i.seed, "tz" to i.tz, "lang" to i.lang, "port" to i.port, "direct" to false, "off" to JSONArray(Host.fpOff.toList()))
 }
 
 /** 核心服务子进程。 */
@@ -261,12 +262,26 @@ object Host {
 
     fun init(c: Context) {
         file = File(c.filesDir, "host.json")
-        try { current = JSONObject(file.readText()).str("current") } catch (e: Exception) { }
+        try {
+            val j = JSONObject(file.readText())
+            current = j.str("current")
+            fpOff = j.optJSONArray("fpOff")?.strings()?.toSet() ?: emptySet()
+        } catch (e: Exception) { }
+    }
+    /**
+     * 人机验证诊断里关掉的伪装项（设置里的 fpOff，决策 A-9）。和 current 一起存在本机：
+     * 内核偏好要在核心服务起来之前就写好，所以启动时先用上次存的。
+     */
+    @Volatile var fpOff: Set<String> = emptySet()
+        private set
+    private fun saveHost() {
+        val j = jsonOf("current" to current, "fpOff" to JSONArray(fpOff.toList())).toString()
+        bg { writeAtomic(file, j.toByteArray()) }
     }
     fun saveCurrent(id: String) {
         if (current == id) return
         current = id
-        bg { writeAtomic(file, jsonOf("current" to id).toString().toByteArray()) }
+        saveHost()
     }
     fun get(id: String?): Inst? = insts.firstOrNull { it.id == id }
     fun cur(): Inst? = get(current) ?: insts.firstOrNull()
@@ -307,6 +322,8 @@ object Host {
         val set = j.optJSONObject("settings") ?: JSONObject()
         searchUrl = set.str("searchUrl").ifEmpty { null } ?: searchUrl
         theme = set.str("theme").ifEmpty { "dark" }
+        val off = set.optJSONArray("fpOff")?.strings()?.toSet() ?: emptySet()
+        if (off != fpOff) { fpOff = off; saveHost() }
         bookmarks = (set.optJSONArray("bookmarks")?.objects() ?: emptyList()).map { it.str("title") to it.str("url") }
         rules = j.optJSONObject("vault")?.optJSONArray("rules")?.length() ?: 0
         mihomoOk = core.optBoolean("ok"); mihomoVersion = core.str("version"); coreError = core.str("error").ifEmpty { j.optJSONObject("setup")?.str("coreError") ?: "" }

@@ -18,7 +18,7 @@ import { menuView } from './menu.js';
 import { instancesView } from './instances.js';
 import { syncIcons, siteIcon } from './sites.js';
 import { panel } from './panel.js';
-import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView } from './pages.js';
+import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView, verifyView } from './pages.js';
 
 const root = document.getElementById('root');
 const BOOT = window.MTBOOT || { report() {}, fail() {}, ready: false };
@@ -91,7 +91,9 @@ function bars() {
 addEventListener('mt-bars', bars);
 
 // ---------- 页面 ----------
-const ctx = () => ({ st, act, open, back, render: () => render(true), link: (u) => api('POST', '/ui/tab', { url: u }), diag: async () => (await api('GET', '/api/diag')).text || '' });
+const ctx = () => ({ st, act, open, back, render: () => render(true), link: (u) => api('POST', '/ui/tab', { url: u }), diag: async () => (await api('GET', '/api/diag')).text || '',
+  // 人机验证诊断页用：被拒绝的请求在内置扩展的后台里记着；重启由 app 做
+  blocked: () => browser.runtime.sendMessage({ t: 'diag:blocked' }), restart: () => api('POST', '/ui/restart') });
 
 // 节点与出口 / 指纹与伪装：整页就是共用的节点面板（panel.js）。这里只告诉它外壳的事。
 panel.init(root, { load: () => load(true), render: () => render(true), open, back: goBack, backTitle: '返回' });
@@ -143,7 +145,7 @@ function render(force) {
     if (!st.me) throw new Error('没有实例');
     const c = ctx();
     const view = {
-      settings: () => settingsHome(c), 'settings/adv': () => settingsAdv(c), 'settings/about': () => settingsAbout(c), 'settings/ntp': () => settingsNtp(c),
+      settings: () => settingsHome(c), 'settings/adv': () => settingsAdv(c), 'settings/about': () => settingsAbout(c), 'settings/ntp': () => settingsNtp(c), 'settings/verify': () => verifyView(c),
       node: () => panel.kids(), fp: () => panel.kids(), instances: () => instancesView({ st, act, load, render: () => render(true), lite: true, back }),
       exits: () => exitsView(c), addons: addonsPage, diag: () => diagView(c), history: historyPage,
       menu: () => [appBar('', back), menuView(st, { node: () => open('node'), fp: () => open('fp'), open, render: () => render(true) })],

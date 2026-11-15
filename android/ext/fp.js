@@ -81,6 +81,7 @@
     const FF = typeof exportFunction === 'function'; // 火狐内容脚本（有 Xray 隔离）；否则是普通页面环境（测试）
     const clone = typeof cloneInto === 'function' ? (o) => cloneInto(o, page) : (o) => o;
     const pr = profile(cfg.seed);
+    const off = new Set(cfg.off || []); // 人机验证诊断里关掉的项（设置 → 人机验证诊断），关掉的那一项保持内核原样
     const tryit = (f) => { try { f(); } catch (e) { /* 某一项失败不影响其它项和页面 */ } };
     // 把内容脚本里的函数交给页面，并让它看起来和原生函数一样：
     // - 用 defineAs 导出，函数自带名字，toString() 得到 "function 名字() { [native code] }"（不给名字时是匿名函数，一查就露馅）
@@ -107,7 +108,7 @@
     });
 
     // ---- 画布 ----
-    tryit(() => {
+    if (!off.has('canvas')) tryit(() => {
       const C2 = page.CanvasRenderingContext2D.prototype;
       const oGet = C2.getImageData;
       method(C2, 'getImageData', (orig) => function (...a) { const img = orig.call(this, ...a); tryit(() => noisePixels(img.data, pr.key)); return img; });
@@ -128,17 +129,17 @@
       method(HC, 'toBlob', (orig) => function (...a) { let src = this; tryit(() => { src = noisy(this); }); return orig.call(src, ...a); });
     });
     // ---- 音频 ----
-    tryit(() => {
+    if (!off.has('audio')) tryit(() => {
       method(page.AudioBuffer.prototype, 'getChannelData', (orig) => function (...a) { const d = orig.call(this, ...a); tryit(() => noiseSamples(d, pr.key)); return d; });
     });
     // ---- 硬件、屏幕 ----
-    getter(page.Navigator.prototype, 'hardwareConcurrency', function () { return pr.cores; });
-    tryit(() => {
+    if (!off.has('hw')) getter(page.Navigator.prototype, 'hardwareConcurrency', function () { return pr.cores; });
+    if (!off.has('hw')) tryit(() => {
       const d = Object.getOwnPropertyDescriptor(page.Screen.prototype, 'availHeight');
       if (d && d.get) getter(page.Screen.prototype, 'availHeight', function () { return Math.max(0, d.get.call(this) - pr.availCut); });
     });
     // ---- 语言 ----
-    if (cfg.lang) tryit(() => {
+    if (cfg.lang && !off.has('lang')) tryit(() => {
       const base = cfg.lang.split('-')[0];
       const langs = clone(base !== cfg.lang ? [cfg.lang, base] : [cfg.lang]);
       tryit(() => page.Object.freeze(langs));
@@ -146,7 +147,7 @@
       getter(page.Navigator.prototype, 'languages', function () { return langs; });
     });
     // ---- 时区 ----
-    if (cfg.tz) tryit(() => {
+    if (cfg.tz && !off.has('tz')) tryit(() => {
       const tz = cfg.tz;
       partsFmt(tz); // 时区名不对时这里抛错，整段跳过
       const REAL = Intl.DateTimeFormat().resolvedOptions().timeZone;

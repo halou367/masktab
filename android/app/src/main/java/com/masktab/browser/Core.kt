@@ -122,15 +122,18 @@ object Core {
     /** Gecko 偏好：开指纹保护；WebRTC 只走代理、不暴露本机地址；关 Service Worker（它的请求不带标签页，没法按实例分流，见 docs/android.md）。 */
     private fun writeGeckoConfig(): String {
         val f = File(app.filesDir, "geckoview-config.yaml")
+        // 人机验证诊断（决策 A-9）可以把这两项暂时还原成内核默认；重启 app 生效
+        val fpp = "fpp" !in Host.fpOff
+        val sw = "sw" in Host.fpOff
         f.writeText(
             """
             prefs:
-              privacy.fingerprintingProtection: true
+              privacy.fingerprintingProtection: $fpp
               media.peerconnection.ice.proxy_only_if_behind_proxy: true
               media.peerconnection.ice.default_address_only: true
               media.peerconnection.ice.no_host: true
               network.proxy.socks_remote_dns: true
-              dom.serviceWorkers.enabled: false
+              dom.serviceWorkers.enabled: $sw
               signon.rememberSignons: false
             """.trimIndent() + "\n",
         )
@@ -145,7 +148,7 @@ object Core {
             .loginAutofillEnabled(false)
             .build()
         val rt = GeckoRuntime.create(app, s)
-        rt.settings.setFingerprintingProtection(true)
+        rt.settings.setFingerprintingProtection("fpp" !in Host.fpOff)
         rt.webExtensionController.setPromptDelegate(installPrompt)
         runtime = rt
         return rt
@@ -183,7 +186,7 @@ object Core {
             GeckoSessionSettings.Builder()
                 .contextId(i.contextId)
                 .userAgentOverride(Fp.userAgent(i.seed))
-                .useTrackingProtection(true)
+                .useTrackingProtection("tp" !in Host.fpOff)
                 .suspendMediaWhenInactive(true)
                 .build(),
         )
@@ -446,8 +449,16 @@ object Core {
     fun extState(): JSONObject {
         val arr = JSONArray()
         for (i in Host.insts) arr.put(Fp.cfg(i))
-        return jsonOf("t" to "state", "insts" to arr, "searchUrl" to Host.searchUrl)
+        return jsonOf("t" to "state", "insts" to arr, "searchUrl" to Host.searchUrl, "off" to JSONArray(Host.fpOff.toList()))
     }
+    /** 重启整个 app（人机验证诊断改了内核偏好之后用）：先请系统重新打开主界面，再结束本进程；核心服务随输入管道关闭自己退出。 */
+    fun restartApp() {
+        val i = app.packageManager.getLaunchIntentForPackage(app.packageName) ?: return
+        i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        app.startActivity(i)
+        Runtime.getRuntime().exit(0)
+    }
+
     fun pushState() = ui { try { bgPort?.postMessage(extState()) } catch (e: Exception) { logw("推送状态失败", e) } }
 
     /**

@@ -56,7 +56,7 @@ const mock = (state) => {
   window.__calls = [];
   const rt = {
     sendNativeMessage: async (app, msg) => { window.__calls.push(msg); return msg.t === 'hello' ? { id: 'p2', seed: 1, tz: 'Asia/Tokyo', lang: 'ja-JP' } : JSON.stringify({ data: reply(msg.m, msg.p) }); },
-    sendMessage: async () => ({ ok: true, reg: 'sync' }),
+    sendMessage: async (m) => (m?.t === 'diag:blocked' ? { n: 2, list: [{ t: Date.now(), host: 'challenges.cloudflare.com', type: 'xmlhttprequest', from: 'challenges.cloudflare.com', tab: -1, cs: '', pass: false }, { t: Date.now(), host: 'a.example', type: 'script', from: 'b.example', tab: -1, cs: '', pass: true }] } : { ok: true, reg: 'sync' }),
   };
   window.browser = { runtime: rt };
   // 电脑版的页面（第三个参数给了电脑版扩展目录时才用到）：chrome.* 只要这几样
@@ -123,13 +123,27 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
   check('设置首页画出来', i.page === 'settings' && i.title === '设置' && await pg.locator('.sec', { hasText: 'MaskTab' }).count() === 1, i);
   // 设置首页的每一项：点进去 → 对应页面 → 返回回到设置首页
   const items = [['实例', 'instances', '实例'], ['节点与出口', 'node', '节点与出口'], ['订阅与地址库', 'exits', '订阅与地址库'], ['指纹与伪装', 'fp', '指纹与伪装'],
-    ['扩展', 'addons', '扩展'], ['组件与更新', 'settings/about', '组件与更新'], ['诊断', 'diag', '诊断'], ['新标签页', 'settings/ntp', '自定义新标签页'], ['高级', 'settings/adv', '高级']];
+    ['扩展', 'addons', '扩展'], ['组件与更新', 'settings/about', '组件与更新'], ['诊断', 'diag', '诊断'], ['人机验证诊断', 'settings/verify', '人机验证诊断'], ['新标签页', 'settings/ntp', '自定义新标签页'], ['高级', 'settings/adv', '高级']];
   for (const [label, route, title] of items) {
     await pg.locator('button.row', { has: pg.locator('.t', { hasText: new RegExp(`^${label}$`) }) }).first().click();
     await pg.waitForTimeout(350);
     i = await info();
     check(`设置 → ${label}`, i.hash === route && i.title === title, i);
     if (label === '指纹与伪装') check('指纹与伪装：列出 10 项一致性检查', i.chk === 10, i);
+    if (label === '人机验证诊断') {
+      // 手机专有（决策 A-9）：11 个伪装项各一个开关；“全部关掉”把 11 项写进设置；被拒绝的请求能列出来
+      const nsw = await pg.locator('.row .sw, .row [role=switch], .row input[type=checkbox]').count();
+      check('人机验证诊断：11 个伪装项各有一个开关', nsw === 11, nsw);
+      await pg.locator('button.row', { hasText: '全部关掉' }).first().click();
+      await pg.waitForTimeout(300);
+      const b = (await calls()).filter((c) => c.m === 'PATCH' && c.p === '/api/settings').pop()?.b;
+      check('“全部关掉”把 11 项写进设置的 fpOff', Array.isArray(b?.fpOff) && b.fpOff.length === 11 && b.fpOff.includes('cfframe') && b.fpOff.includes('block'), b);
+      await pg.locator('button.row', { hasText: '验证失败之后马上点这里' }).first().click();
+      await pg.waitForTimeout(300);
+      const txt = await pg.locator('#root, body').first().innerText();
+      check('被拒绝的请求列得出来（已拒绝 / 诊断放行各一条）', txt.includes('challenges.cloudflare.com') && txt.includes('已拒绝') && txt.includes('诊断放行') && txt.includes('本次启动以来 2 条'), txt.slice(-300));
+      await pg.screenshot({ path: path.join(out, 'verify.png') });
+    }
     await back();
     i = await info();
     check(`${label} 返回回到设置首页`, i.hash === 'settings' && i.title === '设置', i);
@@ -385,6 +399,19 @@ const fp = await pg.evaluate(() => {
     tzo: d.getTimezoneOffset(), hours: d.getHours(), str: d.toString(), loc: d.toLocaleString('en-US'), intl: new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false }).format(d), ro: Intl.DateTimeFormat().resolvedOptions().timeZone };
 });
 console.log(JSON.stringify(fp, null, 1));
+// 人机验证诊断关掉某几项时，fp.js 对应的部分保持内核原样，其余照改
+const pg2 = await ctx.newPage();
+await pg2.goto(base + 'newtab.html#inst=p2&go=about:blank');
+await pg2.addScriptTag({ path: path.join(dir, 'fp.js') });
+const fp2 = await pg2.evaluate(() => {
+  const draw = () => { const c = document.createElement('canvas'); c.width = 60; c.height = 20; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 60, 20); x.fillStyle = '#069'; x.fillText('MaskTab', 4, 14); return c.toDataURL(); };
+  const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+  const b = { cv: draw(), tzo: d.getTimezoneOffset(), lang: navigator.language, cores: navigator.hardwareConcurrency, nat: Date.prototype.getTimezoneOffset };
+  window.MTFP.run(window, { seed: 111, tz: 'Pacific/Kiritimati', lang: 'ja-JP', off: ['canvas', 'tz', 'hw'] });
+  return { cv: draw() === b.cv, tz: d.getTimezoneOffset() === b.tzo && Date.prototype.getTimezoneOffset === b.nat, cores: navigator.hardwareConcurrency === b.cores, lang: navigator.language };
+});
+check('诊断关掉画布 / 时区 / 核心数：这三样保持原样，没关的语言照改', fp2.cv && fp2.tz && fp2.cores && fp2.lang === 'ja-JP', fp2);
+console.log(flow[flow.length - 1]);
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');
 await br.close();
 srv.close();

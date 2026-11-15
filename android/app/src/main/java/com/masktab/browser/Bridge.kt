@@ -49,6 +49,7 @@ object Bridge {
             k == "POST /ui/open" -> { val r = b.str("route"); val full = b.optBoolean("full", true); ok(null); mainHandler.post { Core.ui?.openSheet(r, full) } }
             k == "POST /ui/close" -> { ok(null); mainHandler.post { Core.ui?.closeSheet() } }
             k == "POST /ui/tab" -> { val u = b.str("url").ifEmpty { null }; ok(null); mainHandler.post { Core.ui?.closeSheet(); Host.cur()?.let { Core.openTab(it.id, u) } } }
+            k == "POST /ui/restart" -> { ok(null); mainHandler.postDelayed({ Core.restartApp() }, 400) }
             k == "POST /ui/log" -> { Core.pageLog(b.str("msg")); ok(null) }
             // 状态栏、导航栏跟着页面变色（盖了遮罩、底部表单），决策 UI-4
             k == "POST /ui/bars" -> { ok(null); val src = b.str("src"); val dim = b.optBoolean("dim"); val sheet = b.optBoolean("sheet"); mainHandler.post { Core.ui?.pageBars(src, dim, sheet) } }

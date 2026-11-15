@@ -30,6 +30,7 @@ export function settingsHome(c) {
     row({ ic: 'ext', t: '扩展', s: hosted(st) ? 'Firefox 扩展（全部实例共用）' : `${st.extensions.length} 个 · ${st.extensions.filter((x) => x.enabled).length} 个已启用`, chev: true, onclick: () => c.open(hosted(st) ? 'addons' : 'extensions') }),
     row({ ic: 'update', t: '组件与更新', s: `${st.kernel.name} ${(st.kernel.version || '').split('.')[0]} · mihomo ${st.core.version || '—'}${st.core.ok ? '' : '（未运行）'}`, chev: true, onclick: () => c.open('settings/about') }),
     row({ ic: 'bug', t: '诊断', s: '出口探测、日志、复制诊断信息', chev: true, onclick: () => c.open('diag') }),
+    hosted(st) && row({ ic: 'shield', t: '人机验证诊断', s: (s.fpOff || []).length ? h('span', { class: 'mid' }, `已关掉 ${(s.fpOff || []).length} 项伪装`) : '验证一直过不去时，逐项排查是哪一项引起的', chev: true, onclick: () => c.open('settings/verify') }),
     sec('基本设置'),
     row({ ic: 'search', t: '搜索引擎', s: engineName(s.searchUrl), chev: true, onclick: async () => {
       const v = await choose('搜索引擎', [...ENGINES, ['', '自定义…']], ENGINES.some((e) => e[0] === s.searchUrl) ? s.searchUrl : '');
@@ -77,6 +78,40 @@ export function settingsAdv(c) {
     !host && row({ ic: 'ext', t: '新扩展的数据模式', s: name(O.ext, s.newExtData), chev: true, onclick: () => pick('新扩展的数据模式', O.ext, s.newExtData, 'newExtData') }),
     !host && row({ ic: 'history', t: '启动时恢复上次的实例', trail: sw(s.restoreOnStart, '恢复上次的实例', (v) => set(c, 'restoreOnStart', v)) }),
     !host && row({ ic: 'close', t: '退出 MaskTab', s: '关闭全部实例并退出（下次启动会恢复）', onclick: async () => { if (await confirmDlg('关闭全部实例并退出？', '', '退出', true)) api('POST', '/api/quit').catch(() => {}); } })];
+}
+
+// ---------- 人机验证诊断（只有手机，决策 A-9） ----------
+// 每一行是 MaskTab 对内核做的一处改动，默认都开着。验证（Cloudflare Turnstile 之类）过不去时把它们关掉再试，定位是哪一处引起的。
+// 生效时机不同（刷新网页 / 新开标签页 / 重启 app），为了不搞混，页面上统一说“改完点重启”。
+export const VERIFY_ITEMS = [
+  ['canvas', '画布噪声', '读回画布内容时加一点噪声', 'palette'],
+  ['audio', '音频噪声', '读回音频采样时加一点噪声', 'audio'],
+  ['hw', '核心数与屏幕高度', '按种子改 CPU 核心数、可用屏幕高度', 'cube'],
+  ['lang', '语言跟随出口', '改 navigator.language 和请求头里的语言', 'globe'],
+  ['tz', '时区跟随出口', '改网页里看到的时区（网页的后台线程里改不到）', 'clock'],
+  ['cfframe', '验证框里也改', '在 Cloudflare 的验证框（内嵌框架）里同样做上面这些改动', 'shield'],
+  ['block', '认不出实例的请求一律拒绝', '关掉后这类请求改走最近用过的实例的线路，仍然不会直连', 'close'],
+  ['ua', 'UA 里的安卓版本号按种子换', '关掉后用内核原本的 UA', 'finger'],
+  ['tp', '跟踪保护', '内核自带的增强型跟踪保护', 'shield'],
+  ['fpp', '内核自带的指纹保护', '火狐内核的指纹保护（会随机化画布等）', 'finger'],
+  ['sw', '禁用 Service Worker', '关掉后网站可以用 Service Worker；它发的请求认不出实例时会被拒绝', 'ext'],
+];
+let blockedInfo = null;
+export function verifyView(c) {
+  const { st } = c, off = new Set(st.settings.fpOff || []);
+  const save = (l, ok) => set(c, 'fpOff', VERIFY_ITEMS.map((x) => x[0]).filter((k) => l.has(k)), ok);
+  const loadBlocked = async () => { try { blockedInfo = await c.blocked(); } catch (e) { blockedInfo = { n: 0, list: [], error: e.message }; } c.render(); };
+  const b = blockedInfo;
+  return [appBar('人机验证诊断', c.back),
+    h('div', { class: 'foot' }, '验证一直转圈、过不去时用。先点“全部关掉”，重启后去测：能过，就一半一半地打开，找出是哪一项；全部关掉还是过不去，问题就不在这些伪装上（出口 IP 或内核本身）。查完记得全部恢复。'),
+    row({ ic: 'close', t: '全部关掉', s: '所有伪装项暂时停用', onclick: () => save(new Set(VERIFY_ITEMS.map((x) => x[0])), '已全部关掉，重启后生效') }),
+    row({ ic: 'refresh', t: '全部恢复', s: off.size ? `现在关着 ${off.size} 项` : '现在全部开着（正常状态）', onclick: () => save(new Set(), '已全部恢复，重启后生效') }),
+    c.restart && row({ ic: 'update', t: '重启 MaskTab 使改动生效', s: '关闭全部标签页后重新打开 app', onclick: () => c.restart() }),
+    sec('伪装项', `${VERIFY_ITEMS.length - off.size} / ${VERIFY_ITEMS.length} 开着`),
+    VERIFY_ITEMS.map(([k, t, note, ic]) => row({ ic, t, s: note, trail: sw(!off.has(k), t, (v) => { const l = new Set(off); v ? l.delete(k) : l.add(k); save(l); }) })),
+    c.blocked && sec('认不出实例的请求', b ? String(b.n) : ''),
+    c.blocked && row({ ic: 'bug', t: b ? (b.n ? `本次启动以来 ${b.n} 条` : '本次启动以来没有') : '查看', s: b?.error || '验证失败之后马上点这里：如果列表里有 challenges.cloudflare.com，原因多半就在这', chev: true, onclick: loadBlocked }),
+    c.blocked && b && b.list.map((e) => row({ ic: e.pass ? 'check' : 'close', t: h('span', { class: 'mono' }, e.host || '（无地址）'), s: `${e.pass ? '诊断放行' : '已拒绝'} · ${e.type || '—'} · 来自 ${e.from || '—'} · ${new Date(e.t).toLocaleTimeString()}` }))];
 }
 
 // ---------- 组件与更新 ----------

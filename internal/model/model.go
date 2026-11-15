@@ -210,6 +210,9 @@ type Settings struct {
 	Theme     string     `json:"theme,omitempty"`     // 外观：空 / dark = 深色（默认）| light 浅色 | system 跟随系统
 	Bookmarks []Bookmark `json:"bookmarks,omitempty"` // 新标签页上的书签（全部实例共用）
 	NTPHide   []string   `json:"ntpHide,omitempty"`   // 新标签页上不显示的部分：card | bookmarks | recent | accounts
+	// 人机验证诊断（只有手机用，decisions A-9）：这里列出的伪装项暂时关掉，用来定位“验证过不去”是哪一项引起的。
+	// canvas | audio | hw | lang | tz | cfframe | block | ua | tp | fpp | sw；核心服务只存不解释，由 app 和内置扩展执行。
+	FPOff []string `json:"fpOff,omitempty"`
 }
 
 // Bookmark 是新标签页上的一个书签。

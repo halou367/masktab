@@ -5,7 +5,9 @@
 (() => {
   if (window.__mtBoot) return;
   window.__mtBoot = true;
-  const apply = (c) => { if (c && !c.error && c.id && window.MTFP) return window.MTFP.run(window, c) !== false; return false; };
+  // 人机验证诊断关掉了“验证框里也注入”时：Cloudflare 的验证框（challenges.cloudflare.com）里什么都不改，算作已处理
+  const skip = (c) => Array.isArray(c.off) && c.off.includes('cfframe') && location.hostname === 'challenges.cloudflare.com';
+  const apply = (c) => { if (c && !c.error && c.id && window.MTFP) return skip(c) || window.MTFP.run(window, c) !== false; return false; };
   let mode = '';
   try {
     const n = Math.random().toString(36).slice(2) + Date.now().toString(36);
