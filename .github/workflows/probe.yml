@@ -11,7 +11,7 @@ on:
         default: https://ip.net.coffee/cloudflare/
       phases:
         description: 要跑的阶段（ref,fenix,mt,mtoff）
-        default: ref,fenix,mt,mtoff
+        default: ref,mt,mtoff
 
 permissions:
   contents: read
@@ -47,6 +47,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           ram-size: 4096M
+          disk-size: 8G
           disable-animations: true
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: timeout 1700 bash android/scripts/turnstile-probe.sh out/MaskTab-android-x86_64.apk out shots "${{ inputs.url }}" "${{ inputs.phases }}"

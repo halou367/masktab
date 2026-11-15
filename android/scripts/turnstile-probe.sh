@@ -13,7 +13,8 @@ shot() { timeout 30 adb exec-out screencap -p > "$OUT/$1.png"; [ -s "$OUT/$1.png
 has() { case ",$PHASES," in *",$1,"*) return 0;; esac; return 1; }
 # 等页面跑完，然后一屏一屏往下截；这一段的浏览器日志另存
 view() {
-  sleep "${WAIT:-60}"; shot "$1-0"
+  sleep 25; shot "$1-early"
+  sleep "${WAIT:-75}"; shot "$1-0"
   for k in 1 2 3 4 5 6; do A shell input swipe 540 1700 540 800 600; sleep 1.5; shot "$1-$k"; done
   A logcat -d -v time > "$OUT/$1-logcat.txt" 2>/dev/null
   grep -a -i "turnstile\|认不出实例\|MaskTab 指纹参数" "$OUT/$1-logcat.txt" | cut -c1-300 | head -40 > "$OUT/$1-notes.txt"
@@ -32,6 +33,7 @@ if has ref && [ -f "$REFDIR/ref.apk" ]; then
     A shell am start -a android.intent.action.VIEW -d "$URL" -n org.mozilla.geckoview_example/.GeckoViewActivity
     view ref
     A shell am force-stop org.mozilla.geckoview_example
+    A uninstall org.mozilla.geckoview_example > /dev/null 2>&1 || true
   }
 fi
 # ---- 参照二：Firefox 正式版 ----
@@ -41,6 +43,7 @@ if has fenix && [ -f "$REFDIR/fenix.apk" ]; then
     A shell am start -a android.intent.action.VIEW -d "$URL" org.mozilla.firefox
     view fenix
     A shell am force-stop org.mozilla.firefox
+    A uninstall org.mozilla.firefox > /dev/null 2>&1 || true
   }
 fi
 # ---- MaskTab ----
