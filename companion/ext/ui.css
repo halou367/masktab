@@ -25,6 +25,9 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--on); font: 16px/1.4 "Google Sans", Roboto, "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+/* 左右安全区（横屏刘海、挖孔、曲面屏）：手机上 app 已经按系统 insets 把网页区域让开了，这里 env() 一般是 0；
+   万一页面铺进了安全区（viewport-fit=cover），内容也不会被挡住。电脑上 env() 恒为 0。 */
+body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
 html.pc body { font-size: 14px; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
 button:disabled { opacity: .38; cursor: default; }
@@ -187,7 +190,7 @@ html.pc .mi { min-height: 44px; font-size: 14px; gap: 18px; }
 .chip.on { background: var(--tonal); color: var(--ontonal); box-shadow: none; }
 .chip i { font-style: normal; color: var(--on3); font-size: 12px; } .chip.on i { color: inherit; }
 .sortb { margin-left: auto; height: 32px; padding: 0 8px; border-radius: 8px; display: inline-flex; align-items: center; gap: 4px; font-size: 14px; color: var(--acc); flex: none; }
-.fab { position: fixed; right: 16px; bottom: calc(24px + env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 16px; background: var(--acc); color: var(--onacc); display: flex; align-items: center; justify-content: center; z-index: 8; box-shadow: 0 4px 10px rgba(0, 0, 0, .35); }
+.fab { position: fixed; right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(24px + env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 16px; background: var(--acc); color: var(--onacc); display: flex; align-items: center; justify-content: center; z-index: 8; box-shadow: 0 4px 10px rgba(0, 0, 0, .35); }
 .fab.ext { width: auto; padding: 0 20px 0 16px; gap: 10px; font-size: 15px; font-weight: 500; }
 .iprow { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 0 16px; }
 html.pc .iprow { min-height: 44px; }
@@ -234,7 +237,7 @@ html.pc .iprow { min-height: 44px; }
 @keyframes sheetIn { from { transform: translateY(100%); } }
 .handle { width: 32px; height: 4px; border-radius: 2px; background: var(--on3); opacity: .6; margin: 14px auto 6px; }
 html.pc .scrim { padding: 24px 0; } html.pc .sheet { margin: auto; border-radius: 28px; width: 520px; animation: dlgIn .2s; } html.pc .handle { display: none; }
-#toast { position: fixed; left: 12px; right: 12px; bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 90; background: var(--inv); color: var(--oninv); border-radius: 6px; min-height: 48px; padding: 12px 16px; font-size: 14px; display: flex; align-items: center; opacity: 0; transform: translateY(20px); transition: .2s; pointer-events: none; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); }
+#toast { position: fixed; left: calc(12px + env(safe-area-inset-left, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 90; background: var(--inv); color: var(--oninv); border-radius: 6px; min-height: 48px; padding: 12px 16px; font-size: 14px; display: flex; align-items: center; opacity: 0; transform: translateY(20px); transition: .2s; pointer-events: none; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); }
 #toast.show { opacity: 1; transform: none; } #toast.bad { background: #b3261e; color: #fff; }
 html.pc #toast { left: 24px; right: auto; max-width: 420px; }
 
@@ -256,8 +259,10 @@ html.pc #toast { left: 24px; right: auto; max-width: 420px; }
 label.ck { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; font-size: 14px; }
 
 /* 实例管理（instances.js，两端共用） */
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; padding: 4px 16px 0; }
-.grid.lt { grid-template-columns: 1fr; }
+/* 列宽用 minmax(0, …)：1fr 的下限是卡片的最小内容宽度，名字长时卡片会撑出屏幕右边（窄屏上实测，2026-11-16） */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 10px; padding: 4px 16px 0; }
+.grid.lt { grid-template-columns: minmax(0, 1fr); }
+.grid > * { min-width: 0; }
 .cardi { position: relative; border-radius: 24px; background: var(--surf2); padding: 14px 6px 12px 16px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; user-select: none; transition: box-shadow .2s; touch-action: pan-y; --ring: var(--surf2); }
 :root[data-theme="light"] .cardi { background: var(--surf); --ring: var(--surf); }
 .cardi.cur { box-shadow: inset 0 0 0 2px var(--acc); }
@@ -265,7 +270,7 @@ label.ck { display: inline-flex; align-items: center; gap: 6px; margin-right: 10
 .cardi.ph { background: transparent; box-shadow: inset 0 0 0 2px var(--div); }
 body.dragging { cursor: grabbing; user-select: none; }
 .ct { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 40px; } .ct .no { font-weight: 500; flex: none; } .ct .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ct .face { --s: 40px; }
+.ct .face { --s: 40px; } .ct > .lat, .ct > .sub { white-space: nowrap; flex: none; }
 .fl { position: relative; display: inline-flex; align-items: center; padding: 4px; border-radius: 6px; color: var(--on2); flex: none; outline: none; } .fl .flag { width: 24px; height: 17px; }
 .fl .tip { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; background: var(--inv); color: var(--oninv); border-radius: 10px; padding: 8px 10px; font-size: 12px; white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, .25); line-height: 1.6; } .fl .tip b { font-size: 13.5px; }
 .fl:hover .tip, .fl:focus .tip { display: block; }
@@ -348,3 +353,6 @@ html.pc .ntp .tiles { grid-template-columns: repeat(4, 1fr); }
 .pmain { flex: 1; min-width: 0; display: flex; justify-content: center; padding: 0 24px; }
 .pcol { width: 100%; max-width: 720px; padding-bottom: 40px; }
 @media (max-width: 760px) { .pnav { display: none; } .pmain { padding: 0; } }
+
+/* 铺满整屏的遮罩、抽屉同样让开左右安全区（见 body 那条的说明） */
+.scrim, .drawer { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }

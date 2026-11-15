@@ -167,7 +167,7 @@ class MainActivity : Activity(), CoreUi {
         }
         root.insetTop = inTop; root.insetBottom = inBottom; root.insetLeft = inLeft; root.insetRight = inRight
         col.setPadding(inLeft, inTop, inRight, maxOf(inBottom, inIme))
-        startup?.insets(inTop, inBottom)
+        startup?.insets(inTop, inBottom, inLeft, inRight)
         overlay?.let { fitOverlay(it) }
         root.invalidate()
     }
@@ -378,32 +378,35 @@ class MainActivity : Activity(), CoreUi {
     private fun boot() {
         val st = startup!!
         val t0 = System.currentTimeMillis()
-        fun step(k: Int, s: Int, d: String = "") { logi("启动步骤 ${k + 1} ${Bridge.LAUNCH_STEPS[k]}：$s $d"); ui { st.set(k, s, d) } }
-        // 每步至少显示一会儿，免得一闪而过
-        fun pace(since: Long) { val left = 450 - (System.currentTimeMillis() - since); if (left > 0) Thread.sleep(left) }
+        fun step(k: Int, s: Int, d: String = "") { logi("启动步骤 ${k + 1} ${Bridge.LAUNCH_STEPS[k]}：$s $d（${System.currentTimeMillis() - t0} 毫秒）"); ui { st.set(k, s, d) } }
         step(0, 1)
         try { Core.ensureRuntime() } catch (e: Throwable) { step(0, 4, e.message ?: "内核启动失败"); return }
         step(0, 2, "GeckoView " + (GeckoSession.getDefaultUserAgent().substringAfter("rv:").substringBefore(")")))
+        // 核心服务（和电脑版同一份代码，连同它管的 mihomo）和内置扩展互不依赖：一起开始，不再等扩展装好才起核心服务（decisions A-13）
+        val coreUp = java.util.concurrent.CountDownLatch(1)
+        val coreOk = java.util.concurrent.atomic.AtomicBoolean(false)
+        bg {
+            try {
+                coreOk.set(CoreProc.start())
+                if (coreOk.get()) {
+                    Host.waitFor(15000) { Host.mihomoOk || Host.coreError.isNotEmpty() }
+                    Legacy.migrate(this@MainActivity)?.let { msg -> Host.refresh(); toast(msg) }
+                }
+            } finally { coreUp.countDown() }
+        }
         step(1, 1)
         Core.ensureExt { err ->
             if (err != null) { step(1, 4, err); return@ensureExt }
             step(1, 2)
             bg {
-                var s = System.currentTimeMillis()
-                pace(t0)
-                // 核心服务（和电脑版同一份代码，连同它管的 mihomo）
                 step(2, 1)
-                if (!CoreProc.start()) { step(2, 4, CoreProc.lastError); step(3, 3); step(4, 3); return@bg }
-                Host.waitFor(15000) { Host.mihomoOk || Host.coreError.isNotEmpty() }
-                Legacy.migrate(this@MainActivity)?.let { msg -> Host.refresh(); toast(msg) }
+                coreUp.await()
+                if (!coreOk.get()) { step(2, 4, CoreProc.lastError); step(3, 3); step(4, 3); return@bg }
                 ui { applyTheme() } // 设置里的“外观”现在才知道
-                pace(s)
                 step(2, if (Host.mihomoOk) 2 else 4, if (Host.mihomoOk) "mihomo ${Host.mihomoVersion}" else Host.coreError.ifEmpty { "mihomo 没有起来" })
-                // 订阅
-                s = System.currentTimeMillis()
-                if (Host.subs.isEmpty()) step(3, 3, "还没有订阅，全部实例直连") else { pace(s); step(3, if (Host.nodeCount > 0) 2 else 4, if (Host.nodeCount > 0) "${Host.nodeCount} 个节点" else "订阅里还没有节点") }
-                // 网络检测：启动当前实例（选线、写配置、探出口）
-                s = System.currentTimeMillis()
+                // 订阅：用核心服务存着的（启动时不下载）
+                if (Host.subs.isEmpty()) step(3, 3, "还没有订阅，全部实例直连") else step(3, if (Host.nodeCount > 0) 2 else 4, if (Host.nodeCount > 0) "${Host.nodeCount} 个节点" else "订阅里还没有节点")
+                // 网络检测：启动当前实例。线路和上次一样时核心服务先用上次的出口，马上就绪，后台再确认（decisions A-13）
                 step(4, 1)
                 if (Host.insts.isEmpty()) try { CoreProc.json("POST", "/api/instances", JSONObject()) } catch (e: Exception) { logw("新建第一个实例失败：${e.message}") }
                 Host.refresh()
@@ -415,11 +418,10 @@ class MainActivity : Activity(), CoreUi {
                     Host.waitFor(25000) { Host.get(cur.id)?.let { it.running && !it.starting && (it.country.isNotEmpty() || it.error.isNotEmpty()) } ?: true }
                 }
                 val i = Host.cur()
-                pace(s)
                 if (i != null && i.country.isNotEmpty()) ui { st.showInst(parseColor(i.color), i.no.toString(), flagBitmap(this, i.country.takeIf { i.on })) }
                 step(4, if (i != null && i.country.isNotEmpty()) 2 else 4,
                     if (i == null) "没有实例" else if (i.country.isNotEmpty()) "#${i.no} 出口 ${i.country} · ${i.ip}" + (if (!i.on) "（直连）" else "") else i.error.ifEmpty { if (i.running) "出口还没探出来" else "实例没有启动好" })
-                Thread.sleep(500)
+                Thread.sleep(250) // 让最后一步的勾显示一下
                 ui {
                     logi("启动完成，用时 ${System.currentTimeMillis() - t0} 毫秒")
                     Core.started = true
@@ -702,7 +704,7 @@ class MainActivity : Activity(), CoreUi {
         val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false }
         val card = FrameLayout(this).apply { background = rounded(pal.surf, dp(26).toFloat()); elevation = dp(8).toFloat(); isClickable = true; addView(scroll) }
         overlayFit = { (card.layoutParams as? FrameLayout.LayoutParams)?.let { it.topMargin = inTop + dp(8); it.bottomMargin = inBottom + dp(16) }; card.requestLayout() }
-        o.addView(card, FrameLayout.LayoutParams(minOf(dp(318), resources.displayMetrics.widthPixels - dp(24)), -2, Gravity.TOP or Gravity.END).apply { rightMargin = dp(7) })
+        o.addView(card, FrameLayout.LayoutParams(minOf(dp(318), resources.displayMetrics.widthPixels - inLeft - inRight - dp(24)), -2, Gravity.TOP or Gravity.END).apply { rightMargin = dp(7) })
         fitOverlay(o)
         card.pivotX = card.layoutParams.width.toFloat(); card.pivotY = 0f
         card.scaleX = 0.85f; card.scaleY = 0.85f

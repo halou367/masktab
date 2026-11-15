@@ -232,7 +232,7 @@ class StartupView(ctx: Context, steps: List<String>, private val pal: Pal) : Fra
             row.addView(nm, LinearLayout.LayoutParams(-2, -2))
             val d = TextView(ctx).apply { textSize = 13f; setTextColor(pal.on2); gravity = Gravity.END; setSingleLine(); ellipsize = TextUtils.TruncateAt.END }
             row.addView(d, LinearLayout.LayoutParams(0, -2, 1f))
-            col.addView(row, LinearLayout.LayoutParams(ctx.dp(320).coerceAtMost(ctx.resources.displayMetrics.widthPixels - ctx.dp(48)), -2))
+            col.addView(row, LinearLayout.LayoutParams(-1, -2)) // 宽度跟着列走：列的左右留边在 fit() 里按屏幕宽度和左右 insets 算
             icons.add(ic); details.add(d); names.add(nm)
         }
         addView(col, LayoutParams(-1, -1))
@@ -240,8 +240,28 @@ class StartupView(ctx: Context, steps: List<String>, private val pal: Pal) : Fra
         addView(prog, LayoutParams(0, ctx.dp(3), Gravity.BOTTOM))
     }
 
-    /** 底部留出导航栏的位置（insets 由外面给）。 */
-    fun insets(top: Int, bottom: Int) { (prog.layoutParams as LayoutParams).bottomMargin = bottom; col.setPadding(col.paddingLeft, context.dp(96) + top, col.paddingRight, context.dp(24) + bottom); requestLayout() }
+    private var inTop = 0; private var inBottom = 0; private var inLeft = 0; private var inRight = 0
+
+    /**
+     * 按系统给的 insets 留边（insets 由外面给：上 = 状态栏 + 刘海，下 = 导航栏 / 手势条，左右 = 横屏刘海、三键导航、曲面屏 / 挖孔的安全区）。
+     * 以前每一行固定 min(320dp, 屏宽 - 48dp)，而列两边各留 32dp：屏幕窄于 384dp（vivo 等把“显示大小”调大的手机）时行比列宽 16dp，
+     * 被列的内边距裁掉，左边的勾少半个、右边的结果被截断（2026-11-16 用户截图，vivo V2419A）。现在行跟着列走，列的左右留边 = 左右 insets + 居中留白。
+     */
+    fun insets(top: Int, bottom: Int, left: Int = 0, right: Int = 0) {
+        inTop = top; inBottom = bottom; inLeft = left; inRight = right
+        (prog.layoutParams as LayoutParams).bottomMargin = bottom
+        fit(width)
+    }
+
+    private fun fit(w: Int) {
+        if (w <= 0) return
+        val avail = w - inLeft - inRight
+        val side = maxOf(context.dp(24), (avail - context.dp(320)) / 2) // 内容最宽 320dp，窄屏两边至少 24dp
+        col.setPadding(inLeft + side, context.dp(96) + inTop, inRight + side, context.dp(24) + inBottom)
+        requestLayout()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) { super.onSizeChanged(w, h, ow, oh); if (w != ow) post { fit(w) } }
 
     fun set(k: Int, state: Int, detail: String = "") {
         if (k !in icons.indices) return

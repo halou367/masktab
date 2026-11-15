@@ -210,7 +210,11 @@ func (a *App) State(me string) map[string]any {
 			v.Acct = &acctView{Sites: []string{}}
 		}
 		if in.Kind != "normal" {
-			tz, lang, _ := expectTZ(in, r.Probe)
+			var pin *model.IPInfo
+			if r.Running {
+				pin = r.launchedSrc
+			}
+			tz, lang, _ := expectTZPinned(in, r.Probe, pin)
 			if a.hosted() && r.Running { // 手机：运行中不热换（decisions A-11），网页拿到的是本次启动时的值
 				tz, lang = r.LaunchedTZ, r.LaunchedLang
 			}

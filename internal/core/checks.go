@@ -32,18 +32,7 @@ type checkSum struct {
 }
 
 // shownProbe 是实例当前“用于时区 / 语言”的那一路出口（和 expectTZ 取法一致）。
-func shownProbe(in *model.Instance, pr *model.ExitProbe) *model.IPInfo {
-	if pr == nil {
-		return nil
-	}
-	if in.TZ.Source == "exit-direct" && pr.Direct != nil {
-		return pr.Direct
-	}
-	if pr.CF != nil {
-		return pr.CF
-	}
-	return pr.Direct
-}
+func shownProbe(in *model.Instance, pr *model.ExitProbe) *model.IPInfo { return tzSrc(in, pr) }
 
 // checksLocked 算一个实例的一致性检查。调用方持有 a.mu。
 func (a *App) checksLocked(in *model.Instance, rt *Runtime, info *fpInfo) *checkSum {

@@ -94,6 +94,31 @@ for (const [name, url] of shots) {
   await pg.screenshot({ path: path.join(out, name + '.png'), fullPage: true });
   await pg.close();
 }
+// 左右不能被裁（2026-11-16 用户截图：vivo 把“显示大小”调大后启动页左右被截）：窄屏（320 / 360 宽）上每一页不能横向溢出，
+// 也不能有元素伸出屏幕左右边（横向滚动条 .chips 之类自己会滚的容器里面的不算）。
+const edgeBad = [];
+for (const w of [320, 360]) {
+  const c = await br.newContext({ viewport: { width: w, height: 760 }, deviceScaleFactor: 1, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, fixture);
+  for (const [name, url] of shots) {
+    const pg = await c.newPage(); watch(pg, `${name}@${w}`);
+    await pg.goto(base + url); await pg.waitForTimeout(600);
+    const bad = await pg.evaluate(() => {
+      const W = innerWidth, out = [];
+      if (document.documentElement.scrollWidth > W + 1) out.push('页面横向溢出 ' + document.documentElement.scrollWidth);
+      const inScroller = (e) => { for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) { const s = getComputedStyle(p); if (/auto|scroll|hidden|clip/.test(s.overflowX)) return true; } return false; };
+      for (const e of document.querySelectorAll('body *')) {
+        const r = e.getBoundingClientRect();
+        if (!r.width || !r.height || getComputedStyle(e).visibility === 'hidden') continue;
+        if ((r.right > W + 1 || r.left < -1) && !inScroller(e)) out.push(e.tagName.toLowerCase() + (e.className && typeof e.className === 'string' ? '.' + e.className.trim().split(/\s+/).join('.') : '') + ` [${Math.round(r.left)}, ${Math.round(r.right)}]`);
+      }
+      return out.slice(0, 5);
+    });
+    for (const x of bad) edgeBad.push(`${name}@${w}: ${x}`);
+    if (w === 320) await pg.screenshot({ path: path.join(out, `narrow-${name}.png`) });
+    await pg.close();
+  }
+  await c.close();
+}
 for (const [name, st, url] of [['light-newtab', light, 'newtab.html#inst=p2'], ['light-node', light, 'app.html#node'], ['light-settings', light, 'app.html#settings'], ['split-node', split, 'app.html#node'], ['split-newtab', split, 'newtab.html#inst=p2']]) {
   const c = await mkctx(st); const pg = await c.newPage(); watch(pg, name);
   await pg.goto(base + url); await pg.waitForTimeout(700);
@@ -361,6 +386,23 @@ if (desk) {
   await mp.close(); await dctx.close(); dsrv.close();
 }
 check('没有“圆角 + 可滚动”的元素（各页面、对话框）', rsBad.length === 0, rsBad);
+check('窄屏（320 / 360 宽）左右不被裁：没有横向溢出、没有元素伸出屏幕', edgeBad.length === 0, edgeBad);
+// 左右安全区（viewport-fit=cover + env(safe-area-inset-*)）：模拟横屏左右各 40px 的安全区，页面内容要让开
+{
+  const c = await mkctx(fixture); const pg = await c.newPage(); watch(pg, 'safe-area');
+  const cdp = await c.newCDPSession(pg);
+  let ok = true;
+  try { await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { left: 40, right: 40, top: 0, bottom: 0 } }); } catch { ok = false; }
+  if (ok) {
+    await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(600);
+    const got = await pg.evaluate(() => { const s = getComputedStyle(document.body); const m = document.querySelector('meta[name=viewport]')?.content || '';
+      const xs = [...document.querySelectorAll('#root *')].map((e) => e.getBoundingClientRect()).filter((r) => r.width && r.height);
+      return { pl: s.paddingLeft, pr: s.paddingRight, cover: m.includes('viewport-fit=cover'), minL: Math.min(...xs.map((r) => r.left)), maxR: Math.max(...xs.map((r) => r.right)), W: innerWidth }; });
+    check('左右安全区：页面内容让开左右各 40px', got.cover && got.pl === '40px' && got.pr === '40px' && got.minL >= 40 && got.maxR <= got.W - 40 + 1, got);
+    await pg.screenshot({ path: path.join(out, 'safe-area-node.png') });
+  } else flow.push('跳过：这个 Chromium 不支持模拟安全区');
+  await c.close();
+}
 // 矮屏上的“导入邮箱”弹框：弹框自己不滚、不被截断，滚的是外面的遮罩
 {
   const c = await br.newContext({ viewport: { width: 412, height: 420 }, deviceScaleFactor: 1, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, fixture);

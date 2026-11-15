@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,21 +100,73 @@ func get(hc *http.Client, url string) (string, error) {
 }
 
 var (
-	cacheMu sync.Mutex
-	cache   = map[string]cached{}
+	cacheMu   sync.Mutex
+	cache     = map[string]cached{}
+	cacheFile string // 非空时归属查询结果同时落盘（LoadCache 设置），下次启动同一个出口不用再查
 )
 
 type cached struct {
-	info model.IPInfo
-	at   time.Time
+	Info model.IPInfo `json:"info"`
+	At   time.Time    `json:"at"`
+}
+
+// cacheTTL 是归属查询结果的有效期。
+const cacheTTL = 7 * 24 * time.Hour
+
+// LoadCache 读入上次落盘的归属查询结果，并让之后的查询结果写回这个文件。
+// 手机上每次打开 app 核心服务都是新进程：没有这份缓存，每次“网络检测”都要经代理再查两次归属（decisions A-13）。
+func LoadCache(path string) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	cacheFile = path
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var m map[string]cached
+	if json.Unmarshal(b, &m) != nil {
+		return
+	}
+	for ip, c := range m {
+		if time.Since(c.At) < cacheTTL && c.Info.Timezone != "" {
+			cache[ip] = c
+		}
+	}
+}
+
+// saveCacheLocked 把缓存写回文件（只留有效期内的，最多 300 条）。调用方持有 cacheMu。
+func saveCacheLocked() {
+	if cacheFile == "" {
+		return
+	}
+	keep := map[string]cached{}
+	for ip, c := range cache {
+		if time.Since(c.At) < cacheTTL {
+			keep[ip] = c
+		}
+	}
+	for len(keep) > 300 { // 删最旧的
+		old := ""
+		for ip, c := range keep {
+			if old == "" || c.At.Before(keep[old].At) {
+				old = ip
+			}
+		}
+		delete(keep, old)
+	}
+	b, _ := json.Marshal(keep)
+	tmp := cacheFile + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, cacheFile)
+	}
 }
 
 // Lookup 查询 IP 归属。endpoints 依次回退；结果按 IP 缓存 7 天；全部失败时用国家兜底表。
 func Lookup(hc *http.Client, ip, countryHint string, endpoints []string) model.IPInfo {
 	cacheMu.Lock()
-	if c, ok := cache[ip]; ok && time.Since(c.at) < 7*24*time.Hour {
+	if c, ok := cache[ip]; ok && time.Since(c.At) < cacheTTL {
 		cacheMu.Unlock()
-		return c.info
+		return c.Info
 	}
 	cacheMu.Unlock()
 	info := model.IPInfo{IP: ip, Country: strings.ToUpper(countryHint)}
@@ -152,6 +205,7 @@ func Lookup(hc *http.Client, ip, countryHint string, endpoints []string) model.I
 		info = model.IPInfo{IP: ip, Country: strings.ToUpper(cc), Region: s("region", "regionName"), City: s("city"), Timezone: tz, Org: org}
 		cacheMu.Lock()
 		cache[ip] = cached{info, time.Now()}
+		saveCacheLocked()
 		cacheMu.Unlock()
 		return info
 	}
@@ -198,14 +252,31 @@ func Run(port int, endpoints []string) model.ExitProbe {
 		}
 		return out
 	}
-	if cfIP != "" {
-		i := Lookup(hc, cfIP, cfLoc, endpoints)
-		out.CF = &i
+	// 两路的归属并行查（以前是先查一路再查另一路）；每个查询服务最多等 6 秒就换下一个，不让一个慢的服务拖住整次探测。
+	lc := Client(port, 6*time.Second)
+	var cf, dir *model.IPInfo
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if cfIP != "" {
+			i := Lookup(lc, cfIP, cfLoc, endpoints)
+			cf = &i
+		}
+	}()
+	same := dirIP != "" && dirIP == cfIP // 两路同一个 IP 时只查一次
+	go func() {
+		defer wg.Done()
+		if dirIP != "" && !same && net.ParseIP(dirIP) != nil {
+			i := Lookup(lc, dirIP, "", endpoints)
+			dir = &i
+		}
+	}()
+	wg.Wait()
+	if same && cf != nil {
+		c := *cf
+		dir = &c
 	}
-	if dirIP != "" && net.ParseIP(dirIP) != nil {
-		i := Lookup(hc, dirIP, "", endpoints)
-		out.Direct = &i
-	}
+	out.CF, out.Direct = cf, dir
 	return out
 }
 

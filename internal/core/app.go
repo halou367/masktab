@@ -20,6 +20,7 @@ import (
 	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/kernel"
 	"github.com/halou367/masktab/internal/model"
+	"github.com/halou367/masktab/internal/probe"
 	"github.com/halou367/masktab/internal/proxy"
 	"github.com/halou367/masktab/internal/vault"
 )
@@ -45,14 +46,15 @@ type Runtime struct {
 	Seen         int64            `json:"companionSeen,omitempty"`
 	Step         int              `json:"step,omitempty"` // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
 
-	active     bool // 是否已写入 mihomo 配置
-	probePort  int
-	cmd        *exec.Cmd
-	extSetHash string
-	pulled     map[string]string // 共享扩展：启动时拉入后的内容哈希
-	done       chan struct{}
-	startedAt  int64           // 本次启动时刻（毫秒），用来判断伴随扩展后台是否一直没起来
-	seenExit   map[string]bool // "换一个"这一轮已经轮到过的出口
+	active      bool          // 是否已写入 mihomo 配置
+	launchedSrc *model.IPInfo // 本次启动时定时区用的那一路出口（只取国家、时区）；运行中同一个国家里换出口不改时区（decisions A-12）
+	probePort   int
+	cmd         *exec.Cmd
+	extSetHash  string
+	pulled      map[string]string // 共享扩展：启动时拉入后的内容哈希
+	done        chan struct{}
+	startedAt   int64           // 本次启动时刻（毫秒），用来判断伴随扩展后台是否一直没起来
+	seenExit    map[string]bool // "换一个"这一轮已经轮到过的出口
 }
 
 // Setup 是组件准备的进度。Error 只表示"浏览器内核没准备好"（此时任何窗口都开不了）；
@@ -104,6 +106,7 @@ type App struct {
 	vault     *vault.Vault           // 密码库（accounts.go）
 	vaultErr  string                 // 密码库打不开的原因
 	cookies   map[string][]CookieSum // 实例 id → Cookie 汇总（伴随扩展上报，落盘在 state/cookies.json）
+	lastExit  map[string]lastExit    // 实例 id → 上次探到的出口（落盘在 state/lastexit.json，手机启动时先用它，decisions A-13）
 
 	cfgMu     sync.Mutex
 	cfgGen    atomic.Int64 // 每次 mihomo 重载配置加一（重载会重置全部策略组，进行中的测速据此重试）
@@ -229,6 +232,11 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	load("extensions.json", &wx)
 	a.Exts = wx.Items
 	readJSON(a.p("state", "scan.json"), &a.scan)
+	readJSON(a.p("state", "lastexit.json"), &a.lastExit)
+	if a.lastExit == nil {
+		a.lastExit = map[string]lastExit{}
+	}
+	probe.LoadCache(a.p("state", "ipinfo.json")) // 出口归属查询结果跨进程缓存（decisions A-13）
 	if a.scan == nil {
 		a.scan = map[string]*model.NodeScan{}
 	}

@@ -284,20 +284,51 @@ func cfEgress(x *model.IPInfo) bool {
 	return x != nil && strings.Contains(strings.ToLower(x.Org), "cloudflare")
 }
 
+// tzSrc 是决定实例时区与语言的那一路出口（计划 8.5）：默认 CF 那一路（edgetunnel 下就是 ProxyIP，Cloudflare 验证看到的也是它）；
+// 设成跟“普通网站”那一路时用那一路，但那一路是 Cloudflare 自己的出站地址（Workers / WARP）且有 CF 那一路时仍用 CF 那一路（decisions A-11）。
+// 只换入口（优选 IP）不会改变 ProxyIP，所以不会改变这里的结果。
+func tzSrc(in *model.Instance, pr *model.ExitProbe) *model.IPInfo {
+	if pr == nil {
+		return nil
+	}
+	src := pr.CF
+	if in.TZ.Source == "exit-direct" && pr.Direct != nil && !(cfEgress(pr.Direct) && pr.CF != nil) {
+		src = pr.Direct
+	}
+	if src == nil {
+		src = pr.Direct
+	}
+	return src
+}
+
 // expectTZ 计算实例此刻应有的时区与语言（计划 8.5）。直连或普通窗口返回空（用系统值）。
 func expectTZ(in *model.Instance, pr *model.ExitProbe) (tz, lang, country string) {
+	return expectTZPinned(in, pr, nil)
+}
+
+// pinOf 取启动时定时区用的那一路出口的国家和时区（代理关着时没有）。
+func pinOf(in *model.Instance, pr *model.ExitProbe) *model.IPInfo {
+	if in.Proxy.State != "on" {
+		return nil
+	}
+	if s := tzSrc(in, pr); s != nil && s.Country != "" {
+		return &model.IPInfo{Country: s.Country, Timezone: s.Timezone}
+	}
+	return nil
+}
+
+// expectTZPinned 同 expectTZ；pin 是实例本次启动时定时区用的那一路出口（国家 + 时区）。
+// 出口国家没变时沿用启动时的时区：同一个国家里换了 ProxyIP（美国东西海岸之类）或只换了入口，都不算“时区变了”，
+// 不提示重启（decisions A-12）。国家真的变了才按新出口算。
+func expectTZPinned(in *model.Instance, pr *model.ExitProbe, pin *model.IPInfo) (tz, lang, country string) {
 	if in.Kind == "normal" {
 		return "", "", ""
 	}
-	var src *model.IPInfo
-	if pr != nil {
-		src = pr.CF
-		if in.TZ.Source == "exit-direct" && pr.Direct != nil && !(cfEgress(pr.Direct) && pr.CF != nil) {
-			src = pr.Direct
-		}
-		if src == nil {
-			src = pr.Direct
-		}
+	src := tzSrc(in, pr)
+	if src != nil && pin != nil && pin.Country != "" && pin.Timezone != "" && src.Country == pin.Country {
+		cp := *src
+		cp.Timezone = pin.Timezone
+		src = &cp
 	}
 	if src != nil {
 		tz, country = src.Timezone, src.Country
@@ -358,14 +389,18 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	url := a.Settings.DelayURL
 	eps := a.Settings.IPInfoEndpoints
 	a.mu.Unlock()
-	lat := 0
+	// 延迟和出口探测并行做（以前先测完延迟再探出口，decisions A-13）
+	latc := make(chan int, 1)
 	if state == "on" && want.want != "REJECT" {
-		d, err := a.core.Delay(want.want, url, 6000)
-		if err != nil {
-			lat = -1
-		} else {
-			lat = d
-		}
+		go func() {
+			d, err := a.core.Delay(want.want, url, 6000)
+			if err != nil {
+				d = -1
+			}
+			latc <- d
+		}()
+	} else {
+		latc <- 0
 	}
 	var pr model.ExitProbe
 	if want.want != "REJECT" {
@@ -408,16 +443,38 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	} else {
 		pr = model.ExitProbe{At: now(), Error: want.err}
 	}
+	lat := <-latc
 	a.mu.Lock()
 	r.Probe, r.Latency = &pr, lat
-	tz, lang, _ := expectTZ(in, &pr)
+	judgeExit(in, r, &pr, want.want == "REJECT", want.err, state, masked, a.adapter.Caps().Live)
+	if masked && state == "on" && want.want != "REJECT" {
+		a.rememberExitLocked(id, in, &pr)
+	}
+	if try > 0 && r.Error == "" && r.Notice == "" {
+		r.Notice = "switched" // 界面上显示成"已自动换线路"
+	}
+	a.bumpLocked("state", id)
+	a.mu.Unlock()
+	_ = a.applyConfig()
+}
+
+// judgeExit 按这次探到的出口决定实例是放行、断流还是“需重启”（调用方持有 a.mu）。
+// 时区按定时区的那一路（tzSrc，edgetunnel 下是 ProxyIP）算，出口国家没变时沿用启动时的时区（expectTZPinned）：
+// 只换入口、同一个国家里换 ProxyIP 都不会改时区和语言，也不会标“需重启”。国家真的变了：手机上提示需重启但不断流，电脑上断流等重启。
+func judgeExit(in *model.Instance, r *Runtime, pr *model.ExitProbe, reject bool, wantErr, state string, masked, live bool) {
+	tz, lang, _ := expectTZPinned(in, pr, r.launchedSrc)
+	// 这次没探到能定时区的那一路（两路都没有，或只探到 Cloudflare 自己的出站地址）：判断不了出口国家，不算“时区变了”。
+	src := tzSrc(in, pr)
+	unknown := state == "on" && (src == nil || (pr.CF == nil && cfEgress(src)))
 	r.NeedRestart = without(r.NeedRestart, "timezone")
 	switch {
-	case want.want == "REJECT":
-		r.Cut, r.Error = "", want.err // 主策略组本就停在 REJECT
+	case reject:
+		r.Cut, r.Error = "", wantErr // 主策略组本就停在 REJECT
 	case pr.Error != "" && state == "on":
 		r.Cut, r.Error = "出口探测失败", pr.Error
-	case masked && r.Running && a.adapter.Caps().Live && (tz != r.LaunchedTZ || lang != r.LaunchedLang):
+	case masked && r.Running && unknown:
+		r.Cut, r.Error = "", ""
+	case masked && r.Running && live && (tz != r.LaunchedTZ || lang != r.LaunchedLang):
 		// 宿主（手机）：不再热换。运行中改时区 / 语言，内核里已有的会话状态（会话 Cookie、TLS 会话、内核指纹保护的会话随机数、
 		// 已打开网页里注入的旧时区）会和新值混在一起；真机上热换之后 Turnstile 一直 300010，彻底重启 app 才过（decisions A-11）。
 		// 网页继续用启动时的时区和语言（State 里按 LaunchedTZ / LaunchedLang 给），提示“需重启”；不断流——值和出口暂时对不上不会被拦，
@@ -432,12 +489,6 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	default:
 		r.Cut, r.Error = "", ""
 	}
-	if try > 0 && r.Error == "" && r.Notice == "" {
-		r.Notice = "switched" // 界面上显示成"已自动换线路"
-	}
-	a.bumpLocked("state", id)
-	a.mu.Unlock()
-	_ = a.applyConfig()
 }
 
 func without(s []string, v string) []string {

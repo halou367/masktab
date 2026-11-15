@@ -124,11 +124,18 @@ func (a *App) Launch(id string) error {
 	// 宿主模式（安卓版）：浏览器一直开着，实例“打不开”没有意义——没有可用出口时照样算运行着，只是断流（mihomo 那边是 REJECT），
 	// 原因记在 hostErr 里显示给用户；选好节点 / 订阅刷新好之后由平时的流程自己恢复。桌面版仍然按 F-INST-4 拒绝启动。
 	hostErr := ""
+	fromCache := false // 用的是上次探到的出口（手机，decisions A-13）
 	a.step(id, 2)
 	if a.coreOK {
 		a.refreshBind() // 本机网络可能变过（换了 Wi-Fi、开关了 TUN）：重新识别物理网卡，下一步写配置时生效
 		a.step(id, 3)
-		if masked && state == "on" {
+		var cached *model.ExitProbe
+		if masked && state == "on" && a.hosted() { // 手机：线路和上次一样就先用上次的出口，进浏览器后再在后台确认
+			a.mu.Lock()
+			cached = a.cachedExitLocked(id, in)
+			a.mu.Unlock()
+		}
+		if masked && state == "on" && cached == nil {
 			a.autoPick(id, nil) // "自动"：还没选节点或当前节点不通时，换成最快的可用节点
 		}
 		a.step(id, 4)
@@ -147,7 +154,11 @@ func (a *App) Launch(id string) error {
 			var p model.ExitProbe
 			why := ""
 			a.step(id, 6)
-			for try := 0; try < 3 && res.want != "REJECT"; try++ {
+			if cached != nil && res.want != "REJECT" {
+				p, fromCache = *cached, true
+				log.Printf("实例 #%d 线路和上次一样，先用上次的出口（%s），后台再确认", in.No, probeIPsText(cached))
+			}
+			for try := 0; try < 3 && res.want != "REJECT" && !fromCache; try++ {
 				start := time.Now()
 				p = probe.Run(pport, eps)
 				if p.Error == "" {
@@ -185,7 +196,10 @@ func (a *App) Launch(id string) error {
 	a.step(id, 7)
 	a.mu.Lock()
 	tz, lang, _ := expectTZ(in, pr)
-	r.Probe = pr
+	r.Probe, r.launchedSrc = pr, pinOf(in, pr)
+	if !fromCache && masked && pr != nil {
+		a.rememberExitLocked(id, in, pr)
+	}
 	l := kernel.Launch{
 		ProfileDir: a.p("profiles", in.ID), No: in.No, Normal: !masked, Color: hexColor(in.Color),
 		Seed: seed32(in.FP.Seed), HardwareConcurrency: cores(in), PlatformVersion: in.FP.PlatformVersion, Platform: in.FP.Platform, Brand: in.FP.Brand,
@@ -213,7 +227,14 @@ func (a *App) Launch(id string) error {
 			a.bumpLocked("state", id)
 		}
 		a.mu.Unlock()
-		go a.refresh(id)
+		switch {
+		case hostErr != "" || !masked || state != "on" || pr == nil:
+			go a.refresh(id)
+		case fromCache:
+			go a.verifyLaunch(id)
+		default:
+			go a.afterLaunch(id) // 刚探过：不再断流重探，只补测延迟和纯净度
+		}
 		return nil
 	}
 	exts, extHash, shared := a.extsForLocked(in)
@@ -266,7 +287,11 @@ func (a *App) Launch(id string) error {
 	a.mu.Unlock()
 	log.Printf("实例 #%d 已启动（pid %d，时区 %q，端口 %d）", in.No, cmd.Process.Pid, tz, in.Port)
 	go a.watch(id, cmd, logf)
-	go a.refresh(id) // 放行主通道，并补全延迟 / 出口信息
+	if masked && state == "on" && pr != nil && pr.Error == "" {
+		go a.afterLaunch(id) // 放行主通道；启动前刚探过出口，不再断流重探，只补测延迟和纯净度
+	} else {
+		go a.refresh(id) // 放行主通道，并补全延迟 / 出口信息
+	}
 	return nil
 }
 
