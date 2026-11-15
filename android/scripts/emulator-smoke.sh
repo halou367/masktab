@@ -401,6 +401,10 @@ Y
   chk "加载订阅：2 1 个节点" "订阅加载到 1 个节点"
   chk "网络检测：2 #1 出口" "实例 #1 经节点探到出口"
   chk "MaskTab 指纹参数 example.com #1" "实例 #1 打开网页"
+  # 网页语言由 app 用内核原生设置（决策 A-10）：切到 #3 / #4 时 Core.applyLocale 要把内核语言改过去；
+  # 页面里的 navigator.language 和 Worker 里的是否一致，由下面的指纹自检页判（worker_lang）。
+  chk "网页语言 → ja-JP,ja" "切到 #3 时内核语言设成 ja-JP"
+  chk "网页语言 → de-DE,de" "切到 #4 时内核语言设成 de-DE"
   grep "MTFPCHECK" "$L" | sed 's/.*MTFPCHECK/MTFPCHECK/' | cut -c1-600 | head -6
   n=$(grep -c "MTFPCHECK pass .*tz=Asia/Tokyo off=-540 lang=ja-JP" "$L"); m=$(grep -c "MTFPCHECK pass .*tz=Europe/Berlin off=-60 lang=de-DE" "$L"); bad=$(grep -c "MTFPCHECK fail" "$L")
   if [ "$n" -ge 2 ] && [ "$m" -ge 1 ] && [ "$bad" -eq 0 ]; then echo "通过：指纹自检（#3 东京两次、#4 柏林一次，各用各的参数；画布 / 音频 / 时区 / 语言 / 函数外观都对）"

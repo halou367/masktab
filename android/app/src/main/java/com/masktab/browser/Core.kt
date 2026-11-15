@@ -149,8 +149,9 @@ object Core {
             .build()
         val rt = GeckoRuntime.create(app, s)
         rt.settings.setFingerprintingProtection("fpp" !in Host.fpOff)
-        rt.webExtensionController.setPromptDelegate(installPrompt)
         runtime = rt
+        applyLocale()
+        rt.webExtensionController.setPromptDelegate(installPrompt)
         return rt
     }
 
@@ -459,7 +460,28 @@ object Core {
         Runtime.getRuntime().exit(0)
     }
 
-    fun pushState() = ui { try { bgPort?.postMessage(extState()) } catch (e: Exception) { logw("推送状态失败", e) } }
+    fun pushState() = ui { applyLocale(); try { bgPort?.postMessage(extState()) } catch (e: Exception) { logw("推送状态失败", e) } }
+
+    /**
+     * 网页语言（决策 A-10）：用内核原生设置，按当前显示的实例走。内核给出的 navigator.language(s)、Worker 里的 navigator、
+     * Accept-Language 请求头、Intl 默认语言都跟着变，彼此一致（JS 注入改不到 Worker，会被 Turnstile 判 600010）。
+     * 代价：GeckoRuntime 全局只有一份，后台实例的标签页也会跟着当前实例的语言；GeckoView 还会把系统语言追加在后面（computeAcceptLanguages）。
+     */
+    private var appliedLang = "" // "" = 系统语言（启动时内核本来就是系统语言，不用设）
+    fun applyLocale() {
+        val rt = runtime ?: return
+        val l = Host.cur()?.lang?.takeIf { it.isNotEmpty() && "lang" !in Host.fpOff } ?: ""
+        if (l == appliedLang) return
+        appliedLang = l
+        // 回到系统语言时不能传 null：GeckoView 160 的 GeckoViewStartup 收到 null 只重算 intl.accept_languages，
+        // 不动 Services.locale.requestedLocales，Intl 默认语言会停在上一个实例上，又成了不一致。所以显式传系统语言列表。
+        // 带上基础语言（ja-JP → ja-JP, ja），和以前改请求头时的 "ja-JP,ja" 一致；GeckoView 还会在后面追加系统语言。
+        val locs = if (l.isNotEmpty()) listOf(l, l.substringBefore('-')).distinct() else {
+            val ll = android.os.LocaleList.getDefault()
+            (0 until ll.size()).map { ll.get(it).toLanguageTag() }.ifEmpty { listOf(java.util.Locale.getDefault().toLanguageTag()) }
+        }
+        try { rt.settings.setLocales(locs.toTypedArray()); logi("网页语言 → ${locs.joinToString(",")}${if (l.isEmpty()) "（系统）" else ""}") } catch (e: Exception) { logw("设置网页语言失败", e) }
+    }
 
     /**
      * 扩展后台与扩展页面（菜单、管理页、新标签页）的请求：形如 {m, p, b}，见 Bridge。

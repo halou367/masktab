@@ -403,6 +403,7 @@ console.log(JSON.stringify(fp, null, 1));
 const pg2 = await ctx.newPage();
 await pg2.goto(base + 'newtab.html#inst=p2&go=about:blank');
 await pg2.addScriptTag({ path: path.join(dir, 'fp.js') });
+const b0lang = await pg2.evaluate(() => navigator.language);
 const fp2 = await pg2.evaluate(() => {
   const draw = () => { const c = document.createElement('canvas'); c.width = 60; c.height = 20; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 60, 20); x.fillStyle = '#069'; x.fillText('MaskTab', 4, 14); return c.toDataURL(); };
   const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
@@ -410,7 +411,7 @@ const fp2 = await pg2.evaluate(() => {
   window.MTFP.run(window, { seed: 111, tz: 'Pacific/Kiritimati', lang: 'ja-JP', off: ['canvas', 'tz', 'hw'] });
   return { cv: draw() === b.cv, tz: d.getTimezoneOffset() === b.tzo && Date.prototype.getTimezoneOffset === b.nat, cores: navigator.hardwareConcurrency === b.cores, lang: navigator.language };
 });
-check('诊断关掉画布 / 时区 / 核心数：这三样保持原样，没关的语言照改', fp2.cv && fp2.tz && fp2.cores && fp2.lang === 'ja-JP', fp2);
+check('诊断关掉画布 / 时区 / 核心数：这三样保持原样；语言默认不在页面里改（A-10，改由内核原生设置）', fp2.cv && fp2.tz && fp2.cores && fp2.lang === b0lang, fp2);
 console.log(flow[flow.length - 1]);
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');
 await br.close();

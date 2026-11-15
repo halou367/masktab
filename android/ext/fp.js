@@ -2,7 +2,7 @@
 // 在火狐的内容脚本里通过 window.wrappedJSObject + exportFunction 改页面自己的原型（页面脚本看到的就是改过的值），
 // 不往页面插 <script>（会被网页的 CSP 拦下）。在普通页面环境（测试用）里直接改 window。
 // 覆盖：画布读回轻微噪声（getImageData / toDataURL / toBlob）、音频采样轻微噪声、hardwareConcurrency、
-// screen.availHeight 微调、navigator.language(s)、时区（getTimezoneOffset、本地时间各分量、toString、toLocale*、Intl.DateTimeFormat）。
+// screen.availHeight 微调、时区（getTimezoneOffset、本地时间各分量、toString、toLocale*、Intl.DateTimeFormat）。
 // deviceMemory：火狐本来就不暴露，保持不暴露。
 // 限制（见 docs/android.md）：比桌面内核级弱；新建 iframe 立即取原型这类绕法拦不全；按本地时间解析日期字符串仍用系统时区。
 (function () {
@@ -139,7 +139,9 @@
       if (d && d.get) getter(page.Screen.prototype, 'availHeight', function () { return Math.max(0, d.get.call(this) - pr.availCut); });
     });
     // ---- 语言 ----
-    if (cfg.lang && !off.has('lang')) tryit(() => {
+    // 默认不在页面里改（决策 A-10）：内容脚本改不到 Worker，主线程与 Worker 的 navigator.language 不一致会被 Cloudflare Turnstile 判 600010。
+    // 语言改由 app 用内核原生设置（Core.applyLocale）。cfg.langJs 只留给测试 / 对照实验。
+    if (cfg.lang && cfg.langJs && !off.has('lang')) tryit(() => {
       const base = cfg.lang.split('-')[0];
       const langs = clone(base !== cfg.lang ? [cfg.lang, base] : [cfg.lang]);
       tryit(() => page.Object.freeze(langs));

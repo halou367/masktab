@@ -1,6 +1,6 @@
 # 进度
 
-最后更新：2026-11-15。每次推送都要更新这个文件。
+最后更新：2026-11-16。每次推送都要更新这个文件。
 
 ## 一眼看懂
 
@@ -12,6 +12,29 @@
 - 没有人在真实的 Windows 桌面上手动用过它。CI 截图是目前唯一的界面证据。
 - **两端统一（D-4）**：手机 APK 里带的就是电脑版的核心服务，节点面板、订阅与出口、设置、实例管理、实例菜单两端用同一份文件；见下面“两端合成一份代码”。**真机上没有验证。**
 - **Chrome 风格界面（UI-1 ~ UI-7，2026-11-15，已并入 main 正式发布）**：两端全部界面照安卓 Chrome 深色风格重做（附浅色主题），手机加了全面屏适配和下拉刷新。证据只有本地 Chromium 预览、CI 模拟器和 Windows CI 截图；**真机、真实 Windows 桌面都没看过。**
+
+## 2026-11-16：手机 Turnstile 600010 修复（decisions A-10）
+
+需求方：手机直连能过、一开代理就 600010（ip.net.coffee/cloudflare）；诊断开关全关也不过；同一节点电脑能过。
+
+- **根因（沙箱用官方火狐 160 复现并按项二分，报告在工作区 turnstile-diag/REPORT.md）**：`fp.js` 用内容脚本改了主线程的 `navigator.language(s)`，Worker 里改不到，
+  主线程 ko-KR / Worker 系统语言，Turnstile 一比就判 600010。只在开代理时出现，是因为代理关掉时核心服务不下发语言（`expectTZ`）。
+  “诊断全关”也不过，是因为后台 `fpCfg` 走同步通道时漏了 `off`，诊断开关对页面里的伪装实际不生效。
+- **改了什么**：
+  - `Core.kt` 新增 `applyLocale()`：按当前显示的实例调 `GeckoRuntimeSettings.setLocales`（内核原生：主线程、Worker、Accept-Language、Intl 一起变）。
+    内核建好时、每次 `pushState`（切实例、状态变化、启动完成）都会调；语言没变就不重复设。实例语言是 ja-JP 时设成 `ja-JP, ja`（GeckoView 会再追加系统语言）。
+    回到“没设语言 / 诊断关了语言”时显式传系统语言列表，而不是 null——GeckoView 160 收到 null 只重算请求头，不动 Intl 的默认语言（读源码 `GeckoViewStartup.sys.mjs` 发现的）。
+  - `fp.js` 默认不再在页面里改语言（`cfg.langJs` 才开，只留给对照实验）；`background.js` 不再改写 Accept-Language；`fpCfg` 补传 `off`。
+  - 指纹自检页 `fpcheck.html` 加主线程 / Worker 语言一致性检查（不一致判失败），通过行里打出 `languages` 和 Worker 的值；
+    `emulator-smoke.sh` 加两项：切到 #3 / #4 时日志里内核语言设成 ja-JP / de-DE。`preview-pages.mjs` 的诊断开关检查改成“语言默认不在页面里改”。
+- **本地验证**：`go vet`、`go test ./...`、全部内置扩展脚本 `node --check`、`preview-pages.mjs` 69 项通过；自检页在本地 Chromium 里跑过（Worker 检查能正常出结果）。
+  对照 GeckoView 160 源码确认了 `setLocales(@Nullable String[])` 的签名、请求头的拼法（保留原大小写，先应用设置再追加系统语言），以及安卓 FPP 默认项里没有改语言的 JSLocale。
+  Kotlin 没有在本地编译，靠 CI。
+- **代价**：GeckoRuntime 只有一份，后台实例的标签页也跟着当前实例的语言；已经打开的页面要刷新或新开才拿到新语言（冒烟里切实例后都是新开页面）。时区仍是 JS 改的，Worker 里还是系统时区（这次没被判，同类风险）。
+- **没有验证的**：**没在真机验证，需要需求方用手机开代理测 ip.net.coffee/cloudflare**（非交互和托管模式各一次），再试一次切换不同语言的实例后刷新。
+  沙箱里的通过是在官方火狐 160 桌面版上，CI 只有模拟器 + 机房 IP（那里 Turnstile 本来就过不了，只能验证语言一致，不能验证验证码能过）。
+- **推送记录**（需求方担心 GitHub 风控，本轮最多推 3 次）：
+  - 第 1 次：分支 `fix/turnstile-locale`，结果下次推送时补记。
 
 ## 2026-11-15：Chrome 风格界面（decisions UI-1 ~ UI-6）
 

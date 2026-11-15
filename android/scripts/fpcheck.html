@@ -33,7 +33,10 @@ T('throws', () => { try { Date.prototype.getHours.call({}); return 'no throw'; }
 T('invalid', () => String(new Date(NaN).getHours()) + ' ' + String(new Date(NaN)));
 T('perf_ms', () => { const t0 = performance.now(), x = new Date(); let s = 0; for (let i = 0; i < 20000; i++) s += x.getHours() + x.getTimezoneOffset(); return Math.round(performance.now() - t0); });
 T('iframe', () => { const f = document.createElement('iframe'); document.body.append(f); const w = f.contentWindow; const r = [w.navigator.hardwareConcurrency, new w.Date(+d).getTimezoneOffset(), w.navigator.language].join(','); f.remove(); return r; });
+// Worker 里的语言必须和主线程一致（Turnstile 会比，决策 A-10）；时区目前改不到 Worker，只记录不判失败
+T('worker', () => { const w = new Worker(URL.createObjectURL(new Blob(['postMessage([navigator.language, Intl.DateTimeFormat().resolvedOptions().timeZone].join(","))'], { type: 'text/javascript' }))); w.onmessage = (e) => { R.worker = e.data; }; return 'pending'; });
 setTimeout(() => {
+  if (String(R.worker).split(',')[0] !== navigator.language) bad.push('worker_lang = ' + R.worker + '（主线程 ' + navigator.language + '）');
   for (const [k, v] of Object.entries(R)) if (typeof v === 'string' && v.startsWith('ERR')) bad.push(k + ': ' + v);
   for (const k of ['toDataURL', 'toDataURL_stable', 'toDataURL_jpeg', 'toBlob', 'toBlob_cb', 'audio', 'avail', 'intl_parts']) if (R[k] !== true) bad.push(k + ' = ' + R[k]);
   if (![4, 6, 8].includes(R.cores)) bad.push('cores = ' + R.cores);
@@ -51,7 +54,7 @@ setTimeout(() => {
   if (R.throws !== 'TypeError') bad.push('throws = ' + R.throws);
   if (R.invalid !== 'NaN Invalid Date') bad.push('invalid = ' + R.invalid);
   if (!(R.perf_ms < 1500)) bad.push('perf_ms = ' + R.perf_ms);
-  const line = bad.length ? 'MTFPCHECK fail ' + bad.join(' || ') : `MTFPCHECK pass cores=${R.cores} tz=${R.intl_tz} off=${R.tzo} lang=${navigator.language} perf=${R.perf_ms}ms`;
+  const line = bad.length ? 'MTFPCHECK fail ' + bad.join(' || ') : `MTFPCHECK pass cores=${R.cores} tz=${R.intl_tz} off=${R.tzo} lang=${navigator.language} perf=${R.perf_ms}ms langs=${navigator.languages.join('/')} worker=${R.worker}`;
   console.info(line);
   document.title = bad.length ? 'fail' : 'pass';
   document.getElementById('out').textContent = line.replace(/ \|\| /g, '\n') + '\n\n' + JSON.stringify(R, null, 1);

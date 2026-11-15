@@ -536,6 +536,21 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - **现在的“CF 信誉 / 纯净度”不代表验证能不能过**（UI-3）：前者只是核心服务探得到 CF 那一路的出口；后者来自 ip.net.coffee，需求方的出口它给 0 风险、
   同时自己又检出“住宅代理、VPN 出口”，另一家（ippure）给 88。要改成“在实例自己的浏览器里真跑一次验证”，还没做。
 
+### A-10 手机：网页语言改用内核原生设置，不再在页面里改 navigator.language（2026-11-15，2026-11-16 发布，未真机验证）
+
+- **根因（沙箱复现）**：fp.js 用内容脚本改了主线程的 `navigator.language(s)`，Worker 里改不到（内容脚本进不了 Worker），
+  主线程 `ko-KR` / Worker `en-US` 不一致，Cloudflare Turnstile 判 600010。官方火狐 160 + 同款注入，按项二分：只关“语言”就过，
+  只改请求头不改 JS 也过，用内核偏好 `intl.accept_languages` 设成 ko-KR（Worker 一起变）也过；JS 改成和真实值相同也过——判的是“不一致”，不是改写本身。
+  时区同样改不到 Worker（Worker 里仍是系统时区），这次没被判，但同一类风险。
+- **为什么只在开代理时失败**：`expectTZ`（internal/core/proxyflow.go）在代理关掉时不给时区和语言，页面里就不改语言；开代理才按出口给 ko-KR。
+- **为什么“诊断全关”也不过**：后台 `fpCfg` 走同步通道时漏了 `off`，fp.js 收不到关掉的项（异步通道带了，但同步先到、`__mtfpDone` 挡住了后来的）。已补上。
+- **做法**：`Core.applyLocale()` 按当前实例调 `GeckoRuntimeSettings.setLocales`（内核原生，navigator / Worker / 请求头 / Intl 一起变）；
+  fp.js 的语言改写默认关（`cfg.langJs` 才开）；后台不再改 Accept-Language。
+  实例语言 ja-JP 时传 `[ja-JP, ja]`；回到系统语言时**显式传系统语言列表，不传 null**：GeckoView 160 的 `GeckoViewStartup` 收到 null 只重算 `intl.accept_languages`，
+  不改 `Services.locale.requestedLocales`，Intl 默认语言会停在上一个实例上。安卓 FPP 默认项不含 JSLocale，不会把语言盖回 en-US。
+- **代价**：GeckoRuntime 只有一份，后台实例的标签页也跟着当前实例的语言；GeckoView 会把系统语言追加在 `navigator.languages` 后面（computeAcceptLanguages）。
+- **回退**：恢复 fp.js 语言段的条件、后台的 Accept-Language 监听，去掉 `applyLocale()` 调用。
+
 ### UI-1 两端全部界面换成 Chrome 风格，一套组件
 
 - **结论**：电脑和手机的全部页面照安卓 Chrome 设置页的样子：分组标题（强调色小字）+ 一行一项（图标、标题、副标题、右边的开关或“>”），点开是选择框 / 输入框 / 底部表单。

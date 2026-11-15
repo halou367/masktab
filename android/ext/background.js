@@ -3,7 +3,7 @@
 //    GeckoView 的 bug 1948114：details.cookieStoreId 在这里不准，所以先用 tabs.get(tabId) 取标签页的 cookieStoreId（缓存），
 //    再加上“标签页 → 实例”的登记表（新标签页 / 引导页和每个页面的内容脚本会来登记）。
 // 2. 指纹：每个容器注册一份带本实例参数的 document_start 内容脚本（同步注入，页面脚本之前生效）；注册不上时 fp-boot.js 异步兜底。
-// 3. Accept-Language 按实例改写，与页面里的 navigator.language 一致。
+// 3. Accept-Language：不再改写，语言由 app 用内核原生设置（决策 A-10）。
 // 4. 自动填写（复用桌面 autofill.js）：vault:* 消息转给 app 的密码库，实例由发送方标签页决定，站点取发送方真实地址。
 // 5. Cookie 汇总：每分钟按容器统计“站点 + 条数”交给 app（不含值）。
 'use strict';
@@ -124,16 +124,9 @@ function noteBlocked(d, from, pass) {
 browser.proxy.onError.addListener((e) => console.warn('代理错误', e?.message));
 
 // ---------- Accept-Language ----------
-browser.webRequest.onBeforeSendHeaders.addListener(async (d) => {
-  const id = await instOfTab(d.tabId);
-  const lang = id && insts[id]?.lang;
-  if (!lang || off.has('lang')) return {};
-  const base = lang.split('-')[0];
-  const v = base !== lang ? `${lang},${base};q=0.9,en;q=0.8` : `${lang},en;q=0.8`;
-  const hs = d.requestHeaders.filter((x) => x.name.toLowerCase() !== 'accept-language');
-  hs.push({ name: 'Accept-Language', value: base === 'en' ? `${lang},en;q=0.9` : v });
-  return { requestHeaders: hs };
-}, { urls: ['<all_urls>'] }, ['blocking', 'requestHeaders']);
+// 不在这里改写了（决策 A-10）：网页语言由 app 用内核原生设置（GeckoRuntimeSettings.setLocales，见 Core.applyLocale），
+// 请求头、navigator.language(s)、Worker 里的 navigator 由内核一起给出，天然一致。
+// 以前这里改请求头、fp.js 改页面里的 navigator.language：Worker 里改不到，Cloudflare Turnstile 一比就判 600010（沙箱里用火狐 160 复现并二分到这一项）。
 
 // ---------- 指纹参数：网页脚本运行之前同步交给内容脚本 ----------
 // 内容脚本（fp-boot.js）在 document_start 做两件事：
@@ -146,7 +139,8 @@ browser.webRequest.onBeforeSendHeaders.addListener(async (d) => {
 // 以前的做法是 contentScripts.register 按 cookieStoreId 给每个实例注册一份脚本，在 GeckoView 里是错的：
 // 安卓上 cookieStoreId 被当成数字解析（"firefox-container-mt-xx" → NaN → 0），等于每份脚本对所有标签页都生效，
 // 谁先注册谁赢，结果所有实例用的是同一个实例的种子和时区（CI 的指纹自检页抓到的，见 docs/decisions.md A-7）。
-function fpCfg(id) { const x = insts[id]; return x ? { id: x.id, no: x.no, seed: x.seed, tz: x.tz || '', lang: x.lang || '' } : null; }
+// off 一定要带上：fp.js / fp-boot.js 按它跳过诊断里关掉的项。以前同步通道漏了它，诊断开关对页面里的伪装（画布、语言、时区、验证框）实际不生效（2026-11-15 排查 Turnstile 时发现）。
+function fpCfg(id) { const x = insts[id]; return x ? { id: x.id, no: x.no, seed: x.seed, tz: x.tz || '', lang: x.lang || '', off: [...off] } : null; }
 const FP_KEY = new URL(browser.runtime.getURL('')).host;
 const FP_WAIT = 400; // 毫秒：消息一直没到就不等了，内容脚本改走异步兜底
 const fpWho = new Map(); // 随机数 → {id（实例，可能为 null）, at} 或 {wait: 回调}
