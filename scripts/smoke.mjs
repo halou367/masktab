@@ -94,6 +94,14 @@ async function desktopShot(file) {
   const out = path.join(SHOTS, file).replace(/'/g, "''");
   await powershell(`Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left,$b.Top,0,0,$bmp.Size); $bmp.Save('${out}')`);
 }
+// 数一数桌面截图最下面那一条（任务栏）里，颜色接近各实例颜色的像素各有多少。任务栏图标换成“实例颜色的方块”以后，每种颜色应当有几百个。
+async function taskbarColors(file, colors) {
+  if (!SHOTS || !VISIBLE || process.platform !== 'win32') return null;
+  const src = path.join(SHOTS, file).replace(/'/g, "''"), out = path.join(SHOTS, 'taskbar-colors.txt').replace(/'/g, "''");
+  const cs = colors.map((c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)).join(',')).join(';');
+  await powershell(`Add-Type -AssemblyName System.Drawing; $bmp=New-Object System.Drawing.Bitmap '${src}'; $cs='${cs}'.Split(';') | ForEach-Object { ,($_.Split(',') | ForEach-Object { [int]$_ }) }; $n=@(0)*$cs.Count; for($y=$bmp.Height-52;$y -lt $bmp.Height;$y++){ for($x=0;$x -lt $bmp.Width;$x++){ $p=$bmp.GetPixel($x,$y); for($i=0;$i -lt $cs.Count;$i++){ $c=$cs[$i]; if([math]::Abs($p.R-$c[0]) -le 26 -and [math]::Abs($p.G-$c[1]) -le 26 -and [math]::Abs($p.B-$c[2]) -le 26){ $n[$i]++ } } } }; $bmp.Dispose(); Set-Content -Path '${out}' -Value ($n -join ' ')`);
+  try { return fs.readFileSync(path.join(SHOTS, 'taskbar-colors.txt'), 'utf8').trim().split(/\s+/).map(Number); } catch { return null; }
+}
 // 在屏幕坐标 (x, y) 点一下鼠标左键。调查内核弹窗时用：--click x,y 会在第一张桌面截图之后点击，再截一张。
 async function clickAt(x, y) {
   if (!VISIBLE || process.platform !== 'win32') return;
@@ -244,6 +252,12 @@ try {
 
   { const c0 = await cdp(prof(a.id)); await c0.send('Target.createTarget', { url: 'chrome://newtab/' }); c0.close(); await sleep(3000); }
   await desktopShot('6-desktop.png');
+  {
+    // 任务栏图标：两个实例各是自己颜色的方块（决策 UI-14）。只有 Windows 有界面时能看。
+    const cols = [(await inst(a.id))?.color, (await inst(b.id))?.color];
+    const n = await taskbarColors('6-desktop.png', cols);
+    if (n) rec(n.length === 2 && n[0] >= 120 && n[1] >= 120 ? 'ok' : 'warn', '任务栏上两个实例的图标是各自的颜色', `${cols.join(' / ')} 的像素数 ${n.join(' / ')}`);
+  }
   if (typeof arg('click', '') === 'string' && arg('click', '')) { const [cx, cy] = arg('click').split(',').map(Number); await clickAt(cx, cy); await sleep(2000); await desktopShot('6b-after-click.png'); }
 
   // 6. 重启后恢复标签页与登录态

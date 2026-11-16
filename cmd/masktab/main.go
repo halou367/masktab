@@ -31,6 +31,7 @@ func main() {
 	kname := flag.String("kernel-name", "", "宿主模式：浏览器内核的名字（展示用）")
 	kver := flag.String("kernel-version", "", "宿主模式：浏览器内核的版本（展示用）")
 	quit := flag.Bool("quit", false, "让正在运行的 MaskTab 关闭全部窗口并退出，等它退出后返回（安装程序升级前调用）")
+	open := flag.String("open", "", "打开这个实例（实例 id）；MaskTab 没在运行就先启动。任务栏上固定的实例图标用它")
 	flag.Parse()
 	if *showVer {
 		fmt.Println("MaskTab", version)
@@ -48,10 +49,14 @@ func main() {
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "state", "running.lock")); err == nil { // 已有一个核心服务在运行：让它打开普通窗口
 		if f := strings.Fields(string(b)); len(f) == 2 {
-			req, _ := http.NewRequest("POST", "http://127.0.0.1:"+f[0]+"/api/open", nil)
+			path := "/api/open"
+			if *open != "" {
+				path = "/api/instances/" + *open + "/launch"
+			}
+			req, _ := http.NewRequest("POST", "http://127.0.0.1:"+f[0]+path, nil)
 			req.Header.Set("X-MaskTab-Token", f[1])
 			if resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req); err == nil && resp.StatusCode == 200 {
-				fmt.Println("MaskTab 已在运行，已请求打开普通窗口。")
+				fmt.Println("MaskTab 已在运行，已请求打开窗口。")
 				return
 			}
 		}
@@ -103,6 +108,11 @@ func main() {
 	}
 	if !*noOpen {
 		app.Start()
+		if *open != "" {
+			if err := app.Launch(*open); err != nil {
+				log.Printf("打开实例 %s 失败：%v", *open, err)
+			}
+		}
 	}
 	if *keep || *noOpen {
 		select {}

@@ -190,6 +190,7 @@ func (a *App) ensureKernel(onDownload func()) error {
 	if first {
 		close(a.kernelUp)
 		go a.exitRefreshLoop()
+		go a.taskbarLoop()
 	}
 	return nil
 }
