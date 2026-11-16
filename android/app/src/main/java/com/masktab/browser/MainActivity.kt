@@ -228,7 +228,9 @@ class MainActivity : Activity(), CoreUi {
         avatar.ring = p.bg; avatar.invalidate()
         progress.progressTintList = android.content.res.ColorStateList.valueOf(p.acc)
         progress.progressBackgroundTintList = android.content.res.ColorStateList.valueOf(p.bg)
-        gecko.coverUntilFirstPaint(p.bg)
+        // 盖一层底色直到网页画出第一帧，免得刚启动时闪白。只在还没有网页显示时盖：已经画好的网页不会再有“第一帧”，
+        // 盖上去就揭不掉了（CI 运行 43810538941：系统切到深色后新标签页整片黑）。
+        if (shown == null) gecko.coverUntilFirstPaint(p.bg)
         applyBars()
     }
 
