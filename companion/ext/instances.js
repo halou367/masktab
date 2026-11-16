@@ -222,10 +222,10 @@ function importBox() {
   return h('div', { class: 'scrim center', onclick: (ev) => ev.target === ev.currentTarget && close() },
     h('div', { class: 'modal' },
       h('h3', {}, icon('mail', 18), '导入邮箱', h('span', { class: 'grow' }), ibtn('x', '关闭', close)),
-      h('div', { class: 'sub hint' }, '一行一个邮箱，可以在后面跟它自己的密码（空格、逗号、|、---- 都行）。每个邮箱建一个实例，用邮箱命名，相互隔离；登录时自动填邮箱和密码，注册新站时提示用默认密码。'),
+      h('div', { class: 'sub hint' }, '一行一个邮箱，可以在后面跟它自己的密码（空格、逗号、|、---- 都行）。每个邮箱建一个实例，用邮箱命名，相互隔离；登录时自动填邮箱和密码，注册新站时提示用默认密码。没写密码的邮箱用下面的默认密码' + (hasDef ? '（留空 = 用已保存的那个）。' : '。')),
       h('textarea', { rows: 8, placeholder: 'alice@gmail.com\nbob@outlook.com----他自己的密码\ncarol@gmail.com', value: imp.text, oninput: (ev) => { imp.text = ev.target.value; const s = ev.target.selectionStart; ctx.render(); const t = document.querySelector('.modal textarea'); t.focus(); t.setSelectionRange(s, s); } }),
       h('div', { class: 'frow' }, icon('key', 18),
-        h('input', { class: 'grow', type: 'text', autocomplete: 'off', placeholder: hasDef ? '默认密码（留空用已存的）' : '默认密码（没写密码的用它）', title: hasDef ? '留空 = 用已保存的默认密码' : '没写密码的邮箱用它', value: imp.pass, oninput: (ev) => { imp.pass = ev.target.value; } }),
+        h('input', { class: 'grow', type: 'text', autocomplete: 'off', placeholder: hasDef ? '默认密码（可留空）' : '默认密码', title: hasDef ? '留空 = 用已保存的默认密码' : '没写密码的邮箱用它', value: imp.pass, oninput: (ev) => { imp.pass = ev.target.value; } }),
         h('label', { class: 'ck', title: '以后注册新站、导入时都用它' }, h('input', { type: 'checkbox', checked: imp.save, onchange: (ev) => { imp.save = ev.target.checked; } }), '设为默认')),
       h('div', { class: 'frow' }, h('span', { class: 'sub grow' }, p.ok ? `将创建 ${p.ok} 个实例${p.own ? `，其中 ${p.own} 个带自己的密码` : ''}${p.bad ? `；${p.bad} 行不是邮箱，会跳过` : ''}` : '还没有邮箱'),
         h('button', { class: 'btn pri', disabled: !p.ok, onclick: () => run(async () => {
