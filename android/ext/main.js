@@ -82,7 +82,7 @@ function oops(title, detail) {
 let barsKey = '';
 function bars() {
   if (pageOf() === 'idle') return;
-  const dim = !!document.querySelector('.scrim'), sheet = !!document.querySelector('.scrim > .sheet');
+  const dim = !!document.querySelector('.scrim:not(.dd)'), sheet = !!document.querySelector('.scrim > .sheet'); // 下拉栏的遮罩是透明的，不压暗
   const key = `${dim}|${sheet}|${document.documentElement.dataset.theme}`;
   if (key === barsKey) return;
   barsKey = key;

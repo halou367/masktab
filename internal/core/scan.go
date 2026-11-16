@@ -717,6 +717,7 @@ func (a *App) pruneGoneLocked(sub *model.Subscription) {
 //	      一个都没有就保持原样并提示，绝不悄悄换到别的国家。没选国家（不限）时：入口挑最快的，反代配成和入口同国。
 //	出口手动：钉死，不通也不换。
 //	入口自动：反代那台机器自己能当入口就用它（同一台机器，少绕一跳）；不能就挑延迟最低的，先同国、再全部——能连上最要紧。
+//	      指定了入口国家（EntryRegion）就先在那个国家里挑，见 entryWant；那里没有能用的就按上面的办法，并提示一句。
 //	入口手动：钉死。
 func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	if !a.coreOK {
@@ -744,6 +745,7 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	}
 	nodes := a.nodesLocked(sub)
 	cur, region, url := currentNode(in, sub), in.Proxy.Region, a.Settings.DelayURL
+	entryRegion := in.Proxy.EntryRegion
 	curPip := pipID(in)
 	// 第一步：出口。选了国家、开着自动 → 先在这个国家里定反代。
 	newPip, pipOK := curPip, false
@@ -775,6 +777,7 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 		return false
 	}
 	chosen, ok := cur, false
+	noEntry := "" // 指定的入口国家里没有能用的入口
 	if entryAuto {
 		nameOf := map[string]string{}
 		for _, n := range nodes {
@@ -811,8 +814,15 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 			}
 			return "", false
 		}
+		// 指定了入口国家：先在那个国家里挑
+		want := entryWant(isET, entryRegion, region, pipKeyOf != "")
+		if want != "" {
+			if chosen, ok = try(want); !ok {
+				noEntry = want
+			}
+		}
 		// 反代那台机器自己能当入口：用它
-		if pipKeyOf != "" {
+		if !ok && pipKeyOf != "" {
 			for _, n := range nodes {
 				if n.key() != pipKeyOf || exclude[n.ID] {
 					continue
@@ -877,6 +887,8 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	}
 	if region != "" && ((isET && exitAuto && !pipOK) || (!isET && !ok)) {
 		r.Notice = "noexit:" + strings.ToUpper(region) // 界面上显示成"<国家>无可用出口"
+	} else if noEntry != "" {
+		r.Notice = "noentry:" + strings.ToUpper(noEntry) // 界面上显示成"<国家>没有可用的入口，已跟随出口"
 	}
 	if changed {
 		in.UpdatedAt = now()

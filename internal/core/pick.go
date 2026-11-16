@@ -51,6 +51,20 @@ func pickEntry(cs []cand, region, cur string, exclude map[string]bool) (string, 
 	return best.ID, found
 }
 
+// entryWant：入口自动时，要不要先在用户指定的入口国家（want）里挑。返回要用的国家代码；空 = 不管它，按"跟随出口"的老办法。
+// 只在两种情况下听它的：反代已经定下来了（pipFixed，CF 网站的出口不靠入口决定），或者出口没限国家（exitRegion 为空）。
+// 出口限了国家、又没有反代可用时，CF 网站也是从入口所在的国家出去的——这时入口换国家等于出口换国家，和"出口国家"的选择打架，所以不听。
+// 通用订阅的节点就是出口，没有"入口国家"这回事。
+func entryWant(isET bool, want, exitRegion string, pipFixed bool) string {
+	if !isET || want == "" {
+		return ""
+	}
+	if pipFixed || exitRegion == "" {
+		return strings.ToUpper(want)
+	}
+	return ""
+}
+
 // pickPip 给入口配反代，目标是两路出口同在一个国家。返回反代候选的 id；空 = 不指定（用服务端默认的）。
 // 顺序：当前选的仍然同国 → 不换；用户自己加的同国反代（没被别的实例占用的优先，其次是和入口同一台机器的，再比延迟）；
 // 服务端默认的本来就同国 → 不指定；入口地址里能当反代、且同国的（和入口同一个地址的优先）；都没有 → 不指定。

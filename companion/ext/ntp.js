@@ -36,10 +36,11 @@ export async function renderNtp(root, st, me, host) {
   root.replaceChildren(h('div', { class: 'ntp' }, kids.filter(Boolean)));
 }
 
-// 伪装概况卡
+// 伪装概况卡。出口类型只画图标（住宅 / 机房 / 手机，悬停有字），不再写字（决策 UI-9）。
+const TYPE_IC = { res: 'home', dc: 'dc', mobile: 'phone' };
 function statCard(st, me, host) {
   const on = me.proxy.state === 'on', rt = me.rt, ex = on ? shownExit(me) : null, dz = disguise(me), q = exitQ(st, me), cf = cfRep(me);
-  const head = on ? (ex ? [flag(ex.country), h('span', { class: 'mono' }, ex.ip), h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency)), q.type && h('span', { class: 'tag' }, TYPE_NAME[q.type] || q.type)]
+  const head = on ? (ex ? [flag(ex.country), h('span', { class: 'mono' }, ex.ip), h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency)), TYPE_IC[q.type] && h('span', { class: 'ty', title: TYPE_NAME[q.type], 'aria-label': TYPE_NAME[q.type] }, icon(TYPE_IC[q.type], 18))]
     : rt.cut || rt.error ? [icon('warn', 18), h('span', { class: 'bad el' }, rt.error || '已断流：' + rt.cut)] : [h('span', { class: 'ic spin' }, icon('refresh', 18)), '出口探测中…'])
     : [icon('globe', 18), '直连'];
   const cell = (big, t, v) => h('div', { class: 'nsc' }, big, h('span', { class: 'nst' }, t), h('span', { class: 'nsv' }, v));
@@ -47,10 +48,10 @@ function statCard(st, me, host) {
     h('div', { class: 'nsh' }, head),
     on && h('div', { class: 'nsg' },
       cell(ringEl(dz.pct, 44), '伪装度', dz.total ? `${dz.pass}/${dz.total} 项一致` : '待判断'),
-      cell(ringEl(q.score, 44), '纯净度', q.score != null ? (q.type ? TYPE_NAME[q.type] || q.type : '出口 IP') : '查不到'),
+      cell(ringEl(q.score, 44), '纯净度', q.score != null ? '出口 IP' : '查不到'),
       cell(h('span', { class: 'cfbig ' + cf.st }, h('i')), 'CF 信誉', cf.text)),
     !on && h('div', { class: 'nswarn' }, icon('warn', 16), '直连中，网站看到真实 IP'),
-    on && mismatch(me) && h('div', { class: 'nswarn' }, icon('warn', 16), `两路出口不在同一国家：普通网站 ${cname(rt.probe.direct.country)} / CF 网站 ${cname(rt.probe.cf.country)}`));
+    on && mismatch(me) && h('div', { class: 'nswarn' }, icon('warn', 16), '两路出口不在同一国家', h('span', { class: 'grow' }), h('span', { title: '普网' }, flag(rt.probe.direct.country)), h('span', { title: 'CF 网站' }, flag(rt.probe.cf.country))));
 }
 
 // 书签：一行三个（电脑四个）；长按 / 右键删除；最后一个“+”添加

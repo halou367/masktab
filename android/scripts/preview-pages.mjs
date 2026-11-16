@@ -42,8 +42,16 @@ const mock = (state) => {
   const vault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' }], hasDefault: true };
   const addons = [{ id: 'ublock0@raymondhill.net', name: 'uBlock Origin', version: '1.62.0', enabled: true, desc: '高效的广告拦截器', action: true, options: true }];
   const recent = [{ url: 'https://github.com/halou367/masktab', title: 'halou367/masktab', at: Date.now() - 180e3 }, { url: 'https://ippure.com/', title: 'IPPure · 浏览器指纹检测', at: Date.now() - 720e3 }, { url: 'https://mail.google.com/mail/u/0/', title: 'Gmail - 收件箱', at: Date.now() - 3600e3 }];
-  const reply = (m, p) => {
+  const reply = (m, p, b) => {
     const k = `${m} ${p.split('?')[0]}`;
+    // 改线路的请求照着记到状态里（只记模式、国家、选了哪个；代理开关不记，后面的检查要它一直开着），这样能看到“自动 / 手动”两种排法
+    if (m === 'PATCH' && /^\/api\/instances\//.test(p) && b && b.proxy) {
+      const px = state.me.proxy, q = b.proxy;
+      for (const f of ['exitMode', 'entryMode', 'region', 'entryRegion']) if (q[f] != null) px[f] = q[f];
+      if (q.pipId != null) px.exitId = q.pipId;
+      if (q.nodeId != null) px.addressId = q.nodeId;
+      const it = state.instances.find((x) => x.id === state.me.id); if (it) it.proxy = px;
+    }
     if (k === 'GET /api/state') return state;
     if (k === 'GET /api/vault') return vault;
     if (k === 'GET /api/vault/icons') return { icons: state.__icons };
@@ -55,7 +63,7 @@ const mock = (state) => {
   };
   window.__calls = [];
   const rt = {
-    sendNativeMessage: async (app, msg) => { window.__calls.push(msg); return msg.t === 'hello' ? { id: 'p2', seed: 1, tz: 'Asia/Tokyo', lang: 'ja-JP' } : JSON.stringify({ data: reply(msg.m, msg.p) }); },
+    sendNativeMessage: async (app, msg) => { window.__calls.push(msg); return msg.t === 'hello' ? { id: 'p2', seed: 1, tz: 'Asia/Tokyo', lang: 'ja-JP' } : JSON.stringify({ data: reply(msg.m, msg.p, msg.b) }); },
     sendMessage: async (m) => (m?.t === 'diag:blocked' ? { n: 2, list: [{ t: Date.now(), host: 'challenges.cloudflare.com', type: 'xmlhttprequest', from: 'challenges.cloudflare.com', tab: -1, cs: '', pass: false }, { t: Date.now(), host: 'a.example', type: 'script', from: 'b.example', tab: -1, cs: '', pass: true }] } : { ok: true, reg: 'sync' }),
   };
   window.browser = { runtime: rt };
@@ -173,7 +181,7 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
     i = await info();
     check(`${label} 返回回到设置首页`, i.hash === 'settings' && i.title === '设置', i);
   }
-  // 节点与出口的子视图：订阅线路、出口国家（选一个国家）、出口自动开关、代理开关、指纹与伪装
+  // 节点与出口：订阅线路、出口国家 / 入口国家（下拉栏）、自动开关（开 = 只挑国家；关 = 从列表里选 / 自定义）、代理开关、指纹与伪装（决策 UI-9）
   await pg.locator('button.row', { hasText: '节点与出口' }).first().click();
   await pg.waitForTimeout(400);
   await pg.screenshot({ path: path.join(out, 'flow-node.png') });
@@ -182,37 +190,105 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
   i = await info();
   const lines = await pg.locator('button.sl').count();
   check('节点页 → 订阅线路', i.title === '订阅线路' && lines >= 1 && i.hash === 'node', { ...i, lines });
+  // 对话框：点“添加订阅”弹出输入框，遮罩盖上时告诉 app 压暗状态栏、导航栏
+  await calls();
+  await pg.locator('button.row', { hasText: '添加订阅' }).click();
+  await pg.waitForTimeout(300);
+  i = await info();
+  let bars = (await calls()).filter((c) => c.p === '/ui/bars').pop()?.b;
+  check('对话框打开：页面上报压暗状态栏', i.scrim && bars?.dim === true && bars?.src === 'panel', { ...i, bars });
+  for (const x of await roundScroll(pg)) rsBad.push(`对话框: ${x}`);
+  await pg.screenshot({ path: path.join(out, 'flow-dialog.png') });
+  await sysBack();
+  i = await info();
+  bars = (await calls()).filter((c) => c.p === '/ui/bars').pop()?.b;
+  check('系统返回键先关对话框，并上报不再压暗', !i.scrim && i.title === '订阅线路' && bars?.dim === false, { ...i, bars });
   await back();
   i = await info();
   check('订阅线路返回回到节点页', i.title === '节点与出口', i);
-  await pg.locator('button.row[aria-label="换国家"]').click();
+  // 下拉栏里有什么：每项的文字、哪一项是选中的（整行换底色）、有没有伸出屏幕、页面上还有没有单选圈
+  const dd = () => pg.evaluate(() => { const b = document.querySelector('.scrim.dd .ddm'); if (!b) return null; const r = b.getBoundingClientRect();
+    return { n: b.querySelectorAll('.opt').length, on: [...b.querySelectorAll('.opt.on')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()), inside: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight,
+      tinted: [...b.querySelectorAll('.opt.on')].every((e) => getComputedStyle(e).backgroundColor !== getComputedStyle(b).backgroundColor && getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'), radio: document.querySelectorAll('.radio').length }; });
+  const lastPx = async () => (await calls()).filter((c) => c.m === 'PATCH' && c.p === '/api/instances/p2').pop()?.b?.proxy;
+  await calls();
+  await pg.locator('button.row[aria-label="出口国家"]').click();
   await pg.waitForTimeout(300);
   i = await info();
-  const rows = await pg.locator('.ls .iprow').count();
-  check('节点页 → 出口国家列表', i.title === '出口国家' && rows === 4, { ...i, rows }); // 三个国家 + “不限”
+  let d = await dd();
+  bars = (await calls()).filter((c) => c.p === '/ui/bars').pop()?.b;
+  check('出口国家是下拉栏：不换页、不压暗，三个国家 + “不限”，选中的那项换底色、没有单选圈', i.title === '节点与出口' && d?.n === 4 && d.on.length === 1 && /日本/.test(d.on[0]) && d.tinted && d.inside && d.radio === 0 && !bars?.dim, { ...i, d, bars });
+  for (const x of await roundScroll(pg)) rsBad.push(`下拉栏: ${x}`);
   await pg.screenshot({ path: path.join(out, 'flow-region.png') });
-  await calls();
-  await pg.locator('.ls .iprow', { hasText: '美国' }).click();
-  await pg.waitForTimeout(400);
-  let px = (await calls()).filter((c) => c.m === 'PATCH' && c.p === '/api/instances/p2').pop()?.b?.proxy;
+  await sysBack();
   i = await info();
-  check('点一个国家：发出切换请求并回到节点页', i.title === '节点与出口' && px?.region === 'US' && px?.exitMode === 'auto' && px?.state === 'on', { ...i, px });
+  check('系统返回键先关下拉栏，留在节点页', !i.scrim && i.title === '节点与出口' && i.hash === 'node', i);
+  await pg.locator('button.row[aria-label="出口国家"]').click();
+  await pg.waitForTimeout(300);
+  await pg.locator('.ddm .opt', { hasText: '美国' }).click();
+  await pg.waitForTimeout(400);
+  let px = await lastPx();
+  i = await info();
+  const shown = await pg.locator('button.row[aria-label="出口国家"] .trail').innerText();
+  check('下拉栏里点一个国家：发出切换请求，行上换成这个国家', !i.scrim && px?.region === 'US' && px?.exitMode === 'auto' && px?.state === 'on' && /美国/.test(shown), { ...i, px, shown });
+  await pg.locator('button.row[aria-label="入口国家"]').click();
+  await pg.waitForTimeout(300);
+  d = await dd();
+  check('入口国家也是下拉栏：第一项“跟随出口”是默认', d?.n >= 3 && d.on.length === 1 && /跟随出口/.test(d.on[0]) && d.inside, { d });
+  await pg.locator('.ddm .opt', { hasText: '香港' }).click();
+  await pg.waitForTimeout(400);
+  px = await lastPx();
+  check('点一个入口国家：发出 entryRegion', px?.entryRegion === 'HK' && px?.entryMode === 'auto', { px });
+  // 首页不重复：没有“当前出口 / 当前入口”两行；自动时没有“从列表里选”
+  const rowsNow = () => pg.evaluate(() => [...document.querySelectorAll('#root .row')].map((e) => ({ t: e.querySelector('.t')?.innerText.trim(), on: e.classList.contains('on') })));
+  let rr = await rowsNow();
+  check('自动选择开着：只有国家那一行，没有“当前出口 / 当前入口”、没有“从列表里选”', !rr.some((r) => /当前|从列表里选|自定义/.test(r.t)) && rr.filter((r) => /国家$/.test(r.t)).length === 2, { rr });
   await pg.locator('button.sw[aria-label="出口自动选择"]').click();
   await pg.waitForTimeout(300);
   px = (await calls()).filter((c) => c.m === 'PATCH').pop()?.b?.proxy;
   check('出口的自动开关：发出 exitMode=manual', px?.exitMode === 'manual', { px });
+  await pg.locator('button.sw[aria-label="入口自动选择"]').click();
+  await pg.waitForTimeout(300);
+  px = (await calls()).filter((c) => c.m === 'PATCH').pop()?.b?.proxy;
+  check('入口的自动开关：发出 entryMode=manual', px?.entryMode === 'manual', { px });
+  rr = await rowsNow();
+  check('自动选择关掉：换成“从列表里选”和“自定义”，正在用的那一行换底色', rr.filter((r) => r.t === '从列表里选').length === 2 && rr.filter((r) => /^自定义/.test(r.t)).length === 2 && rr.filter((r) => r.on).length === 2 && !rr.some((r) => /国家$/.test(r.t)), { rr });
+  await pg.screenshot({ path: path.join(out, 'flow-manual.png'), fullPage: true });
+  await pg.locator('button.row[aria-label="自定义 ProxyIP"]').click();
+  await pg.waitForTimeout(300);
+  check('自定义 ProxyIP：弹出输入框', await pg.evaluate(() => !!document.querySelector('.scrim .dlg input') && /自定义 ProxyIP/.test(document.querySelector('.dlg h3')?.textContent || '')), {});
+  await sysBack();
   await pg.locator('button.row[aria-label="选出口"]').click();
   await pg.waitForTimeout(300);
   i = await info();
-  check('节点页 → 出口列表（ProxyIP）', i.title === '出口 ProxyIP' && await pg.locator('.ls .iprow').count() >= 3, i);
+  const sel = () => pg.evaluate(() => ({ rows: document.querySelectorAll('.ls .iprow').length, on: document.querySelectorAll('.ls .iprow.on').length, radio: document.querySelectorAll('.radio').length,
+    tinted: [...document.querySelectorAll('.ls .iprow.on')].every((e) => getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'),
+    cut: [...document.querySelectorAll('.ls .iprow .ip')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.innerText) }));
+  let sl = await sel();
+  check('节点页 → 出口列表（ProxyIP）：选中的一行换底色、没有单选圈、IP 没被截断', i.title === '出口 ProxyIP' && sl.rows >= 3 && sl.on === 1 && sl.tinted && sl.radio === 0 && sl.cut.length === 0, { ...i, sl });
   await pg.screenshot({ path: path.join(out, 'flow-exit.png') });
+  await pg.locator('.chips .chip.ddc').click();
+  await pg.waitForTimeout(300);
+  d = await dd();
+  check('出口列表：按国家筛选是下拉栏（“全部” + 三个国家）', d?.n === 4 && d.on.length === 1 && /全部/.test(d.on[0]) && d.inside, { d });
+  await pg.locator('.ddm .opt', { hasText: '日本' }).click();
+  await pg.waitForTimeout(300);
+  sl = await sel();
+  check('筛了国家：只剩这个国家的出口', sl.rows === 1, { sl });
+  await pg.locator('.chips .sortb').click();
+  await pg.waitForTimeout(300);
+  d = await dd();
+  check('出口列表：排序是下拉栏（延迟 / 纯净度 / 下载）', d?.n === 3 && /延迟/.test(d.on[0] || '') && d.inside, { d });
+  await pg.screenshot({ path: path.join(out, 'flow-sort.png') });
+  await sysBack();
   await sysBack();
   i = await info();
-  check('系统返回键：出口列表回到节点页', i.title === '节点与出口' && i.hash === 'node', i);
+  check('系统返回键：先关下拉栏，再从出口列表回到节点页', i.title === '节点与出口' && i.hash === 'node' && !i.scrim, i);
   await pg.locator('button.row[aria-label="选入口"]').click();
   await pg.waitForTimeout(300);
   i = await info();
-  check('节点页 → 入口列表', i.title === '入口 优选 IP', i);
+  sl = await sel();
+  check('节点页 → 入口列表：选中的一行换底色、没有单选圈', i.title === '入口 优选 IP' && sl.on === 1 && sl.tinted && sl.radio === 0 && sl.cut.length === 0, { ...i, sl });
   await pg.screenshot({ path: path.join(out, 'flow-entry.png') });
   await back();
   await pg.locator('button.sw[aria-label="关闭代理"]').click();
@@ -223,19 +299,15 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
   await pg.waitForTimeout(300);
   i = await info();
   check('节点页 → 指纹与伪装', i.title === '指纹与伪装' && i.chk === 10 && i.hash === 'node', i);
-  // 对话框：点“时区”弹出选择框，遮罩盖上时告诉 app 压暗状态栏、导航栏
-  await calls();
+  // 选一项（时区）：从那一行长出下拉栏，不是对话框
   await pg.locator('button.row', { has: pg.locator('.t', { hasText: /^时区$/ }) }).click();
   await pg.waitForTimeout(300);
-  i = await info();
-  let bars = (await calls()).filter((c) => c.p === '/ui/bars').pop()?.b;
-  check('对话框打开：页面上报压暗状态栏', i.scrim && bars?.dim === true && bars?.src === 'panel', { ...i, bars });
-  for (const x of await roundScroll(pg)) rsBad.push(`对话框: ${x}`);
-  await pg.screenshot({ path: path.join(out, 'flow-dialog.png') });
+  d = await dd();
+  check('指纹页“时区”：下拉栏，两项，选中的换底色', d?.n === 2 && d.on.length === 1 && d.tinted && d.inside && d.radio === 0, { d });
+  await pg.screenshot({ path: path.join(out, 'flow-dropdown.png') });
   await sysBack();
   i = await info();
-  bars = (await calls()).filter((c) => c.p === '/ui/bars').pop()?.b;
-  check('系统返回键先关对话框，并上报不再压暗', !i.scrim && i.title === '指纹与伪装' && bars?.dim === false, { ...i, bars });
+  check('系统返回键先关下拉栏（指纹页）', !i.scrim && i.title === '指纹与伪装', i);
   await sysBack();
   i = await info();
   check('系统返回键：指纹与伪装回到节点页', i.title === '节点与出口', i);
@@ -322,15 +394,19 @@ if (desk) {
   await mp.waitForTimeout(600);
   const a = await words(dp), b = await words(mp);
   check('两端节点页的内容一致（出口卡、订阅、出口 / 入口）', a.length > 6 && JSON.stringify(a) === JSON.stringify(b), { 电脑: a, 手机: b });
-  await dp.locator('button.row[aria-label="换国家"]').click();
+  await dp.locator('button.row[aria-label="出口国家"]').click();
   await dp.waitForTimeout(300);
-  await mp.locator('button.row[aria-label="换国家"]').click();
+  await mp.locator('button.row[aria-label="出口国家"]').click();
   await mp.waitForTimeout(300);
-  const rows = (p) => p.evaluate(() => [...document.querySelectorAll('.ls .iprow')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
+  const rows = (p) => p.evaluate(() => [...document.querySelectorAll('.scrim.dd .ddm .opt')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
   const ra = await rows(dp), rb = await rows(mp);
-  check('两端出口国家列表一致', ra.length === 4 && JSON.stringify(ra) === JSON.stringify(rb), { 电脑: ra, 手机: rb });
-  await dp.locator('.appbar button[title="返回"]').click();
+  check('两端出口国家的下拉栏一致', ra.length === 4 && JSON.stringify(ra) === JSON.stringify(rb), { 电脑: ra, 手机: rb });
+  const ddIn = await dp.evaluate(() => { const r = document.querySelector('.ddm').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight; });
+  check('电脑版弹窗里的下拉栏没有伸出弹窗', ddIn, {});
+  await dp.screenshot({ path: path.join(out, 'desk-region.png') });
+  await dp.locator('.scrim.dd').click({ position: { x: 4, y: 4 } });
   await dp.waitForTimeout(200);
+  check('电脑版：点下拉栏外面 = 收起', await dp.evaluate(() => !document.querySelector('.scrim')), {});
   await dp.locator('.appbar button[title="返回实例菜单"]').click();
   await dp.waitForTimeout(200);
   check('电脑版：节点页返回回到头像菜单', await dp.evaluate(() => document.body.classList.contains('menu')), {});

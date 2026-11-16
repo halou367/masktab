@@ -199,3 +199,25 @@ func TestInstModeDefault(t *testing.T) {
 		t.Error("出口、入口的模式互不影响")
 	}
 }
+
+// 入口国家：只有反代已经定下来、或者出口不限国家时才听用户指定的入口国家。
+func TestEntryWant(t *testing.T) {
+	cases := []struct {
+		name             string
+		isET             bool
+		want, exitRegion string
+		pipFixed         bool
+		out              string
+	}{
+		{"没指定：跟随出口", true, "", "JP", true, ""},
+		{"反代已定：听指定的", true, "hk", "JP", true, "HK"},
+		{"出口不限：听指定的", true, "HK", "", false, "HK"},
+		{"出口限了国家又没有反代：不听（入口换国家 = 出口换国家）", true, "HK", "JP", false, ""},
+		{"通用订阅：没有入口国家", false, "HK", "", true, ""},
+	}
+	for _, c := range cases {
+		if got := entryWant(c.isET, c.want, c.exitRegion, c.pipFixed); got != c.out {
+			t.Errorf("%s：得到 %q，应为 %q", c.name, got, c.out)
+		}
+	}
+}

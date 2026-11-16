@@ -64,8 +64,8 @@ function rulesBox(st) {
 function card(i) {
   const ex = i.proxy.state === 'on' ? shownExit(i) : null, rt = i.rt;
   const sites = cardSites(i);
-  const state = rt.starting ? stepLine(i, ctx.st.launchSteps)
-    : h('span', { class: 'state' + (rt.running ? ' on' : '') }, h('i'), rt.running ? '运行中' : '休眠');
+  // 运行中 / 休眠不写字（决策 UI-9）：头像右上角的点、右边是“关闭”还是“打开”已经说了；只有正在启动时写进度。
+  const state = rt.starting ? stepLine(i, ctx.st.launchSteps) : null;
   // 国旗：悬停才显示出口详情
   const fl = i.kind === 'normal' || i.proxy.state !== 'on'
     ? h('span', { class: 'fl direct', tabindex: 0 }, icon('globe', 16), h('span', { class: 'tip' }, '直连（不经代理）'))

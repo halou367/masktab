@@ -224,14 +224,14 @@ export const sw = (on, title, fn, disabled) => h('button', { class: 'sw' + (on ?
 export const appBar = (title, back, ...acts) => h('div', { class: 'appbar' }, back && ibtn('back', back.title || '返回', back.fn || back), h('h1', {}, title), acts);
 // 分组标题（Chrome 设置页的蓝色小标题）。
 export const sec = (t, r, noic) => h('div', { class: 'sec' + (noic ? ' noic' : '') }, t, r != null && r !== false && h('span', { class: 'r' }, r));
-// 一行：左边图标、标题、副标题、右边的东西、可选的“>”。有 onclick 就是按钮。
+// 一行：左边图标、标题、副标题、右边的东西、可选的“>”（chev：进下一页）或“∨”（drop：原地开下拉栏）。有 onclick 就是按钮。
 export function row(o) {
   const tag = o.onclick ? 'button' : 'div';
   return h(tag, { class: 'row' + (o.s != null && o.s !== false && o.s !== '' ? ' two' : '') + (o.dis ? ' dis' : '') + (o.cls ? ' ' + o.cls : ''), onclick: o.onclick, title: o.title, 'aria-label': o.aria, disabled: tag === 'button' && o.dis ? true : null },
     o.ic !== undefined && h('span', { class: 'lic' }, typeof o.ic === 'string' ? icon(o.ic, 24) : o.ic),
     h('span', { class: 'tx' }, h('span', { class: 't' }, o.t), o.s != null && o.s !== false && o.s !== '' && h('span', { class: 's' + (o.nw ? ' nw' : '') }, o.s)),
     o.trail != null && o.trail !== false && h('span', { class: 'trail' }, o.trail),
-    o.chev && h('span', { class: 'chev' }, icon('chevR', 22)));
+    (o.chev || o.drop) && h('span', { class: 'chev' }, icon(o.drop ? 'chevD' : 'chevR', 22)));
 }
 // 分数的颜色：≥ 80 绿、≥ 50 黄、其余红。
 export const scoreCls = (s) => (s >= 80 ? 'good' : s >= 50 ? 'mid' : 'bad');
@@ -260,17 +260,41 @@ export function avatar(color, text, size = 40, cc, dot, ring2) {
 
 // ---------- 对话框（代替 confirm / prompt：样子和 Chrome 一致，也不依赖内核自己的弹框） ----------
 const bars = () => dispatchEvent(new Event('mt-bars')); // 手机外壳据此重算状态栏 / 导航栏的颜色（盖了一层遮罩时变暗）
-function overlay(box, center = true) {
-  const sc = h('div', { class: 'scrim' + (center ? ' center' : '') }, box);
+function overlay(box, center = true, cls = '') {
+  const sc = h('div', { class: 'scrim' + (center ? ' center' : '') + cls }, box);
   const close = () => { sc.remove(); bars(); };
   sc.addEventListener('click', (e) => { if (e.target === sc) { close(); sc.dispatchEvent(new Event('dismiss')); } });
   document.body.append(sc); bars();
   return { sc, close };
 }
-/** 选一项：opts = [[值, 名称, 说明?]]。返回选中的值；取消返回 null。 */
-export function choose(title, opts, cur) {
+// 最近按下的那一行 / 那个按钮：下拉栏从它那儿长出来（键盘回车触发时用当前焦点）。
+let pressed = null, pressedAt = 0;
+if (typeof addEventListener === 'function') addEventListener('pointerdown', (e) => { pressed = e.target?.closest?.('button, .row') || null; pressedAt = Date.now(); }, true);
+const anchorNow = () => (pressed && pressed.isConnected && Date.now() - pressedAt < 1500 ? pressed : document.activeElement?.matches?.('button') ? document.activeElement : null);
+/** 下拉栏（决策 UI-9）：从 anchor 下面长出来，下面放不下就往上开。opts = [[值, 名称, 右边的东西?, 左边的东西?]]。
+    返回选中的值；点外面 / 系统返回键 = null。选中的那一项整行换底色，不放单选圈。
+    盒子有圆角所以自己不滚（决策 UI-7）：比屏幕还长时由外面那层透明遮罩滚。left = 和 anchor 左对齐（默认右对齐）。 */
+export function dropdown(anchor, opts, cur, { left = false } = {}) {
   return new Promise((res) => {
-    const list = h('div', {}, opts.map(([v, t, s2]) => h('button', { class: 'opt rp', onclick: () => { o.close(); res(v); } }, h('span', { class: 'radio' + (v === cur ? ' on' : '') }), h('span', { class: 'grow' }, h('div', {}, t), s2 && h('div', { class: 'sub' }, s2)))));
+    const box = h('div', { class: 'ddm', role: 'listbox' }, opts.map(([v, t, end, lead]) => h('button', { class: 'opt rp' + (v === cur ? ' on' : ''), role: 'option', 'aria-selected': v === cur ? 'true' : 'false', onclick: () => { o.close(); res(v); } },
+      lead, h('span', { class: 'grow' + (t instanceof Node ? '' : ' el') }, t), end != null && end !== false && h('span', { class: 'end' }, end))));
+    const o = overlay(box, false, ' dd'); // dd：透明遮罩，不压暗状态栏
+    o.sc.addEventListener('dismiss', () => res(null));
+    const a = (anchor.querySelector?.('.trail, .chev') || anchor).getBoundingClientRect(), r = anchor.getBoundingClientRect(), W = innerWidth, H = innerHeight, bw = box.offsetWidth, bh = box.offsetHeight;
+    const x = Math.max(8, Math.min(W - bw - 8, left ? r.left : a.right - bw));
+    let y = r.bottom + 4;
+    if (y + bh > H - 8) y = r.top - 4 - bh >= 8 ? r.top - 4 - bh : Math.max(8, H - 8 - bh);
+    box.style.left = x + 'px'; box.style.top = y + 'px';
+    box.style.transformOrigin = `${Math.round(a.left + a.width / 2 - x)}px ${y < r.top ? '100%' : '0'}`;
+  });
+}
+/** 选一项：opts = [[值, 名称, 说明?]]。返回选中的值；取消返回 null。
+    从某一行 / 某个按钮点出来的开成下拉栏（anchor 不传就用最近按下的那个）；找不到来源才用对话框。两种都用底色表示选中。 */
+export function choose(title, opts, cur, anchor) {
+  const a = anchor || anchorNow();
+  if (a && a.isConnected) return dropdown(a, opts.map(([v, t, s2]) => [v, s2 ? h('span', {}, h('div', {}, t), h('div', { class: 'sub' }, s2)) : t]), cur);
+  return new Promise((res) => {
+    const list = h('div', {}, opts.map(([v, t, s2]) => h('button', { class: 'opt rp' + (v === cur ? ' on' : ''), 'aria-selected': v === cur ? 'true' : 'false', onclick: () => { o.close(); res(v); } }, h('span', { class: 'grow' }, h('div', {}, t), s2 && h('div', { class: 'sub' }, s2)))));
     const o = overlay(h('div', { class: 'dlg', role: 'dialog' }, h('h3', {}, title), list, h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: () => { o.close(); res(null); } }, '取消'))));
     o.sc.addEventListener('dismiss', () => res(null));
   });

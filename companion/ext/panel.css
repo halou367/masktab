@@ -1,5 +1,4 @@
 /* 节点面板的样式已经并进 ui.css（2026-11-15 Chrome 风格界面，决策 UI-1：两端共用一套组件）。
    这个文件留着只是因为打包清单、CI 清单里还列着它；以后有只属于节点面板的样式再写在这里。 */
 html.pc .chips, html.pc .prog { top: 56px; }
-.iprow.on { color: var(--on); }
 .iprow .nm { font-family: inherit; }

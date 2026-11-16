@@ -1,4 +1,5 @@
 // 实例菜单：点工具栏最右边的头像打开（2026-11-15 起照已确认的 Chrome 风格演示，决策 UI-1）。
+// 其它实例那几行不写“运行中 / 休眠”（决策 UI-9）：运行中的整行换底色，休眠的变淡；账号数画成钥匙图标 + 数字。
 // 上面是当前实例：大头像、出口、纯净度圆环和 CF 色点；中间是三项常用入口；下面列出其它实例，运行中的点了切过去（聚焦它的窗口），休眠的点了打开。
 // 电脑的工具栏弹窗用它；手机的头像菜单浮在网页上，由 app 原生画（同样的内容、同样的接口，见 decisions UI-2）。
 import { api, shownExit, letterOf as letter } from './api.js';
@@ -62,12 +63,11 @@ export function menuView(st, nav) {
     h('div', { class: 'insts' }, list.map((x) => {
       const xe = x.proxy.state === 'on' ? shownExit(x) : null;
       return h('button', {
-        class: 'ai', title: x.rt.running ? `切换到 #${x.no} 的窗口` : `打开 #${x.no}`,
+        class: 'ai ' + (x.rt.running || x.rt.starting ? 'run' : 'idle'), title: x.rt.running ? `切换到 #${x.no} 的窗口` : `打开 #${x.no}`,
         onclick: () => run(async () => { await api('POST', `/api/instances/${x.id}/launch`); if (x.rt.running && !MOBILE) window.close(); }, x.rt.running ? null : `正在打开 #${x.no}…`),
       }, face(x, false, true),
       h('span', { class: 'tx' }, h('span', { class: 'n' }, `#${x.no} ${nameOf(x)}`),
-        x.rt.starting ? stepLine(x, st.launchSteps) : h('span', { class: 's' }, xe ? [flag(xe.country), h('span', { class: 'mono' }, xe.ip)] : exitText(x), x.acct?.count ? ` · ${x.acct.count} 个账号` : '')),
-      !x.rt.starting && h('span', { class: 'state' + (x.rt.running ? ' run' : '') }, x.rt.running ? '运行中' : '休眠'));
+        x.rt.starting ? stepLine(x, st.launchSteps) : h('span', { class: 's' }, xe ? [flag(xe.country), h('span', { class: 'mono' }, xe.ip)] : exitText(x), x.acct?.count ? h('span', { class: 'cnt2', title: `${x.acct.count} 个账号` }, icon('key', 13), x.acct.count) : null)));
     })),
     !list.length && h('div', { class: 'empty' }, others.length ? '没有匹配的实例' : '还没有别的实例'));
 

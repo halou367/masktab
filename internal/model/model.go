@@ -23,12 +23,13 @@ type InstProxy struct {
 	SubscriptionID string `json:"subscriptionId,omitempty"`
 	ExitID         string `json:"exitId,omitempty"`
 	ExitIP         string `json:"exitIp,omitempty"`
-	Auto           bool   `json:"auto"`                // 旧字段（一个开关管入口和出口）。现在只在升级时读一次，之后跟着 ExitMode 写
-	ExitMode       string `json:"exitMode,omitempty"`  // 出口：auto = 只定国家，程序在这个国家里挑，不通自动换 | manual = 钉死 ExitID，不通也不换
-	EntryMode      string `json:"entryMode,omitempty"` // 入口：auto = 跟着出口（同一台机器能当入口就用它，否则挑延迟最低的）| manual = 钉死 AddressID
-	Region         string `json:"region,omitempty"`    // 出口自动时限定的国家（国家代码，如 KR）；空 = 不限
-	Profile        string `json:"profile,omitempty"`   // 用订阅里的哪一套连接参数（Subscription.Profiles 的 key）；空 = 自动分配
-	AddressMode    string `json:"addressMode"`         // same-as-exit | custom
+	Auto           bool   `json:"auto"`                  // 旧字段（一个开关管入口和出口）。现在只在升级时读一次，之后跟着 ExitMode 写
+	ExitMode       string `json:"exitMode,omitempty"`    // 出口：auto = 只定国家，程序在这个国家里挑，不通自动换 | manual = 钉死 ExitID，不通也不换
+	EntryMode      string `json:"entryMode,omitempty"`   // 入口：auto = 跟着出口（同一台机器能当入口就用它，否则挑延迟最低的）| manual = 钉死 AddressID
+	Region         string `json:"region,omitempty"`      // 出口自动时限定的国家（国家代码，如 KR）；空 = 不限
+	EntryRegion    string `json:"entryRegion,omitempty"` // 入口自动时先在哪个国家里挑（国家代码）；空 = 跟随出口。只对 edgetunnel 有意义
+	Profile        string `json:"profile,omitempty"`     // 用订阅里的哪一套连接参数（Subscription.Profiles 的 key）；空 = 自动分配
+	AddressMode    string `json:"addressMode"`           // same-as-exit | custom
 	AddressID      string `json:"addressId,omitempty"`
 	Host           string `json:"host,omitempty"`
 	NodeKey        string `json:"nodeKey,omitempty"`

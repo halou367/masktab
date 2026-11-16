@@ -21,7 +21,7 @@ export function settingsHome(c) {
   const run = st.instances.filter((i) => i.rt.running).length;
   const pick = async (title, opts, cur, k) => { const v = await choose(title, opts, cur); if (v != null && v !== cur) set(c, k, v); };
   return [appBar('设置', c.back),
-    me && row({ ic: face(me), t: `#${me.no} ${me.name || '未命名'}`, s: '当前实例', chev: true, onclick: () => c.open(`instances/${me.id}`) }),
+    me && row({ ic: face(me), t: `#${me.no} ${me.name || '未命名'}`, s: ex ? [flag(ex.country), h('span', { class: 'mono' }, ex.ip)] : '直连', chev: true, onclick: () => c.open(`instances/${me.id}`) }),
     sec('MaskTab'),
     row({ ic: 'layers', t: '实例', s: `${st.instances.length} 个 · ${run} 个运行中`, chev: true, onclick: () => c.open('instances') }),
     row({ ic: 'globe', t: '节点与出口', s: ex ? [flag(ex.country), `${cname(ex.country)} · `, h('span', { class: 'mono' }, ex.ip)] : me?.proxy.state === 'on' ? '出口探测中' : '直连', chev: true, onclick: () => c.open('node') }),
@@ -32,7 +32,7 @@ export function settingsHome(c) {
     row({ ic: 'bug', t: '诊断', s: '出口探测、日志、复制诊断信息', chev: true, onclick: () => c.open('diag') }),
     hosted(st) && row({ ic: 'shield', t: '人机验证诊断', s: (s.fpOff || []).length ? h('span', { class: 'mid' }, `已关掉 ${(s.fpOff || []).length} 项伪装`) : '验证一直过不去时，逐项排查是哪一项引起的', chev: true, onclick: () => c.open('settings/verify') }),
     sec('基本设置'),
-    row({ ic: 'search', t: '搜索引擎', s: engineName(s.searchUrl), chev: true, onclick: async () => {
+    row({ ic: 'search', t: '搜索引擎', s: engineName(s.searchUrl), drop: true, onclick: async () => {
       const v = await choose('搜索引擎', [...ENGINES, ['', '自定义…']], ENGINES.some((e) => e[0] === s.searchUrl) ? s.searchUrl : '');
       if (v == null) return;
       if (v) { set(c, 'searchUrl', v); return; }
@@ -43,7 +43,7 @@ export function settingsHome(c) {
       const v = await ask(st.vault?.hasDefault ? '修改默认密码' : '设置默认密码', { type: 'password', note: '批量导入邮箱、注册新站时用；留空 = 清除。' + (hosted(st) ? '加密保存在本机（密钥在系统密钥库里）。' : '加密保存在本机（Windows 用系统凭据保护）。') });
       if (v != null) c.act(() => api('PUT', '/api/vault/default', { password: v }), v ? '已保存' : '已清除');
     } }),
-    row({ ic: 'palette', t: '外观', s: themeName(s.theme), chev: true, onclick: () => pick('外观', THEMES, s.theme || 'dark', 'theme') }),
+    row({ ic: 'palette', t: '外观', s: themeName(s.theme), drop: true, onclick: () => pick('外观', THEMES, s.theme || 'dark', 'theme') }),
     row({ ic: 'addhome', t: '新标签页', s: '伪装概况、书签、最近访问、已存账号', chev: true, onclick: () => c.open('settings/ntp') }),
     row({ ic: 'tune', t: '高级', s: '选线、测速、订阅刷新、网络', chev: true, onclick: () => c.open('settings/adv') }),
     h('div', { class: 'foot noic' }, `MaskTab ${st.version}`)];
@@ -56,16 +56,16 @@ export function settingsAdv(c) {
   const name = (opts, v) => opts.find((o) => o[0] === v)?.[1] || String(v);
   const O = {
     exitPick: [['unused', '自动挑未占用的'], ['none', '不指定']],
-    tz: [['exit-cf', 'CF 网站的出口'], ['exit-direct', '普通网站的出口']],
+    tz: [['exit-cf', 'CF 网站的出口'], ['exit-direct', '普网的出口']],
     path: [['query', '/?proxyip=值&其余参数（默认）'], ['segment', '/proxyip=值?其余参数（备选）']],
     ext: [['shared', '共享'], ['isolated', '独立']],
   };
   const text = (title, k, note, placeholder) => async () => { const v = await ask(title, { value: s[k] ?? '', note, placeholder }); if (v != null) set(c, k, k === 'subRefreshHours' ? (+v || 6) : v.trim()); };
   return [appBar('高级', c.back),
     sec('选线'),
-    row({ ic: 'swap', t: '手动模式下新实例的反代', s: name(O.exitPick, s.exitPick), chev: true, onclick: () => pick('手动模式下新实例的反代', O.exitPick, s.exitPick, 'exitPick') }),
-    row({ ic: 'clock', t: '时区默认跟随', s: name(O.tz, s.tzSourceDefault), chev: true, onclick: () => pick('时区默认跟随', O.tz, s.tzSourceDefault, 'tzSourceDefault') }),
-    row({ ic: 'code', t: 'ProxyIP 的 path 写法', s: name(O.path, s.pathTemplate), chev: true, onclick: () => pick('ProxyIP 的 path 写法', O.path, s.pathTemplate, 'pathTemplate') }),
+    row({ ic: 'swap', t: '手动模式下新实例的反代', s: name(O.exitPick, s.exitPick), drop: true, onclick: () => pick('手动模式下新实例的反代', O.exitPick, s.exitPick, 'exitPick') }),
+    row({ ic: 'clock', t: '时区默认跟随', s: name(O.tz, s.tzSourceDefault), drop: true, onclick: () => pick('时区默认跟随', O.tz, s.tzSourceDefault, 'tzSourceDefault') }),
+    row({ ic: 'code', t: 'ProxyIP 的 path 写法', s: name(O.path, s.pathTemplate), drop: true, onclick: () => pick('ProxyIP 的 path 写法', O.path, s.pathTemplate, 'pathTemplate') }),
     row({ ic: 'home', t: '查出口 IP 的类型和纯净度', s: '把出口 IP 发给 ip.net.coffee 查询住宅 / 机房和纯净度，结果存 7 天', trail: sw(!s.ipqOff, '查纯净度', (v) => set(c, 'ipqOff', !v)) }),
     sec('订阅与测速'),
     row({ ic: 'refresh', t: '订阅过期时间', s: `${s.subRefreshHours} 小时`, chev: true, onclick: text('订阅过期时间（小时）', 'subRefreshHours') }),
@@ -75,7 +75,7 @@ export function settingsAdv(c) {
       trail: sw(s.bindIface !== 'off', '绑定物理网卡', (v) => set(c, 'bindIface', v ? '' : 'off')) }),
     !host && row({ ic: 'dl', t: 'GitHub 下载镜像前缀', s: s.mirror || '直连', chev: true, onclick: text('GitHub 下载镜像前缀', 'mirror', '留空为直连', 'https://ghfast.top/') }),
     !host && sec('启动'),
-    !host && row({ ic: 'ext', t: '新扩展的数据模式', s: name(O.ext, s.newExtData), chev: true, onclick: () => pick('新扩展的数据模式', O.ext, s.newExtData, 'newExtData') }),
+    !host && row({ ic: 'ext', t: '新扩展的数据模式', s: name(O.ext, s.newExtData), drop: true, onclick: () => pick('新扩展的数据模式', O.ext, s.newExtData, 'newExtData') }),
     !host && row({ ic: 'history', t: '启动时恢复上次的实例', trail: sw(s.restoreOnStart, '恢复上次的实例', (v) => set(c, 'restoreOnStart', v)) }),
     !host && row({ ic: 'close', t: '退出 MaskTab', s: '关闭全部实例并退出（下次启动会恢复）', onclick: async () => { if (await confirmDlg('关闭全部实例并退出？', '', '退出', true)) api('POST', '/api/quit').catch(() => {}); } })];
 }
@@ -207,7 +207,7 @@ export function diagView(c) {
   const qi = q(p?.cf?.ip || p?.direct?.ip);
   return [appBar('诊断', c.back),
     sec('出口 trace' + (me ? `（#${me.no}）` : '')),
-    me?.proxy.state !== 'on' ? row({ ic: 'globe', t: '直连', s: '网站看到真实 IP' }) : [line('globe', '普通网站看到的出口', p?.direct), line('cloud', 'CF 网站看到的出口', p?.cf),
+    me?.proxy.state !== 'on' ? row({ ic: 'globe', t: '直连', s: '网站看到真实 IP' }) : [line('globe', '普网的出口', p?.direct), line('cloud', 'CF 网站的出口', p?.cf),
       row({ ic: 'speed', t: '延迟', s: me.rt.latency > 0 ? `${me.rt.latency} ms` : me.rt.latency < 0 ? '不通' : '—' }),
       row({ ic: 'leaf', t: '出口纯净度', s: qi && qi.score >= 0 ? `${qi.score} · ${qi.type === 'res' ? '住宅' : qi.type === 'dc' ? '机房' : qi.type || '类型未知'} · 来源 ${qi.src || 'ip.net.coffee'}` : st.settings.ipqOff ? '已在“高级”里关闭查询' : '查不到' })],
     sec('组件'),

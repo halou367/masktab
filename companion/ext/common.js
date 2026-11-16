@@ -20,6 +20,7 @@ export const RESTART_WHY = { timezone: '出口时区已变化', extensions: '扩
 export function noticeText(n, cname = (c) => c) {
   if (!n) return '';
   if (n.startsWith('noexit:')) return `${cname(n.slice(7))}无可用出口`;
+  if (n.startsWith('noentry:')) return `${cname(n.slice(8))}没有可用的入口，已跟随出口`;
   if (n === 'switched') return '线路不通，已自动换了一条';
   return n;
 }
