@@ -495,7 +495,7 @@ check('窄屏（320 / 360 宽）左右不被裁：没有横向溢出、没有元
 {
   const pg = await ctx.newPage(); watch(pg, 'ntp-labels');
   await pg.goto(base + 'newtab.html#inst=p2'); await pg.waitForTimeout(700);
-  const names = ['节点与出口', '指纹与伪装', '账号与密码', '录入登录', '新建实例', '导入邮箱', '管理实例', '更多选项', '设置', '实例 #'];
+  const names = ['节点与出口', '指纹与伪装', '账号管理', '录入登录', '新建实例', '导入邮箱', '管理实例', '更多选项', '设置', '实例 #'];
   const hit = await pg.evaluate((ns) => [...document.querySelectorAll('[aria-label]')].map((e) => e.getAttribute('aria-label')).filter((l) => ns.some((n) => l.startsWith(n))), names);
   check('新标签页的无障碍标签不和原生菜单项重名（伪装概况卡叫“伪装概况”）', hit.length === 0 && await pg.locator('[aria-label="伪装概况"]').count() === 1, hit);
   await pg.close();

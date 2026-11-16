@@ -21,7 +21,7 @@ export function settingsHome(c) {
   const run = st.instances.filter((i) => i.rt.running).length;
   const pick = async (title, opts, cur, k) => { const v = await choose(title, opts, cur); if (v != null && v !== cur) set(c, k, v); };
   return [appBar('设置', c.back),
-    me && row({ ic: face(me), t: `#${me.no} ${me.name || '未命名'}`, s: ex ? [flag(ex.country), h('span', { class: 'mono' }, ex.ip)] : '直连', chev: true, onclick: () => c.open(`instances/${me.id}`) }),
+    me && row({ ic: face(me), t: `#${me.no} ${me.name || '未命名'}`, s: '当前实例', chev: true, onclick: () => c.open(`instances/${me.id}`) }), // 出口在下面“节点与出口”那一行，这里不重复
     sec('MaskTab'),
     row({ ic: 'layers', t: '实例', s: `${st.instances.length} 个 · ${run} 个运行中`, chev: true, onclick: () => c.open('instances') }),
     row({ ic: 'globe', t: '节点与出口', s: ex ? [flag(ex.country), `${cname(ex.country)} · `, h('span', { class: 'mono' }, ex.ip)] : me?.proxy.state === 'on' ? '出口探测中' : '直连', chev: true, onclick: () => c.open('node') }),

@@ -86,7 +86,7 @@ sleep 6; shot 6b-fp
 A shell input keyevent KEYCODE_BACK; sleep 1
 
 # 5b. 真点击：点工具栏头像 → 在头像菜单里点每一项，页面要真的打开并就绪。用户在真机上反馈过的就是这条路
-#     （账号与密码、节点与出口、指纹与伪装、新建实例、导入邮箱、管理实例，点了白屏或闪退），所以每一项都点一遍。
+#     （账号管理、节点与出口、指纹与伪装、新建实例，点了白屏或闪退），所以每一项都点一遍。
 #     头像和菜单项是原生控件，按无障碍标签找位置，坐标不用修正；内置页面里的控件（网页）按 OFFMODE 修正，见 tap_desc。
 ready() { grep -c "MaskTab 页面就绪 $1" "$OUT/logcat-live.txt"; }
 count() { grep -c "$1" "$OUT/logcat-live.txt"; }
@@ -144,8 +144,17 @@ if openmenu; then sleep 1; shot t-0menu; echo "通过：点工具栏头像打开
 else echo "失败：点头像后菜单没有打开"; shot t-0menu; fail=1; fi
 tapflow node "节点与出口" node
 tapflow fp "指纹与伪装" fp
-tapflow acct "账号与密码" "instances/"
-tapflow manage "管理实例" "instances 有状态"
+tapflow acct "账号管理" "instances/"
+# 实例管理、导入邮箱不在头像菜单里了（决策 UI-10：照定稿的演示，菜单里只留“新建实例”），按路由直接打开
+openroute() {
+  local n0 k
+  closepanel; n0=$(ready "$3")
+  A shell am start -n $ACT --es mt_open "$2" > /dev/null
+  for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready "$3")" -gt "$n0" ] && break; done
+  sleep 2; shot "t-$1"
+  if [ "$(ready "$3")" -gt "$n0" ]; then echo "通过：打开 $1（路由 $2）"; else echo "失败：打开 $1（路由 $2）后页面没有就绪"; fail=1; fi
+}
+openroute manage instances "instances 有状态"
 # 新建实例：菜单收起、切到新实例、开出它的新标签页
 if openmenu; then
   n0=$(count "新建实例 #"); t0=$(count "MaskTab 新标签页就绪")
@@ -207,7 +216,7 @@ if A logcat -d -s MaskTab:I | grep -q "诊断信息已收集"; then echo "通过
 A shell input keyevent KEYCODE_BACK; sleep 2
 # 导入邮箱：这一页以前让 GPU 进程卡死、整个模拟器不响应（弹框是带圆角的可滚动容器）。
 # 打开后多等一会儿再截图：截得出来、GPU 进程没被杀，才算过。
-tapflow import "导入邮箱" "instances/import"
+openroute import instances/import "instances/import"
 sleep 8; if shot t-import-later; then echo "通过：导入邮箱页开着时系统照常响应"; fi
 closepanel
 # 扩展页

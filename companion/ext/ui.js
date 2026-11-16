@@ -328,15 +328,33 @@ export function sheet(kids, onclose) {
 
 // ---------- 主题 ----------
 // 设置里的“外观”：dark（默认）| light | system（跟随系统）。先用上次记下的，免得状态拿回来之前闪一下。
-let themePref = '';
+// 强调色跟着当前实例的颜色走（决策 UI-10，演示定稿）：开关、选中的底色、卡片的色调都从实例色算出来，
+// 一眼能看出现在在哪个实例里。页面底色 --bg 不动（手机上状态栏、导航栏由 app 涂成同一个颜色，两边要对得上）。
+let themePref = '', seedPref = '';
 const mq = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: light)') : null;
-export function applyTheme(t) {
+function hueSat(hex) {
+  const n = parseInt(hex.slice(1), 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+  let hh = 0; if (d) hh = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [Math.round(hh * 60 + 360) % 360, d ? (d / (1 - Math.abs(2 * l - 1))) * 100 : 0];
+}
+/** 按“深 / 浅 + 实例色”算出一套颜色变量（和 Chrome.kt 的 Pal.of 是同一组公式，改一边要改另一边）。 */
+export function accentTokens(light, seed) {
+  const [hue, s0] = hueSat(seed), s = Math.min(s0, 90), n = Math.min(s, 40) / 40;
+  const c = (sat, l) => `hsl(${hue} ${Math.round(sat)}% ${l}%)`;
+  return light
+    ? { surf: c(30 * n, 97), surf2: c(30 * n, 95.5), surf3: c(26 * n, 91), pill: c(28 * n, 92), div: c(16 * n, 84), hair: c(16 * n, 87), acc: c(s * .9, 40), onacc: '#ffffff', tonal: c(s * .9, 90), ontonal: c(s * .8, 20) }
+    : { surf: c(10 * n, 17), surf2: c(9 * n, 12.5), surf3: c(9 * n, 19), pill: c(10 * n, 20), div: c(8 * n, 26), hair: c(8 * n, 24), acc: c(s * .85, 82), onacc: c(s * .7, 18), tonal: c(s * .42, 28), ontonal: c(s * .9, 91) };
+}
+export function applyTheme(t, seed) {
   if (t != null) { themePref = t || 'dark'; try { localStorage.setItem('mt-theme', themePref); } catch { /* 忽略 */ } }
+  if (seed != null && /^#[0-9a-f]{6}$/i.test(seed) && seed !== seedPref) { seedPref = seed; try { localStorage.setItem('mt-seed', seedPref); } catch { /* 忽略 */ } }
   const light = themePref === 'light' || (themePref === 'system' && mq?.matches);
-  const want = light ? 'light' : 'dark';
-  if (document.documentElement.dataset.theme !== want) { document.documentElement.dataset.theme = want; bars(); }
+  const want = light ? 'light' : 'dark', de = document.documentElement, key = want + seedPref;
+  if (de.dataset.tk !== key) { de.dataset.tk = key; for (const [k, v] of Object.entries(accentTokens(light, seedPref || '#1a73e8'))) de.style.setProperty('--' + k, v); }
+  if (de.dataset.theme !== want) { de.dataset.theme = want; bars(); }
   return want;
 }
-try { themePref = localStorage.getItem('mt-theme') || 'dark'; } catch { themePref = 'dark'; }
+try { themePref = localStorage.getItem('mt-theme') || 'dark'; seedPref = localStorage.getItem('mt-seed') || ''; } catch { themePref = 'dark'; }
 applyTheme();
 mq?.addEventListener?.('change', () => applyTheme());

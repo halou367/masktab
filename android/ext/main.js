@@ -58,7 +58,7 @@ async function load(force) {
     if (!st) oops('应用没有回话', loadErr); else if (force) toast(loadErr, true);
     return;
   }
-  applyTheme(s.settings?.theme || 'dark');
+  applyTheme(s.settings?.theme || 'dark', s.me?.color);
   if (await syncIcons(s)) last = ''; // 站点图标更新了：这一轮一定重画
   const j = JSON.stringify(s);
   if (!force && j === last) return; // 没变化不重画（重画会打断输入、拖动）

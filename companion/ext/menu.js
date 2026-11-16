@@ -2,7 +2,7 @@
 // 其它实例那几行不写“运行中 / 休眠”（决策 UI-9）：运行中的整行换底色，休眠的变淡；账号数画成钥匙图标 + 数字。
 // 上面是当前实例：大头像、出口、纯净度圆环和 CF 色点；中间是三项常用入口；下面列出其它实例，运行中的点了切过去（聚焦它的窗口），休眠的点了打开。
 // 电脑的工具栏弹窗用它；手机的头像菜单浮在网页上，由 app 原生画（同样的内容、同样的接口，见 decisions UI-2）。
-import { api, shownExit, letterOf as letter } from './api.js';
+import { api, shownExit, fmtBytes, letterOf as letter } from './api.js';
 import { h, icon, flag, run, delayText, delayCls, cname, ringEl, cfDot } from './ui.js';
 import { disguise, exitQ, cfRep } from './common.js';
 import { siteIcon, uniqSites } from './sites.js';
@@ -37,17 +37,18 @@ export function menuView(st, nav) {
   const dz = disguise(me), q2 = exitQ(st, me), cf = cfRep(me);
   const kids = [];
   kids.push(h('div', { class: 'hero', style: { '--c': me.color } },
-    face(me, true),
+    face(me, true, false, true), // 国旗在右边那一行里，头像上不再重复
     h('div', { class: 'grow', style: { minWidth: 0 } },
       h('div', { class: 'nm el' }, `#${me.no} ${nameOf(me)}`),
       h('button', { class: 'ip', title: '节点与出口', onclick: nav.node },
         on ? (ex ? [flag(ex.country), h('span', { class: 'mono' }, ex.ip), h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency))] : rt.cut || rt.error ? h('span', { class: 'bad' }, rt.error || rt.cut) : '出口探测中…')
           : me.kind === 'normal' ? '直连 · 不伪装' : h('span', { class: 'mid' }, '直连中，网站看到真实 IP')),
+      on && ex && !rt.starting && h('div', { class: 'tf mono', title: `已用 ↑ ${fmtBytes(rt.up || 0)}  ↓ ${fmtBytes(rt.down || 0)}` }, `↑ ${fmtBytes(rt.upRate || 0)}/s   ↓ ${fmtBytes(rt.downRate || 0)}/s`),
       rt.starting && stepLine(me, st.launchSteps),
       sites.length > 0 && h('div', { class: 'sites', title: '记住了账号的站点' }, sites.slice(0, 8).map((s) => siteIcon(s, 15)), sites.length > 8 && h('span', { class: 'sub' }, `+${sites.length - 8}`))),
     on && h('span', { class: 'rep', title: `纯净度 ${q2.score ?? '未知'} · CF 信誉 ${cf.text}` }, ringEl(q2.score, 36), cfDot(cf.st, 'CF'))));
-  const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic, 22), h('span', { class: 'grow' }, label), k != null && k !== '' && !(MOBILE && /^Ctrl/.test(k)) && h('span', { class: 'k' }, k));
-  kids.push(mi('key', '账号与密码', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),
+  const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic, 22), h('span', { class: 'grow' }, label), k != null && k !== '' && h('span', { class: 'k' }, k), h('span', { class: 'chev' }, icon('chevR', 20)));
+  kids.push(mi('key', '账号管理', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),
     mi('globe', '节点与出口', nav.node, ex ? [flag(ex.country), cname(ex.country)] : on ? '' : '直连'),
     me.kind !== 'normal' && mi('finger', '指纹与伪装', nav.fp, dz.total ? `${dz.pass}/${dz.total}` : ''),
     nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : ''));
@@ -57,25 +58,24 @@ export function menuView(st, nav) {
   const list = others.filter(match);
   const search = h('input', { placeholder: '搜索实例：名称 / 邮箱 / 编号', value: q, 'aria-label': '搜索实例' });
   search.oninput = () => { q = search.value; nav.render(); const s = document.querySelector('.qs input'); if (s) { s.focus(); s.setSelectionRange(q.length, q.length); } };
-  kids.push(h('div', { class: 'mdiv' }),
-    h('div', { class: 'lbl' }, h('span', {}, `其它实例（${others.length}）`), others.length > 0 && h('span', {}, '点一下切换')),
+  // 标题这一行右边：管理实例、导入邮箱、设置、关闭这个实例（图标，悬停有字）和“新建实例”。演示定稿里菜单底下不再有一串文字项。
+  const tool = (ic, tip, fn) => h('button', { class: 'ib sm', title: tip, 'aria-label': tip, onclick: fn }, icon(ic, 19));
+  kids.push(h('div', { class: 'lbl' }, h('span', {}, `其它实例（${others.length}）`),
+      h('span', { class: 'tools' },
+        tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), tool('gear', '设置', () => nav.open('settings')),
+        me.kind !== 'normal' && tool('power', '关闭这个实例', () => run(() => api('POST', `/api/instances/${me.id}/stop`))),
+        h('button', { class: 'btn tonal sm', title: '新建实例' + (MOBILE ? '' : '（Ctrl+M）'), onclick: () => run(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('add', 16), h('span', { class: 'bt' }, '新建实例')))),
     others.length > 5 && h('div', { class: 'qs' }, icon('search', 18), search),
     h('div', { class: 'insts' }, list.map((x) => {
       const xe = x.proxy.state === 'on' ? shownExit(x) : null;
       return h('button', {
-        class: 'ai ' + (x.rt.running || x.rt.starting ? 'run' : 'idle'), title: x.rt.running ? `切换到 #${x.no} 的窗口` : `打开 #${x.no}`,
+        class: 'ai ' + (x.rt.running || x.rt.starting ? 'run' : 'idle'), style: { '--c': x.color }, title: x.rt.running ? `切换到 #${x.no} 的窗口` : `打开 #${x.no}`,
         onclick: () => run(async () => { await api('POST', `/api/instances/${x.id}/launch`); if (x.rt.running && !MOBILE) window.close(); }, x.rt.running ? null : `正在打开 #${x.no}…`),
-      }, face(x, false, true),
+      }, face(x, false, true, true),
       h('span', { class: 'tx' }, h('span', { class: 'n' }, `#${x.no} ${nameOf(x)}`),
         x.rt.starting ? stepLine(x, st.launchSteps) : h('span', { class: 's' }, xe ? [flag(xe.country), h('span', { class: 'mono' }, xe.ip)] : exitText(x), x.acct?.count ? h('span', { class: 'cnt2', title: `${x.acct.count} 个账号` }, icon('key', 13), x.acct.count) : null)));
     })),
     !list.length && h('div', { class: 'empty' }, others.length ? '没有匹配的实例' : '还没有别的实例'));
 
-  kids.push(h('div', { class: 'mdiv' }),
-    mi('add', '新建实例', () => run(() => api('POST', '/api/instances', {}), '正在创建…'), 'Ctrl+M'),
-    mi('mail', '导入邮箱', () => nav.open('instances/import')),
-    mi('layers', '管理实例', () => nav.open('instances'), 'Ctrl+Shift+M'),
-    mi('gear', '设置', () => nav.open('settings')),
-    me.kind !== 'normal' && mi('power', '关闭这个实例', () => run(() => api('POST', `/api/instances/${me.id}/stop`))));
   return h('div', { class: 'amenu' }, kids);
 }

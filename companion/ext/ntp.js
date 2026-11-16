@@ -5,7 +5,7 @@
 //   host.recent()      最近访问 [{url, title, at}]（电脑取内核自己的历史记录；手机由 app 按实例记）
 //   host.openNode()    去“节点与出口”    host.pc   电脑版（多一个标题，书签一行四个）
 import { api } from './api.js';
-import { h, icon, flag, delayText, delayCls, cname, ringEl, cfDot, ask, confirmDlg, toast, applyTheme } from './ui.js';
+import { h, icon, flag, avatar, delayText, delayCls, ringEl, ask, confirmDlg, toast, applyTheme } from './ui.js';
 import { shownExit, mismatch, disguise, exitQ, cfRep, TYPE_NAME } from './common.js';
 import { siteIcon, siteName, uniqSites } from './sites.js';
 
@@ -19,13 +19,13 @@ export const toUrl = (v, search) => {
 };
 
 export async function renderNtp(root, st, me, host) {
-  applyTheme(st.settings?.theme || 'dark');
+  applyTheme(st.settings?.theme || 'dark', (me || st.me)?.color);
   const hide = new Set(st.settings?.ntpHide || []);
   const search = st.settings?.searchUrl;
   const input = h('input', { id: 'q', autocomplete: 'off', placeholder: '搜索或输入网址', 'aria-label': '搜索或输入网址', enterkeyhint: 'go' });
   const form = h('form', { class: 'nq', onsubmit: (e) => { e.preventDefault(); const v = input.value.trim(); if (v) location.href = toUrl(v, search); } }, icon('search', 22), input);
   const kids = [host.pc && h('div', { class: 'logo' }, h('span', { class: 'av', style: { '--c': me.color, '--s': '44px' } }, String(me.no)), '新标签页'), form];
-  if (!hide.has('card') && me.kind !== 'normal') kids.push(statCard(st, me, host));
+  if (!hide.has('card') && me.kind !== 'normal') kids.push(...statCard(st, me, host));
   if (!hide.has('bookmarks')) kids.push(bookmarks(st, host));
   if (!hide.has('recent')) {
     const box = h('div', { class: 'nsec' }, h('div', { class: 'nsech' }, h('span', {}, '最近访问')), h('div', { class: 'nlist' }, h('div', { class: 'empty' }, '…')));
@@ -40,18 +40,23 @@ export async function renderNtp(root, st, me, host) {
 const TYPE_IC = { res: 'home', dc: 'dc', mobile: 'phone' };
 function statCard(st, me, host) {
   const on = me.proxy.state === 'on', rt = me.rt, ex = on ? shownExit(me) : null, dz = disguise(me), q = exitQ(st, me), cf = cfRep(me);
-  const head = on ? (ex ? [flag(ex.country), h('span', { class: 'mono' }, ex.ip), h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency)), TYPE_IC[q.type] && h('span', { class: 'ty', title: TYPE_NAME[q.type], 'aria-label': TYPE_NAME[q.type] }, icon(TYPE_IC[q.type], 18))]
-    : rt.cut || rt.error ? [icon('warn', 18), h('span', { class: 'bad el' }, rt.error || '已断流：' + rt.cut)] : [h('span', { class: 'ic spin' }, icon('refresh', 18)), '出口探测中…'])
-    : [icon('globe', 18), '直连'];
+  // 实例卡（实例色的底）：头像、编号和名字、出口（国旗 + 写全的 IP + 延迟）。点一下进节点与出口。
+  const line = on ? (ex ? [flag(ex.country), h('span', { class: 'mono' }, ex.ip), h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency)), TYPE_IC[q.type] && h('span', { class: 'ty', title: TYPE_NAME[q.type], 'aria-label': TYPE_NAME[q.type] }, icon(TYPE_IC[q.type], 16))]
+    : rt.cut || rt.error ? h('span', { class: 'el' }, rt.error || '已断流：' + rt.cut) : [h('span', { class: 'ic spin' }, icon('refresh', 16)), '出口探测中…'])
+    : [icon('globe', 16), '直连'];
+  const inst = h('button', { class: 'ninst rp', 'aria-label': '当前实例的出口', title: '节点与出口', onclick: () => host.openNode() },
+    avatar(me.color, String(me.no), 40, null, 'on'),
+    h('span', { class: 'grow' }, h('span', { class: 'nm el' }, `#${me.no} ${me.name || '伪装实例'}`), h('span', { class: 'nsh' }, line)),
+    h('span', { class: 'chev' }, icon('chevR', 22)));
   const cell = (big, t, v) => h('div', { class: 'nsc' }, big, h('span', { class: 'nst' }, t), h('span', { class: 'nsv' }, v));
-  return h('button', { class: 'nstat rp', 'aria-label': '伪装概况', onclick: () => host.openNode() },
-    h('div', { class: 'nsh' }, head),
-    on && h('div', { class: 'nsg' },
+  const stat = on && h('button', { class: 'nstat rp', 'aria-label': '伪装概况', onclick: () => host.openNode() },
+    h('div', { class: 'nsech' }, h('span', {}, '伪装概况')),
+    h('div', { class: 'nsg' },
       cell(ringEl(dz.pct, 44), '伪装度', dz.total ? `${dz.pass}/${dz.total} 项一致` : '待判断'),
       cell(ringEl(q.score, 44), '纯净度', q.score != null ? '出口 IP' : '查不到'),
       cell(h('span', { class: 'cfbig ' + cf.st }, h('i')), 'CF 信誉', cf.text)),
-    !on && h('div', { class: 'nswarn' }, icon('warn', 16), '直连中，网站看到真实 IP'),
-    on && mismatch(me) && h('div', { class: 'nswarn' }, icon('warn', 16), '两路出口不在同一国家', h('span', { class: 'grow' }), h('span', { title: '普网' }, flag(rt.probe.direct.country)), h('span', { title: 'CF 网站' }, flag(rt.probe.cf.country))));
+    mismatch(me) && h('div', { class: 'nswarn' }, icon('warn', 16), '两路出口不在同一国家', h('span', { class: 'grow' }), h('span', { title: '普网' }, flag(rt.probe.direct.country)), h('span', { title: 'CF 网站' }, flag(rt.probe.cf.country))));
+  return [inst, stat, !on && h('div', { class: 'nswarn out' }, icon('warn', 16), '直连中，网站看到真实 IP')];
 }
 
 // 书签：一行三个（电脑四个）；长按 / 右键删除；最后一个“+”添加

@@ -28,7 +28,7 @@ import org.mozilla.geckoview.PanZoomController
 // 浏览器外壳的 Chrome 风格部件（决策 UI-1、UI-2、UI-4）：配色、图标、状态栏 / 导航栏底色、浮层（头像菜单、三点菜单、标签页切换器用）、下拉刷新。
 // 只管样子和手势，不碰业务：数据都来自核心服务的状态（Host），动作都是核心服务的接口或内置页面的路由。
 
-/** 配色：取自需求方手机 Chrome 截图（深色），和共用页面 ui.css 里的是同一组值。 */
+/** 配色：底色、文字色是固定的（深色取自需求方手机 Chrome 截图）；强调色、选中底色、各层卡片的底色跟着当前实例的颜色走（决策 UI-10，见 Theme.of）。 */
 class Pal(
     val bg: Int, val pill: Int, val surf: Int, val surf2: Int, val surf3: Int, val div: Int,
     val on: Int, val on2: Int, val on3: Int, val acc: Int, val onacc: Int, val tonal: Int, val ontonal: Int,
@@ -50,7 +50,33 @@ object Theme {
         "system" -> (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) != Configuration.UI_MODE_NIGHT_NO
         else -> true
     }
-    fun pal(ctx: Context) = if (isDark(ctx)) DARK else LIGHT
+    fun pal(ctx: Context, seed: Int? = null) = of(isDark(ctx), seed ?: Color.parseColor("#1a73e8"))
+
+    private fun hsl(h: Float, s: Float, l: Float): Int {
+        val ss = s / 100f; val ll = l / 100f
+        val a = ss * minOf(ll, 1f - ll)
+        fun f(n: Int): Int { val k = (n + h / 30f) % 12f; return Math.round(255f * (ll - a * maxOf(-1f, minOf(k - 3f, 9f - k, 1f)))).coerceIn(0, 255) }
+        return Color.rgb(f(0), f(8), f(4))
+    }
+    /**
+     * 按“深 / 浅 + 实例色”算出一套颜色（决策 UI-10）。和共用页面 ui.js 的 accentTokens 是同一组公式，改一边要改另一边：
+     * 页面里的底部表单和这里涂的导航栏用的是同一个 surf，两边算得不一样就会对不上。
+     */
+    fun of(dark: Boolean, seed: Int): Pal {
+        val r = Color.red(seed) / 255f; val g = Color.green(seed) / 255f; val b = Color.blue(seed) / 255f
+        val mx = maxOf(r, g, b); val mn = minOf(r, g, b); val d = mx - mn; val l = (mx + mn) / 2f
+        var hh = 0f
+        if (d > 0f) hh = if (mx == r) ((g - b) / d) % 6f else if (mx == g) (b - r) / d + 2f else (r - g) / d + 4f
+        val hue = ((Math.round(hh * 60f) + 360) % 360).toFloat()
+        val s0 = if (d > 0f) d / (1f - Math.abs(2f * l - 1f)) * 100f else 0f
+        val s = minOf(s0, 90f); val n = minOf(s, 40f) / 40f
+        fun c(sat: Float, li: Float) = hsl(hue, Math.round(sat).toFloat(), li)
+        val k = if (dark) DARK else LIGHT
+        return if (dark) Pal(k.bg, c(10f * n, 20f), c(10f * n, 17f), c(9f * n, 12.5f), c(9f * n, 19f), c(8f * n, 26f),
+            k.on, k.on2, k.on3, c(s * 0.85f, 82f), c(s * 0.7f, 18f), c(s * 0.42f, 28f), c(s * 0.9f, 91f), k.good, k.mid, k.bad, k.scrim, true)
+        else Pal(k.bg, c(28f * n, 92f), c(30f * n, 97f), c(30f * n, 95.5f), c(26f * n, 91f), c(16f * n, 84f),
+            k.on, k.on2, k.on3, c(s * 0.9f, 40f), Color.WHITE, c(s * 0.9f, 90f), c(s * 0.8f, 20f), k.good, k.mid, k.bad, k.scrim, false)
+    }
 
     /** 把半透明的 [top] 盖在 [base] 上之后的颜色（遮罩压暗状态栏用）。 */
     fun over(base: Int, top: Int): Int {

@@ -85,7 +85,7 @@ class MainActivity : Activity(), CoreUi {
         prompts = Prompts(this)
         edgeToEdge()
         hold = intent?.getBooleanExtra("mt_hold", false) == true
-        pal = Theme.pal(this)
+        pal = Theme.pal(this, seedColor())
         setContentView(buildUi())
         applyTheme(true)
         if (Build.VERSION.SDK_INT >= 33) {
@@ -207,10 +207,14 @@ class MainActivity : Activity(), CoreUi {
         applyBars()
     }
 
-    /** 主题（设置里的“外观”）变了，或第一次：重涂外壳。 */
+    /** 当前实例的颜色（强调色跟着它走，决策 UI-10）；还没有实例时用默认的蓝。 */
+    private fun seedColor(): Int? = try { Host.cur()?.let { parseColor(it.color) } } catch (e: Exception) { null }
+
+    /** 主题（设置里的“外观”）变了、换了实例，或第一次：重涂外壳。 */
     private fun applyTheme(force: Boolean = false) {
-        val p = Theme.pal(this)
-        val key = if (p.dark) "d" else "l"
+        val seed = seedColor()
+        val p = Theme.pal(this, seed)
+        val key = (if (p.dark) "d" else "l") + (seed ?: 0)
         if (!force && key == themeKey) return
         themeKey = key; pal = p
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(p.bg))
@@ -218,7 +222,7 @@ class MainActivity : Activity(), CoreUi {
         col.setBackgroundColor(p.bg)
         urlBox.background = rounded(p.pill, dp(24).toFloat())
         url.setTextColor(p.on); url.setHintTextColor(p.on2)
-        home.setImageDrawable(mi("home", p.on))
+        home.setImageDrawable(mi("ext", p.on))
         tabCount.tint = p.on; tabCount.invalidate()
         dots.tint = p.on; dots.invalidate()
         avatar.ring = p.bg; avatar.invalidate()
@@ -245,8 +249,10 @@ class MainActivity : Activity(), CoreUi {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(4), 0, dp(4), 0)
         }
-        home = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
-        tb.addView(btn(home, "主页") { goHome() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        // 顺序照定稿的演示（决策 UI-10）：头像（当前实例，带国旗）在最左，地址栏，扩展，标签页数，三点
+        avatar = AvatarView(this).apply { scale = 0.68f }
+        tb.addView(btn(avatar, "实例") { showAvatarMenu() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        avatar.setOnLongClickListener { showDiag(); true } // 长按头像：诊断信息（原生窗口）
         url = EditText(this).apply {
             hint = "搜索或输入网址"
             setSingleLine()
@@ -266,9 +272,8 @@ class MainActivity : Activity(), CoreUi {
         tb.addView(urlBox, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
         spacer = View(this)
         tb.addView(spacer, LinearLayout.LayoutParams(0, dp(48), 1f))
-        avatar = AvatarView(this).apply { scale = 0.62f }
-        tb.addView(btn(avatar, "实例") { showAvatarMenu() }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        avatar.setOnLongClickListener { showDiag(); true } // 长按头像：诊断信息（原生窗口）
+        home = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
+        tb.addView(btn(home, "扩展程序") { if (Core.started) openSheet("addons", true) }, LinearLayout.LayoutParams(dp(44), dp(48)))
         tabCount = TabCountView(this)
         tb.addView(btn(tabCount, "标签页") { showTabs() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         dots = DotsView(this)
@@ -331,13 +336,6 @@ class MainActivity : Activity(), CoreUi {
     }
 
     private fun hideIme() { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(url.windowToken, 0) }
-
-    /** 主页：当前标签页回到新标签页。 */
-    private fun goHome() {
-        closeSheet()
-        val t = Core.curTab() ?: run { Core.openTab(Host.current); return }
-        t.session.loadUri(Core.bootUrl(t.inst, null))
-    }
 
     override fun onTabsChanged() {
         val i = Host.cur() ?: return
@@ -568,8 +566,8 @@ class MainActivity : Activity(), CoreUi {
         ImageView(this).apply { setImageBitmap(b); scaleType = ImageView.ScaleType.CENTER_CROP; layoutParams = LinearLayout.LayoutParams(dp(w), dp(w * 3 / 4)).apply { rightMargin = dp(8) } }
     }
     private fun latColor(l: Int) = if (l in 1..199) pal.good else if (l in 200..499) pal.mid else if (l == 0) pal.on3 else pal.bad
-    private fun avatarOf(i: Inst, size: Int, ring: Int, dot: Boolean = false) = AvatarView(this).apply {
-        set(parseColor(i.color), i.no.toString(), flagBitmap(this@MainActivity, i.country.takeIf { i.on && it.isNotEmpty() }))
+    private fun avatarOf(i: Inst, size: Int, ring: Int, dot: Boolean = false, flag: Boolean = true) = AvatarView(this).apply {
+        set(parseColor(i.color), i.no.toString(), if (flag) flagBitmap(this@MainActivity, i.country.takeIf { i.on && it.isNotEmpty() }) else null)
         scale = 0.84f; this.ring = ring
         if (dot) this.dot = if (i.starting) 2 else if (i.running) 1 else 3
         dotColors = intArrayOf(pal.good, pal.acc, pal.on3)
@@ -578,66 +576,85 @@ class MainActivity : Activity(), CoreUi {
     private fun trailText(s: String, color: Int = pal.on3) = text(s, 14f, color)
     private fun trailRow(vararg v: View?) = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; for (x in v) if (x != null) addView(x) }
 
-    /** 头像菜单（底部弹出，照已确认演示 03）：当前实例、三项入口、其它实例（点一下切换）、新建 / 导入邮箱 / 管理实例。 */
+    /** 一块（决策 UI-10）：每项自己一块，块和块之间留 2dp 的缝；一组里头一块、末一块的外侧是大圆角。 */
+    private fun block(v: View, color: Int, first: Boolean, last: Boolean, gap: Int = 2): View {
+        val big = dp(20).toFloat(); val sm = dp(4).toFloat()
+        v.background = surface(color, if (first) big else sm, if (last) big else sm)
+        v.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(12); rightMargin = dp(12); topMargin = dp(gap) }
+        return v
+    }
+    private fun chev() = icon("chevR", pal.on3, 20).apply { layoutParams = LinearLayout.LayoutParams(dp(20), dp(24)).apply { leftMargin = dp(6) } }
+
+    /**
+     * 头像菜单（底部弹出，照定稿的演示，决策 UI-10）：当前实例一张实例色的卡片；四项入口各一块；
+     * “其它实例”标题右边只有“新建实例”；下面每个实例一块，点一下切换。管理实例在 三点菜单 → 设置 → 实例，导入邮箱在实例页右上角。
+     */
     private fun showAvatarMenu() {
         if (!Core.started) return
         val me = Host.cur() ?: return
         closeSheet()
         val o = newOverlay(true)
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isClickable = true }
-        box.addView(View(this).apply { background = rounded(pal.on3, dp(2).toFloat()); alpha = 0.6f }, LinearLayout.LayoutParams(dp(32), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(14); bottomMargin = dp(6) })
+        box.addView(View(this).apply { background = rounded(pal.on3, dp(2).toFloat()); alpha = 0.6f }, LinearLayout.LayoutParams(dp(32), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(12); bottomMargin = dp(12) })
         // 当前实例
-        val hero = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(24), dp(8), dp(20), dp(16)) }
-        hero.addView(avatarOf(me, 56, pal.surf))
-        val who = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(8), 0) }
-        who.addView(text("#${me.no} ${me.name.ifEmpty { "未命名" }}", 18f, pal.on))
-        val line = trailRow(flagView(me.country.takeIf { me.on } ?: ""), text(if (!me.on) "直连" else me.ip.ifEmpty { if (me.error.isNotEmpty()) me.error else "出口探测中…" }, 14f, if (me.on) pal.on2 else pal.mid).apply { typeface = Typeface.MONOSPACE },
+        val hero = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(16), dp(16), dp(16)) }
+        hero.addView(avatarOf(me, 52, pal.tonal, false, false))
+        val who = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(8), 0) }
+        who.addView(text("#${me.no} ${me.name.ifEmpty { "未命名" }}", 17f, pal.ontonal, true))
+        val line = trailRow(flagView(me.country.takeIf { me.on } ?: ""), text(if (!me.on) "直连" else me.ip.ifEmpty { if (me.error.isNotEmpty()) me.error else "出口探测中…" }, 14f, pal.ontonal).apply { typeface = Typeface.MONOSPACE },
             if (me.on && me.ip.isNotEmpty()) text("  ${if (me.latency > 0) "${me.latency} ms" else if (me.latency < 0) "不通" else ""}", 13f, latColor(me.latency)) else null)
         who.addView(line, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
         hero.addView(who, LinearLayout.LayoutParams(0, -2, 1f))
         if (me.on) {
             val rep = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
-            rep.addView(RingView(this, pal).apply { value = me.purity.takeIf { it >= 0 }; contentDescription = "纯净度 ${if (me.purity >= 0) me.purity else "未知"}" }, LinearLayout.LayoutParams(dp(36), dp(36)))
-            rep.addView(trailRow(DotView(this, when (me.cf) { "good" -> pal.good; "bad" -> pal.bad; else -> pal.on3 }).apply { layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(5) } }, text("CF", 12f, pal.on2)), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+            rep.addView(RingView(this, pal).apply { value = me.purity.takeIf { it >= 0 }; contentDescription = "纯净度 ${if (me.purity >= 0) me.purity else "未知"}" }, LinearLayout.LayoutParams(dp(40), dp(40)))
+            rep.addView(trailRow(DotView(this, when (me.cf) { "good" -> pal.good; "bad" -> pal.bad; else -> pal.on3 }).apply { layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(5) } }, text("CF", 12f, pal.ontonal)), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
             hero.addView(rep)
         }
-        box.addView(hero)
+        hero.background = rounded(pal.tonal, dp(20).toFloat())
+        box.addView(hero, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(6) })
         val go = { r: String -> { closeOverlay(); openSheet(r, true) } }
-        box.addView(menuRow(pal, "key", "账号与密码", trailText(if (me.accounts > 0) me.accounts.toString() else "")) { go("instances/${me.id}")() })
-        box.addView(menuRow(pal, "globe", "节点与出口", trailRow(flagView(me.country.takeIf { me.on } ?: ""), trailText(if (!me.on) "直连" else cname(me.country)))) { go("node")() })
-        box.addView(menuRow(pal, "finger", "指纹与伪装", trailText(if (me.checksTotal > 0) "${me.checksPass}/${me.checksTotal}" else "", if (me.checksTotal > 0 && me.checksPass == me.checksTotal) pal.good else pal.on3)) { go("fp")() })
-        box.addView(menuRow(pal, "edit", "录入登录", trailText(if (Host.rules > 0) Host.rules.toString() else "")) {
+        fun entry(ic: String, label: String, trail: View?, first: Boolean, last: Boolean, act: () -> Unit) {
+            val r = menuRow(pal, ic, label, trailRow(trail, chev()), true, 56, act)
+            r.setPadding(dp(16), 0, dp(10), 0)
+            box.addView(block(r, pal.surf2, first, last))
+        }
+        entry("key", "账号管理", trailText(if (me.accounts > 0) me.accounts.toString() else ""), true, false) { go("instances/${me.id}")() }
+        entry("globe", "节点与出口", trailRow(flagView(me.country.takeIf { me.on } ?: ""), trailText(if (!me.on) "直连" else cname(me.country))), false, false) { go("node")() }
+        entry("finger", "指纹与伪装", trailText(if (me.checksTotal > 0) "${me.checksPass}/${me.checksTotal}" else "", if (me.checksTotal > 0 && me.checksPass == me.checksTotal) pal.good else pal.on3), false, false) { go("fp")() }
+        entry("edit", "录入登录", trailText(if (Host.rules > 0) Host.rules.toString() else ""), false, true) {
             closeOverlay()
             try { Core.bgPort?.postMessage(jsonOf("t" to "rec-start", "inst" to me.id)) } catch (e: Exception) { logw("录入登录没发出去", e) }
             toast("回到要登录的网页后开始录入")
-        })
-        box.addView(divider(pal))
-        val others = Host.insts.filter { it.id != me.id }
-        box.addView(LinearLayout(this).apply {
-            setPadding(dp(24), dp(10), dp(24), dp(6))
-            addView(text("其它实例（${others.size}）", 14f, pal.on2), LinearLayout.LayoutParams(0, -2, 1f))
-            if (others.isNotEmpty()) addView(text("点一下切换", 13f, pal.on3))
-        })
-        for (x in others) {
-            val r = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(64); setPadding(dp(24), dp(8), dp(20), dp(8)); ripple(); contentDescription = "切换到 #${x.no}" }
-            r.addView(avatarOf(x, 40, pal.surf, true))
-            val tx = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(8), 0) }
-            tx.addView(text("#${x.no} ${x.name.ifEmpty { "未命名" }}", 16f, pal.on))
-            val tabs = Core.tabsOf(x.id).size
-            tx.addView(trailRow(flagView(x.country.takeIf { x.on } ?: "", 16), text((if (!x.on) "直连" else x.ip.ifEmpty { "—" }) + (if (tabs > 0) " · $tabs 个标签页" else ""), 13f, pal.on2)), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2) })
-            r.addView(tx, LinearLayout.LayoutParams(0, -2, 1f))
-            r.addView(TextView(this).apply {
-                text = if (x.starting) "启动中" else if (x.running) "运行中" else "休眠"; textSize = 12f
-                setTextColor(if (x.running) pal.good else pal.on2); setPadding(dp(8), dp(3), dp(8), dp(3))
-                background = rounded(Color.TRANSPARENT, dp(8).toFloat(), dp(1), if (x.running) pal.good else pal.div)
-            })
-            r.setOnClickListener { closeOverlay(); Core.switchTo(x.id) }
-            box.addView(r)
         }
-        box.addView(divider(pal))
-        box.addView(menuRow(pal, "add", "新建实例") { closeOverlay(); Core.createInst() })
-        box.addView(menuRow(pal, "mail", "导入邮箱") { go("instances/import")() })
-        box.addView(menuRow(pal, "layers", "管理实例") { go("instances")() })
+        // 其它实例：标题 + 新建
+        val others = Host.insts.filter { it.id != me.id }
+        val head = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(28), dp(10), dp(12), dp(4)) }
+        head.addView(text("其它实例（${others.size}）", 13f, pal.on2, true), LinearLayout.LayoutParams(0, -2, 1f))
+        head.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(10), 0, dp(14), 0); background = rounded(pal.tonal, dp(18).toFloat())
+            addView(icon("add", pal.ontonal, 20), LinearLayout.LayoutParams(dp(20), dp(24)).apply { rightMargin = dp(4) })
+            addView(text("新建实例", 14f, pal.ontonal, true))
+            contentDescription = "新建实例"; ripple()
+            setOnClickListener { closeOverlay(); Core.createInst() }
+        }, LinearLayout.LayoutParams(-2, dp(36)).apply { leftMargin = dp(6) })
+        box.addView(head)
+        for ((k, x) in others.withIndex()) {
+            val r = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(60); setPadding(dp(14), dp(8), dp(16), dp(8)); ripple(); contentDescription = "切换到 #${x.no}" }
+            // 运行中的用它自己的颜色做底，休眠的变淡（不写“运行中 / 休眠”，决策 UI-9）
+            val live = x.running || x.starting
+            val bgc = if (live) Theme.over(pal.surf2, (parseColor(x.color) and 0x00FFFFFF) or (0x4D shl 24)) else pal.surf2
+            r.addView(avatarOf(x, 40, bgc, true, false).apply { if (!live) alpha = 0.55f })
+            val tx = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(8), 0); if (!live) alpha = 0.65f }
+            tx.addView(text("#${x.no} ${x.name.ifEmpty { "未命名" }}", 15f, pal.on))
+            val tabs = Core.tabsOf(x.id).size
+            tx.addView(trailRow(flagView(x.country.takeIf { x.on } ?: "", 16), text(if (!x.on) "直连" else x.ip.ifEmpty { "—" }, 13f, pal.on2).apply { typeface = Typeface.MONOSPACE },
+                if (tabs > 0) text("  $tabs 个标签页", 12f, pal.on2) else null), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2) })
+            r.addView(tx, LinearLayout.LayoutParams(0, -2, 1f))
+            r.setOnClickListener { closeOverlay(); Core.switchTo(x.id) }
+            box.addView(block(r, bgc, k == 0, k == others.size - 1))
+        }
+        box.addView(View(this), LinearLayout.LayoutParams(1, dp(12)))
         val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false }
         val card = FrameLayout(this).apply { background = surface(pal.surf, dp(28).toFloat(), 0f); isClickable = true; addView(scroll) }
         overlayFit = { card.setPadding(0, 0, 0, inBottom + dp(8)); (card.layoutParams as? FrameLayout.LayoutParams)?.topMargin = inTop + dp(40); card.requestLayout() }
@@ -648,11 +665,10 @@ class MainActivity : Activity(), CoreUi {
         logi("头像菜单已打开")
     }
 
-    /** 三点菜单（照新版 Chrome，已确认演示 04）：顶排后退 / 前进 / 书签 / 下载 / 刷新；然后各组菜单项，MaskTab 一组在中间。 */
+    /** 三点菜单（照定稿的演示，决策 UI-10）：顶排后退 / 前进 / 书签 / 下载 / 刷新；下面只留浏览器自己的项。实例、节点、指纹在头像菜单里，扩展在工具栏上，这里不重复。 */
     private fun showAppMenu() {
         if (!Core.started) return
         val t = Core.curTab()
-        val me = Host.cur()
         closeSheet()
         val o = newOverlay(false)
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isClickable = true; setPadding(0, 0, 0, dp(8)) }
@@ -676,11 +692,8 @@ class MainActivity : Activity(), CoreUi {
         topBtn("refresh", "刷新", t != null, if (pal.dark) Color.parseColor("#121318") else Color.parseColor("#1f1f1f"), Color.WHITE, 24) { t?.session?.reload() }
         top.removeViewAt(top.childCount - 1)
         box.addView(top)
-        val go = { r: String -> { closeOverlay(); openSheet(r, true) } }
         fun item(ic: String, label: String, trail: View? = null, enabled: Boolean = true, act: () -> Unit) = box.addView(menuRow(pal, ic, label, trail, enabled, 52) { closeOverlay(); act() })
         item("addBox", "打开新的标签页") { Core.openTab(Host.current) }
-        item("incog", "打开新的无痕式标签页", enabled = false) { toast("每个实例本来就是独立的容器；要一次性的身份，新建一个实例") }
-        item("group", "添加到新标签页组", enabled = false) { toast("标签页组还没有做") }
         box.addView(divider(pal))
         item("history", "历史记录") { openSheet("history", true) }
         item("del", "删除浏览数据") { clearData() }
@@ -688,18 +701,9 @@ class MainActivity : Activity(), CoreUi {
         item("dlDone", "下载内容", enabled = false) { toast("暂不支持下载文件") }
         item("starO", "书签") { openSheet("bookmarks", true) }
         item("devices", "最近打开的标签页") { recentClosed() }
-        item("ext", "扩展程序") { openSheet("addons", true) }
         box.addView(divider(pal))
-        if (me != null) {
-            item("globe", "节点与出口", trailRow(flagView(me.country.takeIf { me.on } ?: ""), trailText(if (!me.on) "直连" else ""))) { openSheet("node", true) }
-            item("finger", "指纹与伪装", trailText(if (me.checksTotal > 0) "${me.checksPass}/${me.checksTotal}" else "")) { openSheet("fp", true) }
-            item("layers", "实例管理") { openSheet("instances", true) }
-            box.addView(divider(pal))
-        }
         item("tools", "更多工具") { moreTools(t) }
-        box.addView(divider(pal))
         item("gear", "设置") { openSheet("settings", true) }
-        item("addhome", "自定义新标签页页面") { openSheet("settings/ntp", true) }
         item("help", "帮助和反馈") { Core.openTab(Host.current, "https://github.com/halou367/masktab/issues") }
         val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false }
         val card = FrameLayout(this).apply { background = rounded(pal.surf, dp(26).toFloat()); elevation = dp(8).toFloat(); isClickable = true; addView(scroll) }
@@ -785,17 +789,13 @@ class MainActivity : Activity(), CoreUi {
         o.removeAllViews()
         val inst = Host.get(tabsInst) ?: Host.cur() ?: return
         val colm = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(inLeft, inTop, inRight, 0) }
-        // 顶栏：标签页数、新标签页、关闭全部
+        // 顶栏（照定稿的演示，决策 UI-10）：左边“+”开新标签页，标题，右边三点（关闭全部）
         val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(4), 0) }
-        top.addView(LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(3), dp(4), dp(3)); background = rounded(pal.surf2, dp(26).toFloat())
-            addView(TabCountView(this@MainActivity).apply { count = Core.tabsOf(inst.id).size; tint = pal.on; background = rounded(pal.surf, dp(18).toFloat()) }, LinearLayout.LayoutParams(dp(47), dp(46)))
-        })
-        top.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         top.addView(ImageView(this).apply {
-            setImageDrawable(mi("add", pal.onacc)); scaleType = ImageView.ScaleType.CENTER; background = rounded(pal.acc, dp(15).toFloat()); contentDescription = "新标签页"; ripple(true)
+            setImageDrawable(mi("add", pal.ontonal)); scaleType = ImageView.ScaleType.CENTER; background = rounded(pal.tonal, dp(16).toFloat()); contentDescription = "新标签页"; ripple(true)
             setOnClickListener { closeOverlay(); if (inst.id != Host.current) Core.switchTo(inst.id); Core.openTab(inst.id) }
-        }, LinearLayout.LayoutParams(dp(47), dp(47)))
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        top.addView(text("标签页", 20f, pal.on).apply { setPadding(dp(16), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
         top.addView(btn(DotsView(this).apply { tint = pal.on }, "更多") {
             Theme.dialog(this).setItems(arrayOf("关闭 #${inst.no} 的全部标签页")) { _, _ -> closeOverlay(); Core.stopInst(inst.id) }.show()
         }, LinearLayout.LayoutParams(dp(44), dp(48)))
@@ -820,13 +820,13 @@ class MainActivity : Activity(), CoreUi {
         // 两列卡片
         val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(8), dp(14), inBottom + dp(24)) }
         val tabs = Core.tabsOf(inst.id)
-        if (tabs.isEmpty()) grid.addView(text(if (inst.running) "#${inst.no} 还没有标签页，点右上角的 + 开一个" else "#${inst.no} 在休眠，点 + 打开它", 14f, pal.on3).apply { gravity = Gravity.CENTER; setPadding(0, dp(40), 0, 0); setSingleLine(false) })
+        if (tabs.isEmpty()) grid.addView(text(if (inst.running) "#${inst.no} 还没有标签页，点左上角的 + 开一个" else "#${inst.no} 在休眠，点 + 打开它", 14f, pal.on3).apply { gravity = Gravity.CENTER; setPadding(0, dp(40), 0, 0); setSingleLine(false) })
         var row: LinearLayout? = null
         val cur = Core.active[inst.id]
         for ((k, t) in tabs.withIndex()) {
             if (k % 2 == 0) { row = LinearLayout(this); grid.addView(row, LinearLayout.LayoutParams(-1, dp(236)).apply { bottomMargin = dp(16) }) }
             val sel = t === cur && inst.id == Host.current
-            val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = rounded(if (sel) pal.acc else pal.surf3, dp(24).toFloat()); clipToOutline = true }
+            val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = rounded(if (sel) pal.tonal else pal.surf2, dp(20).toFloat()); clipToOutline = true }
             val hd = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, 0, 0) }
             val internal = isNtp(t) || Core.isInternal(t.url)
             val title = if (internal) "新标签页" else t.title.ifEmpty { t.url }
@@ -834,11 +834,11 @@ class MainActivity : Activity(), CoreUi {
                 text = (title.firstOrNull { it.isLetterOrDigit() } ?: '·').uppercase(); textSize = 11f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
                 background = rounded(parseColor(inst.color), dp(11).toFloat())
             }, LinearLayout.LayoutParams(dp(22), dp(22)))
-            hd.addView(text(title, 15f, if (sel) pal.onacc else pal.on).apply { setPadding(dp(10), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
-            hd.addView(ImageView(this).apply { setImageDrawable(mi("close", if (sel) pal.onacc else pal.on2)); scaleType = ImageView.ScaleType.CENTER; contentDescription = "关闭标签页"; ripple(true)
+            hd.addView(text(title, 15f, if (sel) pal.ontonal else pal.on).apply { setPadding(dp(10), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+            hd.addView(ImageView(this).apply { setImageDrawable(mi("close", if (sel) pal.ontonal else pal.on2)); scaleType = ImageView.ScaleType.CENTER; contentDescription = "关闭标签页"; ripple(true)
                 setOnClickListener { Core.closeTab(t); if (Core.tabsOf(inst.id).isEmpty() && inst.id == Host.current) closeOverlay() else fillTabs() } }, LinearLayout.LayoutParams(dp(44), dp(44)))
             card.addView(hd, LinearLayout.LayoutParams(-1, dp(48)))
-            val th = FrameLayout(this).apply { background = rounded(if (pal.dark) Color.parseColor("#24242c") else Color.WHITE, dp(20).toFloat()); clipToOutline = true }
+            val th = FrameLayout(this).apply { background = rounded(if (pal.dark) pal.surf3 else Color.WHITE, dp(16).toFloat()); clipToOutline = true }
             t.thumb?.let { b -> th.addView(ImageView(this).apply { setImageBitmap(b); scaleType = ImageView.ScaleType.CENTER_CROP }, FrameLayout.LayoutParams(-1, -1)) }
                 ?: th.addView(text(if (internal) "" else t.url.substringAfter("://").substringBefore('/'), 12f, pal.on3).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
             card.addView(th, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(dp(5), 0, dp(5), dp(5)) })

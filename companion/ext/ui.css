@@ -384,3 +384,110 @@ html.pc .ntp .tiles { grid-template-columns: repeat(4, 1fr); }
 
 /* 铺满整屏的遮罩、抽屉同样让开左右安全区（见 body 那条的说明） */
 .scrim, .drawer { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+
+/* ============ 演示定稿的外观（决策 UI-10，masktab-原生界面demo.html） ============
+   这一段盖在上面的旧样式之上（同名选择器后写的赢）：
+   · 每一行是一块：块之间留 2px 缝，一组的外角 20（电脑 16）、缝两侧的内角 4；分组标题是小号灰字。
+     一组 = 连着排的几个 .row（或 .chk、.mi）；头尾靠相邻选择器认，不用另外包一层容器。
+   · 三层底色：页面 --bg、卡片 / 行 --surf2、浮起来的（下拉栏、对话框、底部表单）--surf。
+   · 强调色、选中的底色跟着实例色走（ui.js 的 applyTheme 写到 :root）。 */
+:root { --r-xs: 4px; --r-m: 12px; --r-l: 16px; --r-xl: 20px; --gut: 12px; }
+html.pc { --r-xl: 16px; }
+.sec, .sec.noic { padding: 20px calc(var(--gut) + 14px) 8px; font-size: 13px; font-weight: 500; color: var(--on2); }
+.sec .r { font-size: 12px; }
+.foot, .foot.noic { padding: 10px calc(var(--gut) + 14px) 28px; font-size: 12.5px; }
+.row { width: calc(100% - 2 * var(--gut)); margin: 2px var(--gut) 0; background: var(--surf2); border-radius: var(--r-xs); min-height: 60px; padding: 9px 14px; gap: 14px; }
+html.pc .row { min-height: 50px; padding: 7px 14px; }
+.row.two { min-height: 60px; } html.pc .row.two { min-height: 50px; }
+.row > .lic { width: 24px; }
+.row .t { font-size: 15.5px; line-height: 21px; } .row .s { font-size: 13px; line-height: 18px; }
+.row .chev { color: var(--on3); margin-right: -6px; }
+:is(.row, .chk, .mi):not(:is(.row, .chk, .mi) + *) { border-top-left-radius: var(--r-xl); border-top-right-radius: var(--r-xl); }
+:is(.row, .chk, .mi):not(:has(+ :is(.row, .chk, .mi))) { border-bottom-left-radius: var(--r-xl); border-bottom-right-radius: var(--r-xl); }
+.row.sl, .row.on { width: calc(100% - 2 * var(--gut)); margin: 2px var(--gut) 0; border-radius: var(--r-xs); padding: 9px 14px; }
+.row.on:not(.row + *), .row.sl:not(.row + *) { border-top-left-radius: var(--r-xl); border-top-right-radius: var(--r-xl); }
+.row.on:not(:has(+ .row)), .row.sl:not(:has(+ .row)) { border-bottom-left-radius: var(--r-xl); border-bottom-right-radius: var(--r-xl); }
+.row.on { background: var(--tonal); }
+.row.legacy { width: auto; margin: 0; background: none; border-radius: 0; }
+.card { margin: 4px var(--gut) 8px; border-radius: var(--r-xl); padding: 14px 16px; }
+.warn, .banner { margin: 4px var(--gut) 8px; border-radius: var(--r-l); }
+.hr { display: none; }
+.empty { margin: 2px var(--gut) 0; border-radius: var(--r-xl); background: var(--surf2); }
+.chk { margin: 2px var(--gut) 0; padding: 9px 14px; gap: 14px; background: var(--surf2); border-radius: var(--r-xs); align-items: center; min-height: 56px; }
+html.pc .chk { min-height: 46px; padding: 6px 14px; }
+.chk .t { font-size: 15px; line-height: 20px; } .chk .s { font-size: 12.5px; margin-top: 0; }
+/* 列表（出口 / 入口）：每行一块、两行字 */
+.chips { padding: 6px var(--gut) 10px; }
+.ls { padding: 0 var(--gut); display: flex; flex-direction: column; gap: 2px; }
+.ls .iprow { background: var(--surf2); border-radius: var(--r-xs); margin: 0; padding: 7px 14px; min-height: 58px; gap: 12px; }
+html.pc .ls .iprow { min-height: 48px; padding: 5px 14px; }
+.ls > :first-child { border-top-left-radius: var(--r-xl); border-top-right-radius: var(--r-xl); }
+.ls > :last-child { border-bottom-left-radius: var(--r-xl); border-bottom-right-radius: var(--r-xl); }
+.ls .iprow.on { background: var(--tonal); }
+.iprow .grow { display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.iprow .ip { flex: none; font-size: 15px; } html.pc .iprow .ip { font-size: 13.5px; }
+.iprow .l2 { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--on2); min-width: 0; white-space: nowrap; }
+.iprow .l2 b { font-weight: 600; font-family: var(--mono); }
+.iprow .l2 .ty { color: var(--on2); } .iprow .l2 .ty:empty { display: none; }
+.iprow .l2 .cfm { font-size: 10px; padding: 1px 4px; }
+.iprow.on .l2, .iprow.on .l2 .ty, .iprow.on .l2 .colo { color: inherit; opacity: .92; }
+.iprow.dead .l2 { opacity: .8; }
+.iprow > .flag { align-self: flex-start; margin-top: 4px; }
+.iprow .d { width: auto; min-width: 48px; }
+/* 头像菜单（电脑弹窗 / 页面版）：当前实例是一张实例色的卡片；下面每项一块；其它实例运行中的用它自己的颜色做底、休眠的变灰 */
+.amenu { padding: 4px 0 12px; }
+.amenu .hero { margin: 4px var(--gut) 8px; padding: 14px 16px; border-radius: var(--r-xl); background: var(--tonal); color: var(--ontonal); gap: 14px; align-items: flex-start; --ring: var(--tonal); }
+.amenu .hero .nm { font-size: 16px; } html.pc .amenu .hero .nm { font-size: 15px; }
+.amenu .hero .ip { color: inherit; font-size: 13.5px; margin-top: 2px; }
+.amenu .hero .tf { font-size: 12px; opacity: .85; margin-top: 3px; white-space: pre; }
+.amenu .hero .cf { color: inherit; }
+.amenu .hero .sites { margin-top: 6px; }
+.mi { width: calc(100% - 2 * var(--gut)); margin: 2px var(--gut) 0; padding: 0 14px; gap: 14px; background: var(--surf2); border-radius: var(--r-xs); min-height: 52px; font-size: 15.5px; }
+html.pc .mi { min-height: 44px; gap: 14px; }
+.mi .chev { color: var(--on3); margin: 0 -6px 0 -8px; display: inline-flex; }
+.mdiv { display: none; }
+.amenu .lbl { padding: 16px calc(var(--gut) + 14px) 8px; font-size: 13px; font-weight: 500; gap: 4px; }
+.amenu .lbl .tools { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; color: var(--on2); }
+.ib.sm, html.pc .ib.sm { width: 32px; height: 32px; }
+.btn.sm { height: 32px; padding: 0 12px 0 8px; font-size: 13px; gap: 4px; margin-left: 6px; }
+.qs { margin: 0 var(--gut) 6px; }
+.insts { padding: 0 var(--gut); display: flex; flex-direction: column; gap: 2px; }
+.insts .ai { margin: 0; padding: 6px 14px; border-radius: var(--r-xs); min-height: 56px; gap: 14px; background: var(--surf2); }
+html.pc .insts .ai { min-height: 48px; padding: 4px 14px; }
+.insts > :first-child { border-top-left-radius: var(--r-xl); border-top-right-radius: var(--r-xl); }
+.insts > :last-child { border-bottom-left-radius: var(--r-xl); border-bottom-right-radius: var(--r-xl); }
+.ai.run { background: color-mix(in srgb, var(--c) 30%, var(--surf2)); color: var(--on); --ring: color-mix(in srgb, var(--c) 30%, var(--surf2)); }
+.ai.run .s { color: var(--on2); opacity: 1; }
+.ai.idle .face { filter: grayscale(1); opacity: .55; } .ai.idle .tx { opacity: .6; }
+.ai .n { font-size: 14.5px; } .ai .s { font-size: 12.5px; }
+/* 实例管理：分两组；卡片 = 头像、名字、出口一行、网站图标；当前实例换底色加一圈描边；休眠的变灰 */
+.grids > .sec { padding-top: 14px; }
+.grid { padding: 0 var(--gut); gap: 8px; }
+.cardi { border-radius: var(--r-xl); padding: 12px 8px 12px 14px; gap: 6px; }
+.cardi.cur, :root[data-theme="light"] .cardi.cur { box-shadow: inset 0 0 0 2px var(--acc); }
+.ct { align-items: center; } .ct .grow { min-width: 0; }
+.nl { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 15px; } html.pc .nl { font-size: 14px; }
+.nl .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cx { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--on2); margin-top: 2px; white-space: nowrap; min-width: 0; }
+.cx .flag { width: 18px; height: 13px; } .cx .lat { font-size: 12px; } .cx .cnt2 { margin-left: 4px; }
+.cardi.cur .cx { color: inherit; opacity: .9; }
+.grid.idle .cardi .face { filter: grayscale(1); opacity: .6; } .grid.idle .cardi .nl, .grid.idle .cardi .cx, .grid.idle .cardi .cs { opacity: .65; }
+.ib.go { box-shadow: inset 0 0 0 1.5px var(--on3); color: var(--on); width: 40px; height: 40px; margin: 0 4px; }
+html.pc .ib.go { width: 34px; height: 34px; }
+.cs, .cw, .cb { padding-left: 52px; }
+/* 新标签页：实例卡（实例色的底）+ 伪装概况 + 书签 + 最近访问 */
+.nq { margin: 6px var(--gut) 10px; width: calc(100% - 2 * var(--gut)); }
+.ninst { display: flex; align-items: center; gap: 14px; width: calc(100% - 2 * var(--gut)); margin: 0 var(--gut) 8px; padding: 12px 10px 12px 16px; border-radius: var(--r-xl); background: var(--tonal); color: var(--ontonal); text-align: left; --ring: var(--tonal); }
+.ninst .grow { display: flex; flex-direction: column; gap: 2px; }
+.ninst .nm { font-size: 15.5px; }
+.ninst .nsh { font-size: 13px; color: inherit; opacity: .92; gap: 6px; }
+.ninst .nsh .ty { margin-left: 0; color: inherit; }
+.ninst .chev { display: inline-flex; opacity: .7; }
+.nstat, .nsec { width: calc(100% - 2 * var(--gut)); margin: 0 var(--gut) 8px; border-radius: var(--r-xl); }
+.nstat { padding: 8px 10px 14px; } .nstat .nsech { padding: 2px 6px 4px; } .nstat .nsg { margin-top: 4px; }
+.nsec { margin-top: 0; }
+.nswarn.out { margin: 0 var(--gut) 8px; }
+html.pc .ntp .ninst, html.pc .ntp .nstat, html.pc .ntp .nsec, html.pc .ntp .nq, html.pc .ntp .nswarn.out { width: 100%; margin-left: 0; margin-right: 0; }
+@media (max-width: 350px) { .btn.sm .bt { display: none; } .btn.sm { padding: 0 8px; } }
+/* 手机上“其它实例”标题右边只有“新建实例”（照定稿的演示）；电脑弹窗是唯一的入口，留着图标按钮 */
+html:not(.pc) .amenu .lbl .tools .ib { display: none; }

@@ -206,12 +206,15 @@ function exitView(me, sub) {
     h('div', { class: 'ls', role: 'listbox' },
       rows.map((p) => { const on = p.id === curId; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (p.delay < 0 ? ' dead' : ''), role: 'option', 'aria-selected': on ? 'true' : 'false', title: tipOf(p), onclick: () => pickIt(p.id) },
         flagOf(pcc(p), guessCC(p.label)),
-        h('span', { class: 'ip mono' }, ipText(pipName(p)), p.type !== 'proxyip' && h('small', { title: '全局出口：所有网站都从它出去' }, ' · 全局')),
-        p.delay < 0 ? h('span', { class: 'cfm', title: p.err || '不通' }, '不通') : [tyIcon(ipOf(p)), pbar(scoreOf(ipOf(p)))],
+        // 两行（演示定稿）：上面是写全的地址；下面是类型图标、纯净度（短条 + 分数）、城市 · 运营商。不通的下面写原因。
+        h('span', { class: 'grow' },
+          h('span', { class: 'ip mono' }, ipText(pipName(p)), p.type !== 'proxyip' && h('small', { title: '全局出口：所有网站都从它出去' }, ' · 全局')),
+          h('span', { class: 'l2' }, p.delay < 0 ? h('span', { class: 'bad el' }, p.err || '不通')
+            : [tyIcon(ipOf(p), 15), pbar(scoreOf(ipOf(p))), scoreOf(ipOf(p)) >= 0 && h('b', { class: scoreCls(scoreOf(ipOf(p))) }, scoreOf(ipOf(p))), h('span', { class: 'el' }, where(p.cf) || p.label || '')])),
         p.type === 'proxyip' ? speedCell(sub, p, p.key) : null,
         dly(p)); }),
       !flt && !resOnly && h('button', { class: 'iprow r t' + (!curId ? ' on' : ''), role: 'option', title: '不指定出口：CF 网站从哪里出去由服务端决定', onclick: () => pickIt('') },
-        h('span', { class: 'flag q' }, icon('none', 16)), h('span', { class: 'ip' }, '不指定', h('small', {}, ' · 服务端默认'))),
+        h('span', { class: 'flag q' }, icon('none', 16)), h('span', { class: 'grow' }, h('span', { class: 'ip' }, '不指定'), h('span', { class: 'l2' }, '由服务端决定'))),
       !rows.length && (flt || resOnly) && h('div', { class: 'empty' }, '没有')),
     h('div', { class: 'pad-fab' }), h('button', { class: 'fab', title: '添加地址', 'aria-label': '添加地址', onclick: addAddr }, icon('add', 26))];
 }
@@ -232,8 +235,11 @@ function entryView(me, sub) {
     h('div', { class: 'ls', role: 'listbox' },
       rows.map((n) => { const on = n.id === cur; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (n.delay < 0 ? ' dead' : ''), role: 'option', 'aria-selected': on ? 'true' : 'false', title: tipOf(n), onclick: () => pickIt(n) },
         flagOf(ecc(n), guessCC(n.label)),
-        h('span', { class: 'ip' + (et ? ' mono' : '') }, et ? ipText(addrText(n)) : n.label || addrText(n), n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧')),
-        n.delay < 0 ? h('span', { class: 'cfm', title: n.err || '不通' }, '不通') : et ? [kindTag(n), n.colo && h('span', { class: 'colo' }, n.colo)] : null,
+        // 两行：上面是地址（通用订阅是节点名）；下面是优选 / 反代、机房、备注。
+        h('span', { class: 'grow' },
+          h('span', { class: 'ip' + (et ? ' mono' : '') }, et ? ipText(addrText(n)) : n.label || addrText(n), n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧')),
+          h('span', { class: 'l2' }, n.delay < 0 ? h('span', { class: 'bad el' }, n.err || '不通')
+            : et ? [kindTag(n), n.colo && h('span', { class: 'cnt2 colo', title: '机房' }, icon('dc', 14), n.colo), h('span', { class: 'el' }, n.label || '')] : h('span', { class: 'el mono' }, addrText(n)))),
         speedCell(sub, n, keyOf(n)),
         dly(n)); }),
       !rows.length && h('div', { class: 'empty' }, sub.scanning ? '正在探测…' : '没有')),

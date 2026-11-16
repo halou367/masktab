@@ -20,7 +20,7 @@ const record = () => run(async () => {
 
 async function load() {
   try { st = await api('GET', '/api/state'); } catch (e) { root.replaceChildren(h('div', { class: 'warn bad', style: { marginTop: '8px' } }, icon('warn', 20), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
-  applyTheme(st.settings?.theme || 'dark');
+  applyTheme(st.settings?.theme || 'dark', st.me?.color);
   await syncIcons(st);
   panel.set(st);
   render();
