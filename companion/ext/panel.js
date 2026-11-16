@@ -1,5 +1,5 @@
 import { api, fmtBytes, RESTART_WHY, noticeText } from './api.js';
-import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, cfDot, pbar, scoreCls, choose, dropdown, ask, confirmDlg } from './ui.js';
+import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, cfDot, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan } from './ui.js';
 import { disguise, cfRep } from './common.js';
 
 // 节点面板（电脑和手机共用，决策 D-4）：节点与出口、指纹与伪装，以及几个占满页面的列表（订阅线路、出口国家、出口、入口）。
@@ -35,7 +35,8 @@ const home = () => { if (view === 'fp' && fpDirect) { host.back?.(); return; } v
 const org = (i) => (i?.org || '').replace(/^AS\d+\s*/, '').replace(/,?\s+(Inc|LLC|Ltd|Co|Corp|Limited|Corporation|Company)\b\.?.*$/i, '').replace(/^The\s+/i, '');
 const where = (i) => (i ? [i.city, org(i)].filter(Boolean).join(' · ') : '');
 const cc = (i) => (i?.country || '').toUpperCase();
-const addrText = (n) => `${n.server}${n.port && n.port !== 443 ? ':' + n.port : ''}`;
+// IPv6 带端口时加方括号，否则分不清最后一段是不是端口；默认的 443 不写。
+const addrText = (n) => (n.port && n.port !== 443 ? `${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port}` : n.server);
 const keyOf = (n) => `${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port || 443}`;
 const rank = (x) => (x.delay > 0 ? x.delay : x.delay === 0 ? 1e6 : 2e6);
 const isET = (sub) => sub?.kind === 'edgetunnel';
@@ -208,7 +209,7 @@ function exitView(me, sub) {
         flagOf(pcc(p), guessCC(p.label)),
         // 两行（演示定稿）：上面是写全的地址；下面是类型图标、纯净度（短条 + 分数）、城市 · 运营商。不通的下面写原因。
         h('span', { class: 'grow' },
-          h('span', { class: 'ip mono' }, ipText(pipName(p)), p.type !== 'proxyip' && h('small', { title: '全局出口：所有网站都从它出去' }, ' · 全局')),
+          isV6(pipName(p)) ? ipSpan(pipName(p), 'ip mono') : h('span', { class: 'ip mono' }, ipText(pipName(p)), p.type !== 'proxyip' && h('small', { title: '全局出口：所有网站都从它出去' }, ' · 全局')),
           h('span', { class: 'l2' }, p.delay < 0 ? h('span', { class: 'bad el' }, p.err || '不通')
             : [tyIcon(ipOf(p), 15), pbar(scoreOf(ipOf(p))), scoreOf(ipOf(p)) >= 0 && h('b', { class: scoreCls(scoreOf(ipOf(p))) }, scoreOf(ipOf(p))), h('span', { class: 'el' }, where(p.cf) || p.label || '')])),
         p.type === 'proxyip' ? speedCell(sub, p, p.key) : null,
@@ -224,7 +225,7 @@ function entryView(me, sub) {
   const et = isET(sub), cur = et ? me.proxy.addressId : me.proxy.nodeKey, rows = filtered(sub.nodes, ecc), alive = sub.nodes.filter((n) => n.delay > 0).length;
   sortsNow = et ? ['delay', 'speed'] : ['delay'];
   if (!sortsNow.includes(sortBy)) sortBy = 'delay';
-  const tipOf = (n) => [`${n.server}:${n.port}${n.label ? '   ' + n.label : ''}`,
+  const tipOf = (n) => [`${keyOf(n)}${n.label ? '   ' + n.label : ''}`,
     n.colo ? `机房 ${n.colo}，普通网站的出口在${cname(ecc(n))}` : (n.exit?.ip ? `出口：${n.exit.ip} ${where(n.exit)}` : null),
     n.speed > 0 ? `下载：峰值 ${n.speed} Mbps，平均 ${n.speedAvg} Mbps` : null,
     n.err ? `不通：${n.err}` : null, n.from === 'sub' ? (n.gone ? '已不在最新的订阅里，还通所以留用' : null) : '自己加的'].filter(Boolean).join('\n');
@@ -237,7 +238,8 @@ function entryView(me, sub) {
         flagOf(ecc(n), guessCC(n.label)),
         // 两行：上面是地址（通用订阅是节点名）；下面是优选 / 反代、机房、备注。
         h('span', { class: 'grow' },
-          h('span', { class: 'ip' + (et ? ' mono' : '') }, et ? ipText(addrText(n)) : n.label || addrText(n), n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧')),
+          et && isV6(addrText(n)) ? ipSpan(addrText(n), 'ip mono', n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧'))
+            : h('span', { class: 'ip' + (et ? ' mono' : '') }, et ? ipText(addrText(n)) : n.label || addrText(n), n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧')),
           h('span', { class: 'l2' }, n.delay < 0 ? h('span', { class: 'bad el' }, n.err || '不通')
             : et ? [kindTag(n), n.colo && h('span', { class: 'cnt2 colo', title: '机房' }, icon('dc', 14), n.colo), h('span', { class: 'el' }, n.label || '')] : h('span', { class: 'el mono' }, addrText(n)))),
         speedCell(sub, n, keyOf(n)),
@@ -352,7 +354,7 @@ function mainView(me, sub) {
     } else if (et) {
       // 手动：从列表里选，或者填一个自定义的。正在用的那一行换底色，并写出用的是哪个（写全，不截断）。
       const own = !!pip && !pip.derived, live = (sub.pips || []).filter((x) => x.delay > 0).length;
-      const cur = pip ? [flagOf(pcc(pip), guessCC(pip.label)), h('span', { class: 'mono' }, pipName(pip)), dly(pip)] : null;
+      const cur = pip ? [flagOf(pcc(pip), guessCC(pip.label)), ipSpan(pipName(pip)), dly(pip)] : null;
       kids.push(row({ ic: 'swap', t: '从列表里选', s: !own ? (cur || (curId ? h('span', { class: 'bad' }, '已不在列表里') : '不指定 · 服务端默认')) : `${live} 个可用`, cls: own ? '' : 'on', chev: true, aria: '选出口', onclick: go('exit') }));
       kids.push(row({ ic: 'edit', t: '自定义 ProxyIP', s: own ? cur : 'IP、域名或 socks5 / http 代理', cls: own ? 'on' : '', aria: '自定义 ProxyIP', onclick: () => customAddr(me, sub, 'exit') }));
     } else {
@@ -361,7 +363,7 @@ function mainView(me, sub) {
     }
     if (et) {
       const er = (px.entryRegion || '').toUpperCase();
-      const cur = entry ? [flagOf(ecc(entry), guessCC(entry.label)), h('span', { class: 'mono' }, addrText(entry)), entry.colo && h('span', { class: 'colo', title: '机房' }, entry.colo), dly(entry)] : null;
+      const cur = entry ? [flagOf(ecc(entry), guessCC(entry.label)), ipSpan(addrText(entry)), entry.colo && h('span', { class: 'colo', title: '机房' }, entry.colo), dly(entry)] : null;
       kids.push(sec('入口 优选 IP'));
       // 自动时“现在用的是哪个入口”写在开关的副标题里（不另起一行）；手动时写在正在用的那一行里。
       kids.push(row({ ic: 'tune', t: '自动选择', s: entryAuto ? (cur || '挑延迟最低的') : '固定一个，不自动换', trail: sw(entryAuto, '入口自动选择', (v) => patch({ proxy: { entryMode: v ? 'auto' : 'manual' } })) }));

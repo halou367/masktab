@@ -2,7 +2,7 @@
 //   - GET /cdn-cgi/trace 回一段 Cloudflare 样子的 trace（直接探测靠它判断入口通不通）
 //   - WebSocket 升级后按 VLESS 协议转发；目标是 Cloudflare 的地址且路径里带 proxyip 时，改连 proxyip（和 edgetunnel 的做法一样）
 //
-// 用法：fakeet -port 8443 -colo NRT -loc JP
+// 用法：fakeet -port 8443 -colo NRT -loc JP [-listen ::]
 package main
 
 import (
@@ -150,6 +150,7 @@ func main() {
 	colo := flag.String("colo", "NRT", "")
 	loc := flag.String("loc", "JP", "")
 	lag := flag.Int("lag", 0, "每个请求多等的毫秒数，用来让入口有快有慢")
+	listen := flag.String("listen", "127.0.0.1", "监听的地址；写 :: 时 IPv4、IPv6 都听（测 IPv6 入口用）")
 	flag.Parse()
 	tag := fmt.Sprintf("[%d %s]", *port, *colo)
 	h := func(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +278,7 @@ func main() {
 			}
 		}
 	}
-	srv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", *port), Handler: http.HandlerFunc(h), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert()}, NextProtos: []string{"http/1.1"}}}
+	srv := &http.Server{Addr: net.JoinHostPort(*listen, strconv.Itoa(*port)), Handler: http.HandlerFunc(h), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert()}, NextProtos: []string{"http/1.1"}}}
 	log.Printf("%s 在听", tag)
 	log.Fatal(srv.ListenAndServeTLS("", ""))
 }

@@ -320,7 +320,7 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - 没有显示器时用无头模式，见 `AGENTS.md`。内存 2 GB 的机器上同时最多开一两个无头实例，否则调试端口会没有响应。
 - 假节点服务端：再起一个 mihomo，配置里放 ss 入站（两个端口、不同密码）和 vless+ws+TLS 入站（自签证书，订阅链接里带 `allowInsecure=1`），
   订阅文件用 `python3 -m http.server` 提供。mihomo 不接受没有证书的 vless 入站。
-- 假 edgetunnel：`go run ./scripts/fakeet -port 8443 -colo NRT -loc JP [-lag 30]`，一个端口一个进程（自签证书，订阅链接带 `allowInsecure=1`，server 写 `127.0.0.1`）。
+- 假 edgetunnel：`go run ./scripts/fakeet -port 8443 -colo NRT -loc JP [-lag 30] [-listen ::]`，一个端口一个进程（自签证书，订阅链接带 `allowInsecure=1`，server 写 `127.0.0.1`）。
   它回 `/cdn-cgi/trace`（直接探测靠这个），转发 VLESS over WebSocket，目标是 Cloudflare 的地址时改连路径里的 `proxyip`，所以两路出口和真的一样。
   杀掉某个端口的进程 = 这个入口坏了；入口地址派生出来的"反代"是假的，选中它 = 反代坏了。自动换线就是这么测的。
 - 面板截图：用调试端口新开 `chrome-extension://<ID>/popup.html`，`Emulation.setDeviceMetricsOverride` 设成 320 宽再截。
@@ -336,6 +336,55 @@ xhttp 只验证到 `mihomo -t` 认配置，**没有实连过**。
 - 设置 `bindIface`：空 = 自动（默认）；`off` = 不绑定；其它 = 指定网卡名。识别失败时不绑定（行为与以前一样）并写日志。
 - 风险：识别错网卡会导致全部不通（R-1 下是切断，不会泄漏）；遇到时在设置里关掉或指定网卡名。没在 Windows + TUN 上实测。
 - 回退：设置里选“关”，或删掉 `Input.Interface` 的赋值。
+
+### N-2 IPv6 的入口地址能用；域名解析查全（2026-11-16，需求方：“优选 IP 好像不能用……最后节点显示解析失败”）
+
+复现（沙箱）：假 edgetunnel 监听 `[::1]:8444`，把它加进地址库。直接探测通（1 ms），实例用它当入口就报“域名解析失败”；
+代理内核的日志是 `[::1]:8444 connect error: dns resolve failed: ip version error`。
+
+**原因 1：内核的 IPv6 是关着的。** `configgen.go` 顶层和 `dns` 里都写着 `ipv6: false`。mihomo 在这个设置下不连任何 IPv6 的服务器地址，
+报的错里带 `dns` 字样，`friendlyErr` 就翻成了“域名解析失败”。只有 AAAA 记录的域名展开后全是 IPv6，所以整条都不能用。
+
+- 改成 `ipv6: true`（两处）。
+- 这一项只管“内核自己去连谁、怎么解析”。实测改之前网页访问 IPv6 字面地址（`https://[2606:4700:4700::1111]/`）就已经原样交给节点了，所以打开它不改变网站看到的出口；
+  规则只有一条 `MATCH`，目标域名一直是交给服务端解析的，这一点也没变。
+- 本机没有 IPv6 的网络上，IPv6 地址仍然连不上。这时写“本机网络没有 IPv6”（`cfprobe.NoIPv6`），不再写“网络不可达”或“解析失败”；自动选线本来就不选不通的地址。
+
+**原因 2：域名解析不全（`ResolveExit`）。** 三处：
+
+1. 只要有一个 IPv4 就把 IPv6 全丢掉。
+2. 只查 A / AAAA，不查 TXT。edgetunnel 解析反代域名的次序是 TXT → A → AAAA（`_worker.js` 的“解析地址端口”），TXT 里是逗号分隔的 `IP:端口`；用 TXT 的域名我们一个都看不到。
+3. 用的是系统解析：本机开着 TUN 时拿到的是 198.18.x.x 的假地址；安卓上（没有 `/etc/resolv.conf`）查不了 TXT。
+
+改法：新包 `internal/dnsx`。
+
+- TXT、A、AAAA 都查；问系统 DNS、223.5.5.5、119.29.29.29，结果取并集去重（TXT 在前，然后 IPv4、IPv6），最多 64 个。公共 DNS 的请求走 `netx.BindDialer`。
+- 丢掉 0.0.0.0、组播、198.18.0.0/15。
+- TXT 里没写端口的按 443（和服务端一致）；域名里的 `.tp端口` 约定也认（`proxyip.tp8443.example.com`）。
+- 每种记录都有 DNS 答复之后最多再等 1.5 秒：实测 119.29.29.29 对 50 个 A 记录的大答复一直不回，不能让它拖满 8 秒。
+- 失败时保留上一次的结果，原因记在 `ExitEntry.ResolveError`，地址库那一行用红字写出来；“立即解析”的提示写解析出几个或失败原因。
+- `Resolved` 的每一项是 IP 或 `IP:端口`（TXT 自带端口的）。实例里记的 `exitIp` 就是这一项，旧数据（纯 IP）不用迁移。
+- 地址变了就重新探测一遍（以前定时解析出新 IP 后没有延迟、不会被自动选中）。启动 5 秒后先解析一遍（设成“不刷新”的不动），升级后不用等 3 小时。
+
+**原因 3：IPv6 加端口拼错。** `exitValue` 用 `ip + ":" + 端口`，IPv6 会拼成 `::1:8443`，是另一个合法的 IPv6 地址，入口和反代都跟着错。
+
+- `exitValue` / `pipAddr` 统一输出 `IPv4`、`IPv4:端口`、`[IPv6]`、`[IPv6]:端口`。用户原样粘贴的不带方括号的 IPv6 也在这里规整（不改存储的值）。
+  新旧版本的 edgetunnel 都认带方括号的写法（旧版对不带方括号的 IPv6 会把最后一段当端口）。
+- 入口地址给内核时不带方括号（`nodeRef.Server`），由 `hostPort` 拼键时再加。
+
+**界面**：IPv6 最长 39 个字符，列表里原来用“…”截掉。新增 `ui.js` 的 `ipSpan` / `isV6` 和样式 `.ip6`：小一号字、在冒号后面允许折行，不截断（UI-9 的“IP 不截断”）。
+入口列表、出口列表、节点页“正在用的”两行、地址库都用它。IPv6 带端口时界面上也写成 `[IPv6]:端口`。
+
+检查：
+
+- `go test`：`dnsx`（假 DNS：两种地址族都留、只有 AAAA、TXT 在前并带端口、多个 DNS 取并集、丢假地址、失败原因、`.tp`）、`core/ipv6_test.go`（`exitValue` 16 种写法、
+  入口 / 反代列表、选中后的取值、日志翻译）、`configgen`（三种模式都开着 ipv6）、`cfprobe`（IPv6 不可达的说法，含 Windows 的报错文字）。
+- `preview-pages.mjs` 加 8 项（412 / 320 宽 × 地址库、节点页、入口列表、出口列表：IPv6 写全、不出屏幕、失败原因写出来）。
+- 联调办法：`go run ./scripts/fakeet -listen :: -port 8443`（新增 `-listen`），`/etc/hosts` 里加 `::1 v6only.test`、`127.0.0.1 dual.test`、`::1 dual.test`，
+  地址库导入 `[::1]:8444`、`v6only.test:8443`、`dual.test:8444`。
+
+没有验证：公网 IPv6（沙箱没有）；Windows 上绑定网卡时的 IPv6（`IPV6_UNICAST_IF`，代码早就有，没跑过）；手机。
+没有做：自动判断本机有没有 IPv6 并在页面顶上提示一次（现在是每个 IPv6 地址各写一句）；SOCKS5 / HTTP 出口的 IPv6 写法没有动。
 
 ### M-1 密码库与自动填写（2026-11-14）
 

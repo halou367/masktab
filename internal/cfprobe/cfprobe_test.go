@@ -2,6 +2,7 @@ package cfprobe
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -78,5 +79,21 @@ func TestColo(t *testing.T) {
 	}
 	if cc, _ := Colo("???"); cc != "" {
 		t.Fatal("不认识的机房应当返回空")
+	}
+}
+
+// 连 IPv6 地址而本机没有 IPv6 时，原因要说清楚是本机网络的事（不是地址坏了）。
+func TestReasonNoIPv6(t *testing.T) {
+	v6 := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.ParseIP("2606:4700::1"), Port: 443}, Err: errors.New("connect: network is unreachable")}
+	if got := Reason(v6); got != NoIPv6 {
+		t.Fatalf("IPv6 不可达：%q", got)
+	}
+	win := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.ParseIP("2606:4700::1"), Port: 443}, Err: errors.New("connectex: A socket operation was attempted to an unreachable network.")}
+	if got := Reason(win); got != NoIPv6 {
+		t.Fatalf("Windows 上 IPv6 不可达：%q", got)
+	}
+	v4 := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.ParseIP("104.16.1.1"), Port: 443}, Err: errors.New("connect: network is unreachable")}
+	if got := Reason(v4); got != "网络不可达" {
+		t.Fatalf("IPv4 不可达不应说成没有 IPv6：%q", got)
 	}
 }

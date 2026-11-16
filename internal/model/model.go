@@ -116,17 +116,19 @@ type Address struct {
 }
 
 type ExitEntry struct {
-	ID            string   `json:"id"`
-	UpdatedAt     int64    `json:"updatedAt"`
-	Deleted       bool     `json:"deleted,omitempty"`
-	Type          string   `json:"type"` // proxyip | socks5 | http
-	Value         string   `json:"value"`
-	Label         string   `json:"label,omitempty"`
-	Expand        bool     `json:"expand"`
-	RefreshHours  int      `json:"refreshHours"`
-	Resolved      []string `json:"resolved"`
-	ResolvedAt    int64    `json:"resolvedAt,omitempty"`
-	UsableAsEntry *bool    `json:"usableAsEntry,omitempty"`
+	ID           string   `json:"id"`
+	UpdatedAt    int64    `json:"updatedAt"`
+	Deleted      bool     `json:"deleted,omitempty"`
+	Type         string   `json:"type"` // proxyip | socks5 | http
+	Value        string   `json:"value"`
+	Label        string   `json:"label,omitempty"`
+	Expand       bool     `json:"expand"`
+	RefreshHours int      `json:"refreshHours"`
+	Resolved     []string `json:"resolved"`
+	ResolvedAt   int64    `json:"resolvedAt,omitempty"`
+	// ResolveError：最近一次解析失败的原因；成功后清空。失败时 Resolved 保留上一次的结果。
+	ResolveError  string `json:"resolveError,omitempty"`
+	UsableAsEntry *bool  `json:"usableAsEntry,omitempty"`
 }
 
 type IPInfo struct {

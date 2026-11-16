@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/halou367/masktab/internal/dnsx"
 	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/probe"
@@ -43,15 +44,37 @@ func nodeName(sub *model.Subscription, key string) string {
 	return "s-" + short(sub.ID) + "-" + short(key)
 }
 
-// exitValue 返回出口条目在该实例上的实际取值（展开的域名取选中的 IP，并保留条目自带的端口）。
-func exitValue(e *model.ExitEntry, ip string) string {
-	if e.Type == "proxyip" && e.Expand && ip != "" {
-		if _, port := exits.SplitHostPort(e.Value); port > 0 {
-			return ip + ":" + strconv.Itoa(port)
-		}
-		return ip
+// exitValue 返回出口条目在该实例上的实际取值，写法是 edgetunnel 的 proxyip 参数认的那种：
+// IPv4、IPv4:端口、[IPv6]、[IPv6]:端口（IPv6 一律带方括号，否则带端口时分不清哪一段是端口）。
+// 展开的域名取选中的那一项（item，来自 Resolved）；端口依次取：这一项自带的、域名里 .tp端口 的约定、条目写的。
+func exitValue(e *model.ExitEntry, item string) string {
+	if e.Type != "proxyip" {
+		return e.Value
 	}
-	return e.Value
+	host, port := exits.SplitHostPort(e.Value)
+	if e.Expand && item != "" {
+		if tp := dnsx.TPPort(host); tp > 0 {
+			port = tp
+		}
+		h, p := exits.SplitHostPort(item)
+		if p > 0 {
+			port = p
+		}
+		host = h
+	}
+	return pipAddr(host, port)
+}
+
+// pipAddr 把地址和端口拼成 proxyip 参数的写法；端口为 0 表示不写端口（服务端默认 443）。
+func pipAddr(host string, port int) string {
+	host = strings.Trim(host, "[]")
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port > 0 {
+		return host + ":" + strconv.Itoa(port)
+	}
+	return host
 }
 
 type resolved struct {

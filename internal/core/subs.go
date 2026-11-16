@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	neturl "net/url"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/halou367/masktab/internal/cfprobe"
+	"github.com/halou367/masktab/internal/dnsx"
 	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/netx"
@@ -327,53 +327,101 @@ func (a *App) rescanET() {
 	}
 }
 
-// ResolveExit 把域名出口条目解析为 IP 列表。已被实例选中的失效 IP 只标记不替换（由界面对照 resolved 显示）。
-func (a *App) ResolveExit(id string) {
+// ResolveExit 把域名出口条目解析成地址列表（决定 N-2）：TXT、A、AAAA 都查，IPv4 和 IPv6 都留下。
+// Resolved 里的每一项是 IP，或者“IP:端口”（TXT 记录里的）。
+// 已被实例选中的失效 IP 只标记不替换（由界面对照 resolved 显示）。解析失败时保留上一次的结果，并记下原因。
+// 返回值：地址列表有没有变（变了的话调用方要重新探测，新地址才有延迟和出口）。
+func (a *App) ResolveExit(id string) (changed bool) {
 	a.mu.Lock()
 	e := a.exitLocked(id)
 	if e == nil || e.Type != "proxyip" || !e.Expand {
 		a.mu.Unlock()
-		return
+		return false
 	}
 	host, _ := exits.SplitHostPort(e.Value)
 	a.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	ips, err := net.DefaultResolver.LookupHost(ctx, host)
+	addrs, err := dnsx.Lookup(ctx, host)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if e = a.exitLocked(id); e == nil {
-		return
+		return false
 	}
-	if err == nil && len(ips) > 0 {
-		var v4 []string
-		for _, ip := range ips {
-			if !strings.Contains(ip, ":") {
-				v4 = append(v4, ip)
-			}
+	e.ResolvedAt = now() // 失败也记时间，按原来的间隔再试
+	if err != nil {
+		e.ResolveError = err.Error()
+	} else {
+		next := make([]string, 0, len(addrs))
+		for _, ad := range addrs {
+			next = append(next, ad.String())
 		}
-		if len(v4) == 0 {
-			v4 = ips
-		}
-		e.Resolved, e.ResolvedAt = v4, now()
-		a.saveLocked("exits")
-		a.bumpLocked("state", "")
+		changed = !sameSet(e.Resolved, next)
+		e.ResolveError, e.Resolved = "", next
 	}
+	a.saveLocked("exits")
+	a.bumpLocked("state", "")
+	return changed
+}
+
+// sameSet 判断两个列表的内容是否相同（不看顺序：DNS 每次回的顺序都可能不一样）。
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]bool, len(a))
+	for _, x := range a {
+		m[x] = true
+	}
+	for _, x := range b {
+		if !m[x] {
+			return false
+		}
+	}
+	return true
 }
 
 // exitRefreshLoop 按各条目的刷新间隔（默认 3 小时）重新解析域名。
+// 启动后先解析一遍：程序没开的这段时间里域名的地址可能已经换了；升级到会查 IPv6、TXT 的版本后也不用等 3 小时。
 func (a *App) exitRefreshLoop() {
+	time.Sleep(5 * time.Second) // 等网卡绑定和订阅加载完
+	a.refreshExits(10 * time.Minute)
 	for range time.Tick(10 * time.Minute) {
-		a.mu.Lock()
-		var due []string
-		for _, e := range a.Exits {
-			if e.Type == "proxyip" && e.Expand && e.RefreshHours > 0 && time.Since(time.UnixMilli(e.ResolvedAt)) > time.Duration(e.RefreshHours)*time.Hour {
-				due = append(due, e.ID)
+		a.refreshExits(0)
+	}
+}
+
+// refreshExits 重新解析到期的域名条目。minAge > 0 时改为“上次解析早于 minAge 的都算到期”（启动时用）。
+func (a *App) refreshExits(minAge time.Duration) {
+	a.mu.Lock()
+	var due []string
+	for _, e := range a.Exits {
+		if e.Type != "proxyip" || !e.Expand {
+			continue
+		}
+		age := time.Since(time.UnixMilli(e.ResolvedAt))
+		atStart := minAge > 0 && age > minAge && (e.RefreshHours > 0 || len(e.Resolved) == 0) // 设成“不刷新”的不动，除非还一个地址都没有
+		if atStart || (e.RefreshHours > 0 && age > time.Duration(e.RefreshHours)*time.Hour) {
+			due = append(due, e.ID)
+		}
+	}
+	a.mu.Unlock()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	changed := false
+	for _, id := range due {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			if a.ResolveExit(id) {
+				mu.Lock()
+				changed = true
+				mu.Unlock()
 			}
-		}
-		a.mu.Unlock()
-		for _, id := range due {
-			a.ResolveExit(id)
-		}
+		}(id)
+	}
+	wg.Wait()
+	if changed { // 换了一批地址：测一遍，否则新地址没有延迟、不会被自动选中
+		a.rescanET()
 	}
 }

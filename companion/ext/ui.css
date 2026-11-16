@@ -41,6 +41,8 @@ input::placeholder, textarea::placeholder { color: var(--on3); }
 .mono, .num { font-family: var(--mono); letter-spacing: -.2px; }
 .grow { flex: 1; min-width: 0; }
 .el { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* IPv6 地址：写全，小一号，放不下就在冒号后面折行（决定 N-2；规矩见 UI-9“IP 不截断”） */
+.ip6 { font-size: 12.5px; line-height: 1.3; white-space: normal; overflow-wrap: anywhere; min-width: 0; text-align: left; } html.pc .ip6 { font-size: 12px; }
 .sub { color: var(--on2); font-size: 14px; } html.pc .sub { font-size: 13px; }
 .good { color: var(--good); } .mid { color: var(--mid); } .bad { color: var(--bad); } .na { color: var(--on3); }
 .flag { display: inline-block; flex: none; width: 20px; height: 15px; border-radius: 2px; object-fit: cover; vertical-align: -2px; box-shadow: 0 0 0 .5px rgba(127, 127, 127, .4); }
@@ -431,6 +433,7 @@ html.pc .ls .iprow { min-height: 48px; padding: 5px 14px; }
 .ls .iprow.on { background: var(--tonal); }
 .iprow .grow { display: flex; flex-direction: column; gap: 2px; text-align: left; }
 .iprow .ip { flex: none; font-size: 15px; } html.pc .iprow .ip { font-size: 13.5px; }
+.iprow .ip.ip6, html.pc .iprow .ip.ip6 { font-size: 12.5px; white-space: normal; overflow: visible; text-overflow: clip; } html.pc .iprow .ip.ip6 { font-size: 12px; }
 .iprow .l2 { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--on2); min-width: 0; white-space: nowrap; }
 .iprow .l2 b { font-weight: 600; font-family: var(--mono); }
 .iprow .l2 .ty { color: var(--on2); } .iprow .l2 .ty:empty { display: none; }

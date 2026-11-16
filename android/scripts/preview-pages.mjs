@@ -38,6 +38,22 @@ const ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9h
 const light = JSON.parse(JSON.stringify(fixture)); light.settings.theme = 'light';
 // 两路出口不同国家的样子（黄色提示）
 const split = JSON.parse(JSON.stringify(fixture)); { const m = split.instances.find((x) => x.id === split.me.id); m.rt.probe.direct = { ...m.rt.probe.direct, country: 'HK', city: 'Hong Kong', timezone: 'Asia/Hong_Kong' }; split.me = m; }
+// IPv6 的样子（决定 N-2）：入口、出口列表里各放最长写法的 IPv6（一个通、一个本机没有 IPv6 所以不通），
+// 地址库里放一个展开出 IPv6 的域名、一个解析失败的域名、一个单独的 IPv6。
+const V6A = '2606:4700:5a:8e48:1c8d:85bf:712a:164f', V6B = '2a01:4f8:c012:8e48:1c8d:85bf:712a:164f';
+const v6st = JSON.parse(JSON.stringify(fixture)); {
+  const s = v6st.subscriptions[0];
+  s.nodes.push({ ...s.nodes[0], id: `x:[${V6A}]:443`, server: V6A, port: 443, label: '', from: 'pip', kind: 'cf', delay: 73 },
+    { ...s.nodes[0], id: `x:[${V6B}]:8443`, server: V6B, port: 8443, label: '', from: 'pip', kind: 'proxy', delay: -1, err: '本机网络没有 IPv6' });
+  s.pips.push({ ...s.pips[0], id: 'e9|' + V6B, value: `[${V6B}]:8443`, key: `[${V6B}]:8443`, derived: false, label: '', delay: 95 });
+  s.nodeCount = s.nodes.length;
+  // 这个实例手动选了 IPv6 的入口和出口：节点页上“正在用的”那两行也要写全
+  for (const m of [v6st.me, v6st.instances.find((x) => x.id === v6st.me.id)]) Object.assign(m.proxy, { entryMode: 'manual', exitMode: 'manual', auto: false, addressId: `x:[${V6A}]:443`, exitId: 'e9', exitIp: V6B });
+  v6st.exits = [
+    { id: 'e9', updatedAt: 1, type: 'proxyip', value: 'pip.example.com:8443', expand: true, refreshHours: 3, resolved: ['203.0.113.7', V6B, '[2001:db8::9]:2053'], resolvedAt: 1 },
+    { id: 'e8', updatedAt: 1, type: 'proxyip', value: 'gone.example.com', expand: true, refreshHours: 3, resolved: [], resolvedAt: 1, resolveError: '这个域名不存在，或者没有 A、AAAA、TXT 记录' },
+    { id: 'e7', updatedAt: 1, type: 'proxyip', value: V6A, expand: false, refreshHours: 3, resolved: [] }];
+}
 // 实例详情里的账号行（v0.1.57、v0.1.60 上被新标签页的同名样式压成了一列列竖条，没有任何检查拦住）：
 // 每条是横着的一行——够宽、不高，四个按钮在同一行上、都在行里面；用户名那一格至少有 90 宽。
 const accRows = (pg2) => pg2.evaluate(() => [...document.querySelectorAll('.drawer .acc:not(.edit)')].map((r) => {
@@ -559,6 +575,37 @@ if (desk) {
 }
 check('没有“圆角 + 可滚动”的元素（各页面、对话框）', rsBad.length === 0, rsBad);
 check('窄屏（320 / 360 宽）左右不被裁：没有横向溢出、没有元素伸出屏幕', edgeBad.length === 0, edgeBad);
+// IPv6 地址（决定 N-2）：入口、出口列表和地址库里都要写全，不能出现省略号，也不能把行撑出屏幕
+for (const w of [412, 320]) {
+  const c = await br.newContext({ viewport: { width: w, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, v6st);
+  const pg = await c.newPage(); watch(pg, 'v6-' + w);
+  const rows = (sel) => pg.evaluate(([sel, A, B]) => { const W = innerWidth, out = { n: 0, cut: [], wide: [], has: [] };
+    for (const e of document.querySelectorAll(sel)) { out.n++; const t = e.innerText;
+      if (t.includes(A)) out.has.push('A'); if (t.includes(B)) out.has.push('B');
+      for (const x of e.querySelectorAll('*')) { const cs = getComputedStyle(x); if (cs.textOverflow === 'ellipsis' && x.scrollWidth > x.clientWidth + 1 && /[0-9a-f]{1,4}:[0-9a-f]{1,4}:/.test(x.innerText)) out.cut.push(x.innerText.slice(0, 50)); }
+      for (const x of [e, ...e.querySelectorAll('*')]) { const r = x.getBoundingClientRect(); if (r.width && (r.right > W + 1 || r.left < -1)) { out.wide.push(`${x.className || x.tagName} ${Math.round(r.right)}`); break; } } }
+    return out; }, [sel, V6A, V6B]);
+  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(700);
+  let r = await rows('button.row');
+  const txt = await pg.evaluate(() => document.querySelector('#root').innerText);
+  check(`地址库（${w} 宽）：展开的域名写明有几个 IPv6，解析失败的写出原因，IPv6 写全`, /展开 3 个地址（IPv6 2 个）/.test(txt) && /解析失败：这个域名不存在/.test(txt) && r.has.includes('A') && r.cut.length === 0 && r.wide.length === 0, { r, txt: txt.slice(0, 400) });
+  await pg.screenshot({ path: path.join(out, `v6-exits-${w}.png`) });
+  await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(700);
+  r = await rows('#root .row');
+  check(`节点页（${w} 宽）：正在用的 IPv6 入口、出口写全`, r.has.includes('A') && r.has.includes('B') && r.cut.length === 0 && r.wide.length === 0, { r });
+  await pg.screenshot({ path: path.join(out, `v6-node-${w}.png`), fullPage: true });
+  await pg.locator('button.row[aria-label="选入口"]').click({ timeout: 5000 }); await pg.waitForTimeout(400);
+  r = await rows('.ls .iprow');
+  const dead = await pg.evaluate(() => [...document.querySelectorAll('.ls .iprow.dead')].map((e) => e.innerText).join(' | '));
+  check(`入口列表（${w} 宽）：两个 IPv6 都写全、带端口的加方括号、不通的写出“本机网络没有 IPv6”`, r.n === 5 && r.has.includes('A') && r.has.includes('B') && r.cut.length === 0 && r.wide.length === 0 && dead.includes(`[${V6B}]`) && dead.includes('本机网络没有 IPv6'), { r, dead });
+  await pg.screenshot({ path: path.join(out, `v6-entry-${w}.png`) });
+  await pg.reload(); await pg.waitForTimeout(700);
+  await pg.locator('button.row[aria-label="选出口"]').click({ timeout: 5000 }); await pg.waitForTimeout(400);
+  r = await rows('.ls .iprow');
+  check(`出口列表（${w} 宽）：IPv6 的反代写全`, r.n === 5 && r.has.includes('B') && r.cut.length === 0 && r.wide.length === 0, { r });
+  await pg.screenshot({ path: path.join(out, `v6-exit-${w}.png`) });
+  await c.close();
+}
 // 左右安全区（viewport-fit=cover + env(safe-area-inset-*)）：模拟横屏左右各 40px 的安全区，页面内容要让开
 {
   const c = await mkctx(fixture); const pg = await c.newPage(); watch(pg, 'safe-area');

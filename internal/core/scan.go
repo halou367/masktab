@@ -7,10 +7,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/halou367/masktab/internal/cfprobe"
 	"github.com/halou367/masktab/internal/exits"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/probe"
@@ -95,7 +97,7 @@ func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 			if e.Type != "proxyip" {
 				continue
 			}
-			vals := []string{e.Value}
+			vals := []string{exitValue(e, "")}
 			if e.Expand {
 				vals = vals[:0]
 				for _, ip := range e.Resolved {
@@ -168,7 +170,7 @@ func (a *App) pipsLocked(sub *model.Subscription) []pipRef {
 			}
 			continue
 		}
-		add(pipRef{ID: e.ID, Type: e.Type, Value: e.Value, Label: e.Label})
+		add(pipRef{ID: e.ID, Type: e.Type, Value: exitValue(e, ""), Label: e.Label})
 	}
 	for _, n := range a.nodesLocked(sub) {
 		if n.From != "pip" && usableAsPip(n.Server) {
@@ -586,6 +588,9 @@ func exitIP(hc *http.Client, quick bool) (string, error) {
 	return "", last
 }
 
+// v6DialRe 认出 mihomo 日志里“连的是 IPv6 地址”：dial tcp [2606:4700::1]:443: connect: network is unreachable
+var v6DialRe = regexp.MustCompile(`\[[0-9a-f:]+\]:\d+`)
+
 // friendlyErr 把 mihomo 日志里的失败原因翻译成一句能看懂的话。
 func friendlyErr(reason string, err error) string {
 	r := strings.ToLower(reason)
@@ -594,6 +599,12 @@ func friendlyErr(reason string, err error) string {
 		return "超时"
 	case r == "":
 		return "不通"
+	case strings.Contains(r, "ip version error"):
+		return "代理内核没有开 IPv6"
+	case cfprobe.NoRoute(r) && v6DialRe.MatchString(r):
+		return cfprobe.NoIPv6
+	case cfprobe.NoRoute(r):
+		return "网络不可达"
 	case strings.Contains(r, "rejected ech"):
 		return "服务端不接受 ECH"
 	case strings.Contains(r, "ech"):

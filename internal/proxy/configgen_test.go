@@ -91,3 +91,19 @@ func TestGenerateBindInterface(t *testing.T) {
 		t.Fatal("没设网卡时不应出现 interface-name")
 	}
 }
+
+// 决定 N-2：入口地址可以是 IPv6（优选 IP 里很常见）。不开 ipv6 时代理内核直接拒绝，报 "ip version error"。
+func TestGenerateIPv6On(t *testing.T) {
+	for _, in := range []Input{{ControlPort: 1, Secret: "s"}, {ControlPort: 1, Secret: "s", Interface: "以太网"}, {ControlPort: 1, Secret: "s", Hosted: true}} {
+		var cfg map[string]any
+		if err := json.Unmarshal(Generate(in), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		if cfg["ipv6"] != true {
+			t.Fatalf("配置里应当开启 ipv6：%+v", in)
+		}
+		if dns, ok := cfg["dns"].(map[string]any); ok && dns["ipv6"] != true {
+			t.Fatalf("DNS 模块应当回 AAAA 记录：%+v", in)
+		}
+	}
+}

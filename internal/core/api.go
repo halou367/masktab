@@ -688,8 +688,17 @@ func (a *App) routes(mux *http.ServeMux) {
 		reply(w, nil, nil)
 	})
 	mux.HandleFunc("POST /api/exits/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
-		a.ResolveExit(r.PathValue("id"))
-		reply(w, nil, nil)
+		id := r.PathValue("id")
+		if a.ResolveExit(id) {
+			go a.rescanET()
+		}
+		out := map[string]any{"count": 0, "error": ""}
+		a.mu.Lock()
+		if e := a.exitLocked(id); e != nil {
+			out["count"], out["error"] = len(e.Resolved), e.ResolveError
+		}
+		a.mu.Unlock()
+		reply(w, out, nil)
 	})
 	mux.HandleFunc("DELETE /api/exits/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")

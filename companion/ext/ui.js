@@ -233,6 +233,14 @@ export function row(o) {
     o.trail != null && o.trail !== false && h('span', { class: 'trail' }, o.trail),
     (o.chev || o.drop) && h('span', { class: 'chev' }, icon(o.drop ? 'chevD' : 'chevR', 22)));
 }
+// IPv6 地址很长（最长 39 个字符，带方括号和端口更长）：不截断，小一号字、在冒号后面允许折行（样式 .ip6）。
+export const isV6 = (s) => typeof s === 'string' && /^\[?[0-9a-f]*:[0-9a-f:.]*:[0-9a-f.]*\]?(:\d+)?$/i.test(s);
+// ipSpan(地址, 类名, 后面跟着的小字…)：IPv4、域名原样；IPv6 加上 .ip6 并在每个冒号后放一个可折行的位置。
+export function ipSpan(s, cls = 'mono', ...more) {
+  if (!isV6(s)) return h('span', { class: cls }, s, ...more);
+  const parts = s.split(':');
+  return h('span', { class: cls + ' ip6' }, parts.flatMap((x, i) => (i < parts.length - 1 ? [x + ':', h('wbr')] : [x])), ...more);
+}
 // 分数的颜色：≥ 80 绿、≥ 50 黄、其余红。
 export const scoreCls = (s) => (s >= 80 ? 'good' : s >= 50 ? 'mid' : 'bad');
 // 圆环（纯净度、伪装度）：size 像素，中间写数字；sub = 数字下面的小字（大圆环才有）。value 为空 = 不知道（灰色空环）。

@@ -185,6 +185,29 @@ func Download(ctx context.Context, server string, port int, useTLS bool, limit t
 	return peak, avg, nil
 }
 
+// NoIPv6 是连 IPv6 地址时“本机根本发不出去”的说法。地址本身没有问题，换到有 IPv6 的网络就能用。
+const NoIPv6 = "本机网络没有 IPv6"
+
+// NoRoute 判断一段（小写的）错误文字是不是“本机没有到这个地址的路”：
+// Linux / 安卓是 network is unreachable、no route to host、cannot assign requested address，
+// Windows 是 unreachable network、unreachable host、requested address is not valid。
+func NoRoute(low string) bool {
+	return strings.Contains(low, "unreachable") || strings.Contains(low, "no route to host") ||
+		strings.Contains(low, "cannot assign requested address") || strings.Contains(low, "requested address is not valid")
+}
+
+// toIPv6 判断出错的那次连接是不是连向 IPv6 地址。
+func toIPv6(err error) bool {
+	var oe *net.OpError
+	if !errors.As(err, &oe) || oe.Addr == nil {
+		return false
+	}
+	if a, ok := oe.Addr.(*net.TCPAddr); ok {
+		return a.IP != nil && a.IP.To4() == nil
+	}
+	return false
+}
+
 // Reason 把连接错误翻译成一句能看懂的话。
 func Reason(err error) string {
 	if err == nil {
@@ -193,6 +216,8 @@ func Reason(err error) string {
 	s := strings.ToLower(err.Error())
 	var ne net.Error
 	switch {
+	case NoRoute(s) && toIPv6(err):
+		return NoIPv6
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout(), strings.Contains(s, "timeout"):
 		return "连接超时"
 	case strings.Contains(s, "refused"):

@@ -1,5 +1,5 @@
 import { api, shownExit } from './api.js';
-import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, ask, confirmDlg } from './ui.js';
+import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, ask, confirmDlg, isV6, ipSpan } from './ui.js';
 import { disguise } from './common.js';
 import { face } from './menu.js';
 
@@ -168,19 +168,22 @@ export function exitsView(c) {
       else if (v === 'del' && await confirmDlg(`删除订阅“${s.name}”？`, '用它的实例会断流，直到换上别的订阅。', '删除', true)) act(() => api('DELETE', `/api/subscriptions/${s.id}`));
     } });
   const seen = new Set(), custom = st.subscriptions.flatMap((x) => x.nodes).filter((n) => n.from === 'custom' && !seen.has(n.id) && seen.add(n.id));
-  const exitRow = (e) => row({ ic: e.type === 'proxyip' ? 'swap' : 'globe', t: h('span', { class: 'mono el' }, e.value),
-    s: [h('span', { class: 'tag g' }, e.type), e.label && ' ' + e.label, e.type === 'proxyip' && e.expand && ` · 展开 ${e.resolved.length} 个 IP${e.refreshHours ? ` · 每 ${e.refreshHours} 小时` : ''}`], chev: true,
+  // 解析结果里的 IPv6：单个 IPv6 至少有两个冒号；带端口的写成 [IPv6]:端口。
+  const v6Count = (e) => e.resolved.filter((x) => x.startsWith('[') || x.split(':').length > 2).length;
+  const exitRow = (e) => row({ ic: e.type === 'proxyip' ? 'swap' : 'globe', t: ipSpan(e.value, isV6(e.value) ? 'mono' : 'mono el'),
+    s: [h('span', { class: 'tag g' }, e.type), e.label && ' ' + e.label, e.type === 'proxyip' && e.expand && ` · 展开 ${e.resolved.length} 个地址${v6Count(e) ? `（IPv6 ${v6Count(e)} 个）` : ''}${e.refreshHours ? ` · 每 ${e.refreshHours} 小时` : ''}`,
+      e.resolveError && h('span', { class: 'bad' }, ` · 解析失败：${e.resolveError}`)], chev: true,
     onclick: async () => {
       const opts = [['label', '修改备注'], e.type === 'proxyip' && ['expand', e.expand ? '不展开（原样交给服务端）' : '展开为 IP 列表'], e.type === 'proxyip' && e.expand && ['hours', '重新解析的间隔'], e.type === 'proxyip' && e.expand && ['resolve', '立即解析'], ['del', '删除']].filter(Boolean);
       const v = await choose(e.value, opts, null);
       if (v === 'label') { const t = await ask('备注', { value: e.label || '' }); if (t != null) act(() => api('PATCH', `/api/exits/${e.id}`, { label: t })); }
       else if (v === 'expand') act(() => api('PATCH', `/api/exits/${e.id}`, { expand: !e.expand }));
       else if (v === 'hours') { const n = await choose('重新解析的间隔', [0, 1, 3, 6, 12, 24].map((x) => [x, x ? `${x} 小时` : '不刷新']), e.refreshHours); if (n != null) act(() => api('PATCH', `/api/exits/${e.id}`, { refreshHours: n })); }
-      else if (v === 'resolve') act(() => api('POST', `/api/exits/${e.id}/resolve`), '已解析');
+      else if (v === 'resolve') act(async () => { const r = await api('POST', `/api/exits/${e.id}/resolve`); toast(r?.error ? `解析失败：${r.error}` : `解析出 ${r?.count ?? 0} 个地址`); });
       else if (v === 'del') act(() => api('DELETE', `/api/exits/${e.id}`));
     } });
   const importAddr = async () => {
-    const v = await ask('导入地址', { multiline: true, ok: '导入', note: '是优选还是反代不用区分，探测后自动识别；域名默认展开为 IP，每 3 小时重新解析。',
+    const v = await ask('导入地址', { multiline: true, ok: '导入', note: '是优选还是反代不用区分，探测后自动识别；域名默认展开为 IP（IPv4、IPv6、TXT 记录里的都算），每 3 小时重新解析。',
       placeholder: '每行一条，可多行粘贴（CSV 也行）：\n104.16.1.1:443 #备注\n7.cf.3666888.xyz\nhttps://example.com/ip.txt\nsocks5://user:pass@1.2.3.4:1080' });
     if (v && v.trim()) act(async () => { const r = await api('POST', '/api/exits', { text: v }); toast(r.added ? `新增 ${r.added} 条，正在探测…` : '没有新地址'); });
   };
@@ -188,7 +191,7 @@ export function exitsView(c) {
     sec('订阅', String(st.subscriptions.length)),
     st.subscriptions.map(subRow),
     row({ ic: 'add', t: '添加订阅', onclick: addSub }),
-    custom.length > 0 && [sec('自定义地址', String(custom.length)), custom.map((n) => row({ ic: 'bolt', t: h('span', { class: 'mono' }, `${n.server}:${n.port}`), s: n.label || null, trail: ibtn('del', '删除', () => act(() => api('DELETE', `/api/addresses/${n.id}`))) }))],
+    custom.length > 0 && [sec('自定义地址', String(custom.length)), custom.map((n) => row({ ic: 'bolt', t: ipSpan(`${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port}`), s: n.label || null, trail: ibtn('del', '删除', () => act(() => api('DELETE', `/api/addresses/${n.id}`))) }))],
     sec('地址库（优选 IP / 反代 / SOCKS5 / HTTP）', String(st.exits.length)),
     st.exits.map(exitRow),
     row({ ic: 'add', t: '导入地址', s: 'IP、域名、列表网址、socks5:// http://', onclick: importAddr })];
