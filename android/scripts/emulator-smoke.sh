@@ -69,6 +69,13 @@ A shell am start -n $ACT --es mt_open tabs
 sleep 3; shot 4c-tab-switcher
 A shell input keyevent KEYCODE_BACK; sleep 1
 
+# 3b. 外观默认跟随系统（2026-11-16）：模拟器默认是浅色，上面几张就是浅色的；这里把系统切成深色，外壳和页面要一起变深，截两张再切回去
+A shell cmd uimode night yes; sleep 5; shot 4d-night-newtab
+A shell am start -n $ACT --es mt_open menu
+sleep 4; shot 4e-night-menu
+A shell input keyevent KEYCODE_BACK; sleep 1
+A shell cmd uimode night no; sleep 5
+
 # 4. 设置首页、实例管理、节点与出口、指纹与伪装（内置页面，和电脑版同一份代码）
 A shell am start -n $ACT --es mt_open settings
 sleep 6; shot 5a-settings

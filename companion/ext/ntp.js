@@ -19,7 +19,7 @@ export const toUrl = (v, search) => {
 };
 
 export async function renderNtp(root, st, me, host) {
-  applyTheme(st.settings?.theme || 'dark', (me || st.me)?.color);
+  applyTheme(st.settings?.theme || 'system', (me || st.me)?.color);
   const hide = new Set(st.settings?.ntpHide || []);
   const search = st.settings?.searchUrl;
   const input = h('input', { id: 'q', autocomplete: 'off', placeholder: '搜索或输入网址', 'aria-label': '搜索或输入网址', enterkeyhint: 'go' });

@@ -11,8 +11,8 @@ const hosted = (st) => !!st.host;
 const set = (c, k, v, ok) => c.act(() => api('PATCH', '/api/settings', { [k]: v }), ok);
 const ENGINES = [['https://www.bing.com/search?q=%s', 'Bing'], ['https://www.google.com/search?q=%s', 'Google'], ['https://duckduckgo.com/?q=%s', 'DuckDuckGo'], ['https://www.baidu.com/s?wd=%s', '百度']];
 const engineName = (u) => ENGINES.find((e) => e[0] === u)?.[1] || (() => { try { return new URL(u.replace('%s', '')).hostname; } catch { return '自定义'; } })();
-export const THEMES = [['dark', '深色'], ['light', '浅色'], ['system', '跟随系统']];
-const themeName = (t) => THEMES.find((x) => x[0] === (t || 'dark'))?.[1] || '深色';
+export const THEMES = [['system', '跟随系统'], ['dark', '深色'], ['light', '浅色']];
+const themeName = (t) => THEMES.find((x) => x[0] === (t || 'system'))?.[1] || '跟随系统';
 
 // ---------- 设置首页 ----------
 export function settingsHome(c) {
@@ -43,7 +43,7 @@ export function settingsHome(c) {
       const v = await ask(st.vault?.hasDefault ? '修改默认密码' : '设置默认密码', { type: 'password', note: '批量导入邮箱、注册新站时用；留空 = 清除。' + (hosted(st) ? '加密保存在本机（密钥在系统密钥库里）。' : '加密保存在本机（Windows 用系统凭据保护）。') });
       if (v != null) c.act(() => api('PUT', '/api/vault/default', { password: v }), v ? '已保存' : '已清除');
     } }),
-    row({ ic: 'palette', t: '外观', s: themeName(s.theme), drop: true, onclick: () => pick('外观', THEMES, s.theme || 'dark', 'theme') }),
+    row({ ic: 'palette', t: '外观', s: themeName(s.theme), drop: true, onclick: () => pick('外观', THEMES, s.theme || 'system', 'theme') }),
     row({ ic: 'addhome', t: '新标签页', s: '伪装概况、书签、最近访问、已存账号', chev: true, onclick: () => c.open('settings/ntp') }),
     row({ ic: 'tune', t: '高级', s: '选线、测速、订阅刷新、网络', chev: true, onclick: () => c.open('settings/adv') }),
     h('div', { class: 'foot noic' }, `MaskTab ${st.version}`)];

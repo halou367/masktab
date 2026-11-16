@@ -327,7 +327,7 @@ export function sheet(kids, onclose) {
 }
 
 // ---------- 主题 ----------
-// 设置里的“外观”：dark（默认）| light | system（跟随系统）。先用上次记下的，免得状态拿回来之前闪一下。
+// 设置里的“外观”：system（默认，跟着浏览器 / 系统的深浅色）| dark | light。先用上次记下的，免得状态拿回来之前闪一下。
 // 强调色跟着当前实例的颜色走（决策 UI-10，演示定稿）：开关、选中的底色、卡片的色调都从实例色算出来，
 // 一眼能看出现在在哪个实例里。页面底色 --bg 不动（手机上状态栏、导航栏由 app 涂成同一个颜色，两边要对得上）。
 let themePref = '', seedPref = '';
@@ -347,14 +347,21 @@ export function accentTokens(light, seed) {
     : { surf: c(10 * n, 17), surf2: c(9 * n, 12.5), surf3: c(9 * n, 19), pill: c(10 * n, 20), div: c(8 * n, 26), hair: c(8 * n, 24), acc: c(s * .85, 82), onacc: c(s * .7, 18), tonal: c(s * .42, 28), ontonal: c(s * .9, 91) };
 }
 export function applyTheme(t, seed) {
-  if (t != null) { themePref = t || 'dark'; try { localStorage.setItem('mt-theme', themePref); } catch { /* 忽略 */ } }
+  if (t != null) { themePref = t || 'system'; try { localStorage.setItem('mt-theme', themePref); } catch { /* 忽略 */ } }
   if (seed != null && /^#[0-9a-f]{6}$/i.test(seed) && seed !== seedPref) { seedPref = seed; try { localStorage.setItem('mt-seed', seedPref); } catch { /* 忽略 */ } }
   const light = themePref === 'light' || (themePref === 'system' && mq?.matches);
   const want = light ? 'light' : 'dark', de = document.documentElement, key = want + seedPref;
-  if (de.dataset.tk !== key) { de.dataset.tk = key; for (const [k, v] of Object.entries(accentTokens(light, seedPref || '#1a73e8'))) de.style.setProperty('--' + k, v); }
+  if (de.dataset.tk !== key) {
+    de.dataset.tk = key;
+    const tk = accentTokens(light, seedPref || '#1a73e8');
+    // 电脑的工具栏弹窗是浮在浏览器上的一块，照浏览器自己的菜单来：整块用带色调的浮层底色，里面每一块比它亮一层（浅色下是白的），
+    // 弹窗里再弹出来的下拉 / 对话框又亮一层。菜单、节点页、指纹页在同一个弹窗里换，底色是同一个。
+    if (de.classList.contains('popup')) Object.assign(tk, light ? { bg: tk.surf, surf2: '#ffffff', surf: '#ffffff' } : { bg: tk.surf2, surf2: tk.surf3, surf: tk.pill, pill: tk.div });
+    for (const [k, v] of Object.entries(tk)) de.style.setProperty('--' + k, v);
+  }
   if (de.dataset.theme !== want) { de.dataset.theme = want; bars(); }
   return want;
 }
-try { themePref = localStorage.getItem('mt-theme') || 'dark'; seedPref = localStorage.getItem('mt-seed') || ''; } catch { themePref = 'dark'; }
+try { themePref = localStorage.getItem('mt-theme') || 'system'; seedPref = localStorage.getItem('mt-seed') || ''; } catch { themePref = 'system'; }
 applyTheme();
 mq?.addEventListener?.('change', () => applyTheme());

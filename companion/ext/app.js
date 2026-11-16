@@ -22,7 +22,7 @@ const main = document.getElementById('main');
 
 async function load(force) {
   try { st = await api('GET', '/api/state'); } catch (e) { main.replaceChildren(h('div', { class: 'warn bad', style: { marginTop: '24px' } }, icon('warn', 20), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
-  applyTheme(st.settings?.theme || 'dark', st.me?.color);
+  applyTheme(st.settings?.theme || 'system', st.me?.color);
   await syncIcons(st);
   panel.set(st);
   if (force || (!editing() && !document.querySelector('.scrim'))) render();

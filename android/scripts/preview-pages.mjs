@@ -363,11 +363,13 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
 // 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点页比内容。
 // 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹页里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
 if (desk) {
+  let deskTheme = fixture.settings?.theme, deskMany = false;
   const dsrv = http.createServer((q, r) => {
     const u = new URL(q.url, 'http://x');
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
     if (u.pathname.startsWith('/api/')) {
-      const st = { ...fixture, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
+      const many = deskMany ? [...fixture.instances, ...Array.from({ length: 7 }, (_, k) => ({ ...fixture.instances[k % 2 ? 0 : 2], id: 'x' + k, no: 21 + k, name: `user${k}@example.com`, color: ['#8e24aa', '#00897b', '#e8710a'][k % 3] }))] : fixture.instances;
+      const st = { ...fixture, instances: many, settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
       r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : { ok: true })); return;
     }
     const f = path.join(desk, decodeURIComponent(u.pathname));
@@ -384,6 +386,26 @@ if (desk) {
   await dp.waitForTimeout(600);
   check('电脑版：弹窗首页是头像菜单（大头像、纯净度圆环、其它实例）', await dp.evaluate(() => document.body.classList.contains('menu') && !!document.querySelector('.amenu .hero .ring') && document.querySelectorAll('.amenu .ai').length === 2), {});
   await dp.screenshot({ path: path.join(out, 'desk-menu.png'), fullPage: true });
+  // 没设“外观”时跟着浏览器的深浅色（需求方 2026-11-16：浅色的浏览器里弹窗还是深色的）
+  for (const scheme of ['light', 'dark']) {
+    deskTheme = undefined; deskMany = true;
+    const c2 = await br.newContext({ viewport: { width: 380, height: 600 }, deviceScaleFactor: 2, locale: 'zh-CN', colorScheme: scheme });
+    await c2.addInitScript(mock, fixture);
+    const p2 = await c2.newPage(); await p2.goto(dbase + 'popup.html'); await p2.waitForTimeout(600);
+    const got = await p2.evaluate(() => document.documentElement.dataset.theme);
+    check(`电脑版：没设外观时弹窗跟着浏览器的${scheme === 'light' ? '浅色' : '深色'}`, got === scheme, got);
+    await p2.screenshot({ path: path.join(out, `desk-menu-sys-${scheme}.png`) });
+    if (scheme === 'light') {
+      // 实例多的时候：弹窗整体不滚（不出现两条滚动条），只有“其它实例”那一段自己滚；整个弹窗不超过 600 高
+      const sc = await p2.evaluate(() => { const l = document.querySelector('.amenu .insts'), de = document.documentElement; return { page: de.scrollHeight, body: document.body.scrollHeight, bodyH: document.body.clientHeight, list: l.scrollHeight, listH: l.clientHeight, n: l.children.length, bottom: Math.round(l.getBoundingClientRect().bottom) }; });
+      check('电脑版：实例多时弹窗整体不滚，只有“其它实例”一段滚，不超过 600 高', sc.page <= 600 && sc.body <= sc.bodyH + 1 && sc.list > sc.listH && sc.listH >= 120 && sc.bottom <= 600 && sc.n >= 9, sc);
+      const bgs = await p2.evaluate(() => { const g = (e) => getComputedStyle(e).backgroundColor; return { body: g(document.body), row: g(document.querySelector('.amenu .mi')) }; });
+      check('电脑版：浅色下弹窗底色是带色调的浅色、每一块是白的（照浏览器自己的菜单）', bgs.row === 'rgb(255, 255, 255)' && /^rgb\((2[2-5]\d), (2[2-5]\d), (2[2-5]\d)\)$/.test(bgs.body) && bgs.body !== bgs.row, bgs);
+    }
+    await p2.locator('button.mi', { hasText: '节点与出口' }).click(); await p2.waitForTimeout(400);
+    await p2.screenshot({ path: path.join(out, `desk-node-sys-${scheme}.png`) });
+    await c2.close(); deskTheme = fixture.settings?.theme; deskMany = false;
+  }
   await dp.locator('button.mi', { hasText: '节点与出口' }).click();
   await dp.waitForTimeout(400);
   await dp.screenshot({ path: path.join(out, 'desk-node.png'), fullPage: true });

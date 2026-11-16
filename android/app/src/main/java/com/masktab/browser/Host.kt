@@ -249,7 +249,7 @@ object Host {
         private set
     @Volatile var vaultKeyError = ""
     /** 设置里的“外观”：dark（默认）| light | system。 */
-    @Volatile var theme = "dark"
+    @Volatile var theme = "system"
         private set
     /** 新标签页的书签（三点菜单里的星标按钮加 / 删）。 */
     @Volatile var bookmarks: List<Pair<String, String>> = emptyList()
@@ -321,7 +321,7 @@ object Host {
         subs = names; nodeCount = n
         val set = j.optJSONObject("settings") ?: JSONObject()
         searchUrl = set.str("searchUrl").ifEmpty { null } ?: searchUrl
-        theme = set.str("theme").ifEmpty { "dark" }
+        theme = set.str("theme").ifEmpty { "system" }
         val off = set.optJSONArray("fpOff")?.strings()?.toSet() ?: emptySet()
         if (off != fpOff) { fpOff = off; saveHost() }
         bookmarks = (set.optJSONArray("bookmarks")?.objects() ?: emptyList()).map { it.str("title") to it.str("url") }

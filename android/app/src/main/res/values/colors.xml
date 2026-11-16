@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="mt_bg">#0d0e13</color>
+    <!-- 窗口刚出来、界面还没画之前的底色：跟着系统的深浅色（深色在 values-night），和“外观”默认跟随系统对得上 -->
+    <color name="mt_bg">#ffffff</color>
 </resources>

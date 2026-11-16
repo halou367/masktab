@@ -1,10 +1,17 @@
 <!doctype html>
-<html lang="zh-CN" class="pc"><head><meta charset="utf-8"><link rel="stylesheet" href="ui.css"><link rel="stylesheet" href="panel.css">
+<html lang="zh-CN" class="pc popup"><head><meta charset="utf-8"><link rel="stylesheet" href="ui.css"><link rel="stylesheet" href="panel.css">
 <style>
 /* 工具栏弹窗：Chrome 头像弹窗的样子（宽 380，最高 600），节点与出口等页面在同一个弹窗里换（决策 UI-1）。 */
-html{width:380px} body{max-height:600px;overflow-x:hidden}
-body.menu{background:var(--surf);--ring:var(--surf)} body.menu #root{padding:8px 0 10px}
-.amenu .hero{padding-top:10px} .amenu .ip{color:var(--on2)}
-.insts{max-height:236px;overflow-y:auto}
+html{width:380px} body{max-height:600px;overflow-x:hidden;background:var(--bg);--ring:var(--bg)}
+/* 首页（头像菜单）整个不滚：上半截固定，只有“其它实例”那一段在剩下的高度里滚，免得弹窗右边一条滚动条、里面又一条 */
+body.menu{overflow:hidden} body.menu #root{padding:8px 0 0}
+body.menu .amenu{display:flex;flex-direction:column;max-height:592px;padding-bottom:0}
+body.menu .amenu>*{flex:none}
+body.menu .amenu>.insts{flex:0 1 auto;min-height:0;overflow-y:auto;padding-bottom:10px;border-radius:var(--r-xl) var(--r-xl) 0 0;margin:0 var(--gut);padding-left:0;padding-right:0}
+.amenu .hero{padding-top:10px}
+/* 滚动条照浏览器菜单里的：细、没有底槽、颜色跟着色调 */
+::-webkit-scrollbar{width:10px;height:10px} ::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--div);border-radius:10px;border:3px solid transparent;background-clip:content-box}
+.insts::-webkit-scrollbar{width:6px} .insts::-webkit-scrollbar-thumb{border:0;border-right:2px solid transparent}
 </style>
 </head><body><div id="root"></div><script type="module" src="popup.js"></script></body></html>

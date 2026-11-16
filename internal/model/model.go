@@ -208,7 +208,7 @@ type Settings struct {
 	IPQOff                bool     `json:"ipqOff,omitempty"`    // 不向第三方查询出口 IP 的类型和纯净度
 	BindIface             string   `json:"bindIface,omitempty"` // 出站绑定的网卡：空 = 自动识别物理网卡（绕过 TUN）；off = 不绑定；其它 = 网卡名
 	// 界面（2026-11-15，Chrome 风格界面，decisions UI-1）：两端共用
-	Theme     string     `json:"theme,omitempty"`     // 外观：空 / dark = 深色（默认）| light 浅色 | system 跟随系统
+	Theme     string     `json:"theme,omitempty"`     // 外观：空 / system = 跟随浏览器或系统的深浅色（默认）| dark 深色 | light 浅色
 	Bookmarks []Bookmark `json:"bookmarks,omitempty"` // 新标签页上的书签（全部实例共用）
 	NTPHide   []string   `json:"ntpHide,omitempty"`   // 新标签页上不显示的部分：card | bookmarks | recent | accounts
 	// 人机验证诊断（只有手机用，decisions A-9）：这里列出的伪装项暂时关掉，用来定位“验证过不去”是哪一项引起的。

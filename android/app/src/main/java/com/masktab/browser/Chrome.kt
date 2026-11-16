@@ -44,11 +44,11 @@ object Theme {
         c("#1b1b1f"), c("#44474e"), c("#6b6e76"), c("#0b57d0"), c("#ffffff"), c("#d3e3fd"), c("#041e49"),
         c("#188038"), c("#b26a00"), c("#d93025"), Color.argb(82, 0, 0, 0), false)
 
-    /** 设置里的“外观”：dark（默认）| light | system（跟随系统）。 */
+    /** 设置里的“外观”：system（默认，跟随系统的深浅色）| dark | light。 */
     fun isDark(ctx: Context): Boolean = when (Host.theme) {
         "light" -> false
-        "system" -> (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) != Configuration.UI_MODE_NIGHT_NO
-        else -> true
+        "dark" -> true
+        else -> (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
     }
     fun pal(ctx: Context, seed: Int? = null) = of(isDark(ctx), seed ?: Color.parseColor("#1a73e8"))
 
