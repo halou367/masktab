@@ -77,6 +77,7 @@ func main() {
 	if err := app.Serve(); err != nil {
 		log.Fatalf("本地接口启动失败：%v", err)
 	}
+	go app.UpdateLoop()
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {

@@ -56,6 +56,8 @@ object Bridge {
             // 最近访问（按实例，app 记的；新标签页、历史记录页用）
             k == "GET /ui/recent" -> ok(Recent.list(q("inst").ifEmpty { Host.current }, if (q("all") == "1") 60 else 6))
             k == "POST /ui/recent/clear" -> { Recent.clear(q("inst").ifEmpty { Host.current }); ok(null) }
+            // 在线更新的最后一步：安装包是核心服务下载、校验的，交给系统安装归 app（Updater.kt，决策 N-3）
+            k == "POST /api/update/install" -> Updater.install(ok, fail)
             k == "GET /api/diag" -> bg { val t = try { Core.diag() } catch (e: Exception) { "诊断信息没取全：$e" }; ui { ok(jsonOf("text" to t)) } }
             // ---------- 实例的开关：核心服务管代理，app 管标签页 ----------
             seg.size == 4 && seg[1] == "instances" && m == "POST" && seg[3] == "launch" -> {

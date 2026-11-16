@@ -110,7 +110,7 @@ const watch = (pg, name) => { pg.on('pageerror', (e) => errors.push(`${name}: ${
 const shots = [['settings', 'app.html#settings'], ['node', 'app.html#node'], ['fp', 'app.html#fp'],
   ['instances', 'app.html#instances'], ['drawer', 'app.html#instances/p2'], ['import', 'app.html#instances/import'],
   ['exits', 'app.html#exits'], ['addons', 'app.html#addons'], ['diag', 'app.html#diag'], ['history', 'app.html#history'],
-  ['settings-adv', 'app.html#settings/adv'], ['settings-ntp', 'app.html#settings/ntp'], ['menu-page', 'app.html#menu'], ['newtab', 'newtab.html#inst=p2']];
+  ['settings-adv', 'app.html#settings/adv'], ['settings-about', 'app.html#settings/about'], ['settings-ntp', 'app.html#settings/ntp'], ['menu-page', 'app.html#menu'], ['newtab', 'newtab.html#inst=p2']];
 // 规矩（决策 UI-7）：不能有“圆角 + overflow:auto/scroll”的元素，这个组合在安卓模拟器里让 GeckoView 的 GPU 进程卡死。
 // 输入框、文本框本身可滚动且带圆角，以前实测不受影响（run 43574923756），不算在内。返回违规元素的描述。
 const roundScroll = (pg) => pg.evaluate(() => [...document.querySelectorAll('*')].filter((e) => {
@@ -397,7 +397,7 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
 // 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点页比内容。
 // 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹页里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
 if (desk) {
-  let deskTheme = fixture.settings?.theme, deskMany = false;
+  let deskTheme = fixture.settings?.theme, deskMany = false, deskUpd = null;
   const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const dsrv = http.createServer((q, r) => {
@@ -405,7 +405,7 @@ if (desk) {
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
     if (u.pathname.startsWith('/api/')) {
       const many = deskMany ? [...fixture.instances, ...Array.from({ length: deskMany === true ? 7 : deskMany }, (_, k) => ({ ...fixture.instances[k % 2 ? 0 : 2], id: 'x' + k, no: 21 + k, name: `user${k}@example.com`, color: ['#8e24aa', '#00897b', '#e8710a'][k % 3] }))] : fixture.instances;
-      const st = { ...fixture, instances: many, settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
+      const st = { ...fixture, instances: many, ...(deskUpd ? { update: deskUpd } : {}), settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
       r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : { ok: true })); return;
     }
     const f = path.join(desk, decodeURIComponent(u.pathname));
@@ -533,6 +533,29 @@ if (desk) {
     await np.screenshot({ path: path.join(out, 'desk-newtab.png') });
     await np.close();
   }
+  // 在线更新（决策 N-3）在电脑上：组件与更新页（深、浅各一张）和新标签页上的提示
+  {
+    deskUpd = { current: '0.1.72', latest: '0.1.80', available: true, size: 3233080, phase: '', install: 'self', page: 'https://github.com/halou367/masktab/releases/tag/v0.1.80', checkedAt: Date.now() - 60e3, notes: '这一版的改动\n- 任务栏上每个实例是自己颜色的图标\n- 可以在线更新' };
+    const res = {};
+    for (const th of ['dark', 'light']) {
+      deskTheme = th;
+      const ap = await dctx.newPage(); ap.on('pageerror', (e) => errors.push(`电脑版更新页: ${e.message}`));
+      await ap.setViewportSize({ width: 1280, height: 820 });
+      await ap.goto(dbase + 'app.html#settings/about'); await ap.waitForTimeout(500);
+      res[th] = await ap.evaluate(() => { const b = [...document.querySelectorAll('#root .btn, main .btn')].find((x) => x.innerText.trim() === '更新'), r = b?.closest('.row'); const br = b?.getBoundingClientRect(), rr = r?.getBoundingClientRect();
+        return { txt: (r?.innerText || '').replace(/\s+/g, ' '), inRow: !!br && !!rr && br.right <= rr.right && br.top >= rr.top && br.bottom <= rr.bottom, notes: document.body.innerText.includes('可以在线更新') }; });
+      await ap.screenshot({ path: path.join(out, `desk-upd-${th}.png`) });
+      await ap.close();
+    }
+    const np = await dctx.newPage(); np.on('pageerror', (e) => errors.push(`电脑版新标签页（更新提示）: ${e.message}`));
+    await np.setViewportSize({ width: 1280, height: 820 });
+    await np.goto(dbase + 'newtab.html'); await np.waitForTimeout(600);
+    const nb = await np.evaluate(() => { const e = document.querySelector('.upd'), q = document.querySelector('.nq'); if (!e) return null; const a = e.getBoundingClientRect(), b = q.getBoundingClientRect(); return { t: e.innerText.replace(/\s+/g, ' '), same: Math.abs(a.left - b.left) <= 1 && Math.abs(a.right - b.right) <= 1 }; });
+    await np.screenshot({ path: path.join(out, 'desk-upd-newtab.png') });
+    await np.close();
+    deskUpd = null; deskTheme = fixture.settings?.theme;
+    check('电脑版：组件与更新页有新版本和“更新”按钮（深浅两种），新标签页有提示', ['dark', 'light'].every((t) => /有新版本 0\.1\.80/.test(res[t].txt) && /3\.1 MB/.test(res[t].txt) && res[t].inRow && res[t].notes) && !!nb && nb.same && /有新版本 0\.1\.80/.test(nb.t), { res, nb });
+  }
   // 实例页：两端是同一份 instances.js。两位数编号写得进头像；记住账号的站点用它自己的网页图标。
   const cards = (pg2) => pg2.evaluate(() => {
     const faces = [...document.querySelectorAll('.face')].map((f) => ({ t: (f.firstChild?.nodeValue || '').trim(), cls: f.className, w: f.getBoundingClientRect().width, tw: (() => { const r = document.createRange(); r.selectNodeContents(f.firstChild || f); return r.getBoundingClientRect().width; })() }));
@@ -605,6 +628,76 @@ for (const w of [412, 320]) {
   check(`出口列表（${w} 宽）：IPv6 的反代写全`, r.n === 5 && r.has.includes('B') && r.cut.length === 0 && r.wide.length === 0, { r });
   await pg.screenshot({ path: path.join(out, `v6-exit-${w}.png`) });
   await c.close();
+}
+// 在线更新（决策 N-3）：“组件与更新”页按 st.update 的各个阶段画；新标签页和设置首页有提示
+{
+  const mk = (u, set = {}) => { const x = JSON.parse(JSON.stringify(fixture)); x.update = { current: '0.1.72', page: 'https://github.com/halou367/masktab/releases/tag/v0.1.80', phase: '', install: 'host', checkedAt: Date.now() - 3600e3, ...u }; Object.assign(x.settings, set); return x; };
+  const avail = { latest: '0.1.80', available: true, size: 131796979, notes: '这一版的改动\n- 任务栏上每个实例是自己颜色的图标\n- 可以在线更新\n\n手机（安卓，arm64）\n- 覆盖安装，数据不会动' };
+  const open = async (st, url, w = 412) => { const c = await br.newContext({ viewport: { width: w, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, st); const pg = await c.newPage(); watch(pg, 'upd'); await pg.goto(base + url); await pg.waitForTimeout(700); return { c, pg }; };
+  const info = (pg) => pg.evaluate(() => { const W = innerWidth, root = document.querySelector('#root');
+    const wide = [...root.querySelectorAll('*')].filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.right > W + 1 || r.left < -1); }).map((e) => e.className || e.tagName).slice(0, 3);
+    const bar = root.querySelector('.prog i');
+    return { txt: root.innerText, wide, over: document.documentElement.scrollWidth > W + 1, btns: [...root.querySelectorAll('.btn')].map((b) => b.innerText.trim()), bar: bar ? { ind: bar.classList.contains('ind'), w: Math.round(100 * bar.getBoundingClientRect().width / bar.parentElement.getBoundingClientRect().width) } : null, bad: root.querySelector('.warn.bad')?.innerText || '' }; });
+  const calls = (pg) => pg.evaluate(() => window.__calls.filter((x) => x.m && x.m !== 'GET').map((x) => `${x.m} ${x.p}${x.b ? ' ' + JSON.stringify(x.b) : ''}`));
+  for (const w of [412, 320]) {
+    const { c, pg } = await open(mk(avail), 'app.html#settings/about', w);
+    const r = await info(pg);
+    await pg.screenshot({ path: path.join(out, `upd-avail-${w}.png`), fullPage: true });
+    await pg.locator('.btn', { hasText: '更新' }).click(); await pg.waitForTimeout(300);
+    const cs = await calls(pg);
+    check(`组件与更新（${w} 宽）：有新版本时写出版本、大小、改动，点“更新”开始下载`, /有新版本 0\.1\.80/.test(r.txt) && /当前 0\.1\.72 · 126 MB/.test(r.txt) && r.txt.includes('任务栏上每个实例是自己颜色的图标') && r.btns.includes('更新') && !r.over && r.wide.length === 0 && cs.includes('POST /api/update/download'), { r, cs });
+    await c.close();
+  }
+  {
+    const { c, pg } = await open(mk({ ...avail, phase: 'downloading', done: 52428800, total: 131796979, source: '镜像 ghfast.top' }), 'app.html#settings/about');
+    const r = await info(pg);
+    await pg.screenshot({ path: path.join(out, 'upd-downloading.png'), fullPage: true });
+    check('组件与更新：下载中有进度条和“已下 / 总共 · 途径”，没有按钮', /正在下载 0\.1\.80/.test(r.txt) && /50 MB \/ 126 MB · 镜像 ghfast\.top/.test(r.txt) && r.bar && !r.bar.ind && r.bar.w >= 36 && r.bar.w <= 44 && r.btns.length === 0, r);
+    await c.close();
+  }
+  for (const [mode, tip] of [['host', '由系统安装'], ['self', '自动重新打开']]) {
+    const { c, pg } = await open(mk({ ...avail, phase: 'ready', install: mode }), 'app.html#settings/about');
+    const r = await info(pg);
+    if (mode === 'host') await pg.screenshot({ path: path.join(out, 'upd-ready.png'), fullPage: true });
+    await pg.locator('.btn', { hasText: '安装' }).click(); await pg.waitForTimeout(300);
+    const dlg = await pg.evaluate(() => document.querySelector('.dlg')?.innerText || '');
+    if (mode === 'self') { await pg.screenshot({ path: path.join(out, 'upd-confirm.png') }); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(300); }
+    const cs = await calls(pg);
+    // 手机：系统自己有安装确认，这里不再问一遍；电脑：会关掉全部窗口，先问
+    check(`组件与更新：下载好了（${mode === 'host' ? '手机' : '电脑'}），点“安装”${mode === 'self' ? '先确认再' : '直接'}安装`, /0\.1\.80 已下载/.test(r.txt) && r.txt.includes(tip) && r.btns.includes('安装') && (mode === 'self' ? /关掉全部窗口/.test(dlg) : dlg === '') && cs.includes('POST /api/update/install'), { r, dlg, cs });
+    await c.close();
+  }
+  {
+    const { c, pg } = await open(mk({ error: '没能连上 GitHub（直连：接口 超时；网页 超时）' }), 'app.html#settings/about');
+    const r = await info(pg);
+    await pg.screenshot({ path: path.join(out, 'upd-error.png'), fullPage: true });
+    await pg.locator('.warn.bad .lk').click(); await pg.waitForTimeout(200);
+    const cs = await calls(pg);
+    check('组件与更新：查不到时写出原因，可以去发布页', r.bad.includes('没能连上 GitHub') && r.bad.includes('去发布页') && /检查更新/.test(r.txt) && cs.some((x) => x.includes('/ui/tab') && x.includes('github.com/halou367/masktab/releases')), { r, cs });
+    await c.close();
+  }
+  {
+    const { c, pg } = await open(mk({ latest: '0.1.72', available: false }), 'app.html#settings/about');
+    const r = await info(pg);
+    await pg.locator('button.row', { hasText: '已是最新版本' }).click(); await pg.waitForTimeout(300);
+    await pg.locator('button.sw[aria-label="自动检查更新"]').click(); await pg.waitForTimeout(300);
+    const cs = await calls(pg);
+    check('组件与更新：已是最新时点一下再查；“自动检查更新”可以关', /已是最新版本/.test(r.txt) && /0\.1\.72 · 1 小时前检查过/.test(r.txt) && cs.includes('POST /api/update/check') && cs.includes('PATCH /api/settings {"updateOff":true}'), { r, cs });
+    await c.close();
+  }
+  {
+    const { c, pg } = await open(mk(avail), 'newtab.html#inst=p2');
+    const b = await pg.evaluate(() => { const e = document.querySelector('.upd'); if (!e) return null; const r = e.getBoundingClientRect(), q = document.querySelector('.nq').getBoundingClientRect(); return { t: e.innerText.replace(/\s+/g, ' '), l: Math.round(r.left), r: Math.round(r.right), ql: Math.round(q.left), qr: Math.round(q.right), h: Math.round(r.height) }; });
+    await pg.screenshot({ path: path.join(out, 'upd-newtab.png') });
+    await pg.locator('.upd').click(); await pg.waitForTimeout(200);
+    const cs = await calls(pg);
+    const { c: c2, pg: pg2 } = await open(mk(avail, { updateSkip: '0.1.80' }), 'newtab.html#inst=p2');
+    const skipped = await pg2.evaluate(() => !document.querySelector('.upd'));
+    const { c: c3, pg: pg3 } = await open(mk(avail), 'app.html#settings');
+    const home = await pg3.evaluate(() => [...document.querySelectorAll('.row')].find((e) => e.innerText.includes('组件与更新'))?.innerText.replace(/\s+/g, ' ') || '');
+    check('有新版本时：新标签页有一行提示（和搜索框一样宽，点了去“组件与更新”），点过“这一版先不更新”就不提示；设置首页那一行也写着', !!b && /MaskTab 有新版本 0\.1\.80/.test(b.t) && /去更新/.test(b.t) && Math.abs(b.l - b.ql) <= 1 && Math.abs(b.r - b.qr) <= 1 && cs.some((x) => x.includes('/ui/open') && x.includes('settings/about')) && skipped && home.includes('有新版本 0.1.80'), { b, cs, skipped, home });
+    await c.close(); await c2.close(); await c3.close();
+  }
 }
 // 左右安全区（viewport-fit=cover + env(safe-area-inset-*)）：模拟横屏左右各 40px 的安全区，页面内容要让开
 {

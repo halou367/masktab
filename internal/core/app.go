@@ -22,6 +22,7 @@ import (
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/probe"
 	"github.com/halou367/masktab/internal/proxy"
+	"github.com/halou367/masktab/internal/update"
 	"github.com/halou367/masktab/internal/vault"
 )
 
@@ -115,6 +116,12 @@ type App struct {
 	scanPorts []int
 	scanPool  chan int
 	setupMu   sync.Mutex
+	// 在线更新（update.go）
+	upd       UpdateState
+	updRel    *update.Release
+	updFile   string     // 下载好的安装包
+	updBusy   sync.Mutex // 检查和下载一次只做一件
+	shutOnce  sync.Once
 	kernelUp  chan struct{} // 内核就绪后关闭
 	kernelExe string
 	adapter   kernel.Adapter

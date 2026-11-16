@@ -281,7 +281,7 @@ func (a *App) State(me string) map[string]any {
 	}
 	return map[string]any{
 		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts, "ipq": a.ipqViewLocked(),
-		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version,
+		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version, "update": a.updateStateLocked(),
 		"host":        a.Host.Name,
 		"kernel":      map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": a.kernelVersion(), "path": a.kernelExe},
 		"core":        map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
@@ -820,6 +820,35 @@ func (a *App) routes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("DELETE /api/extensions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, a.DeleteExtension(r.PathValue("id")))
+	})
+	// ---- 在线更新（update.go）----
+	mux.HandleFunc("POST /api/update/check", func(w http.ResponseWriter, r *http.Request) {
+		err := a.UpdateCheck(true)
+		a.mu.Lock()
+		u := a.updateStateLocked()
+		a.mu.Unlock()
+		reply(w, u, err)
+	})
+	mux.HandleFunc("POST /api/update/download", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, a.UpdateDownload())
+	})
+	mux.HandleFunc("GET /api/update/file", func(w http.ResponseWriter, r *http.Request) {
+		path, ver, err := a.UpdateHostFile()
+		reply(w, map[string]string{"path": path, "version": ver}, err)
+	})
+	mux.HandleFunc("POST /api/update/result", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Error string `json:"error"`
+		}
+		if err := body(r, &in); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		a.UpdateResult(in.Error)
+		reply(w, nil, nil)
+	})
+	mux.HandleFunc("POST /api/update/install", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, a.UpdateInstall())
 	})
 	mux.HandleFunc("POST /api/quit", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, nil)

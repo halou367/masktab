@@ -115,7 +115,7 @@ class MainActivity : Activity(), CoreUi {
         handleIntent(intent)
     }
 
-    /** 测试用的启动参数（CI 截图）：mt_open=menu（头像菜单）|appmenu（三点菜单）|tabs（标签页切换器）|close|diag|其余是内置页面的路由；mt_inst=<实例id 或 #编号> 切换实例；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
+    /** 测试用的启动参数（CI 截图）：mt_open=menu（头像菜单）|appmenu（三点菜单）|tabs（标签页切换器）|close|diag|其余是内置页面的路由；mt_inst=<实例id 或 #编号> 切换实例；mt_update=check|download|install|state 在线更新的三步和当前状态；mt_hold 让启动页停留。外部链接（VIEW）在当前实例打开。 */
     private fun handleIntent(i: Intent?) {
         if (i == null || !Core.started) return
         if (i.action == Intent.ACTION_VIEW && i.data != null) { closeOverlay(); closeSheet(); Core.openTab(Host.current, i.dataString); return }
@@ -132,6 +132,13 @@ class MainActivity : Activity(), CoreUi {
                 else -> { closeOverlay(); openSheet(r, true) }
             }
         }
+        // 在线更新的三步（CI 在模拟器上走一遍真的下载和系统安装）：mt_update=check|download|install，和页面上的按钮调的是同一个接口
+        i.getStringExtra("mt_update")?.let { step ->
+            if (step == "state") bg { try { logi("在线更新（测试）：state " + CoreProc.json("GET", "/api/state").optJSONObject("update").toString().take(400)) } catch (e: Exception) { logw("在线更新（测试）：state 没取到：${e.message}") } }
+            else if (step == "install") Updater.install({ logi("在线更新（测试）：install 已交给系统") }, { e -> logw("在线更新（测试）：install 没成：$e") })
+            else bg { try { val r = CoreProc.call("POST", "/api/update/$step", "{}", timeoutMs = 60000); logi("在线更新（测试）：$step → ${r.code} ${r.body.take(500)}") } catch (e: Exception) { logw("在线更新（测试）：$step 没调通：${e.message}") } }
+        }
+        i.removeExtra("mt_update")
         i.removeExtra("mt_open")
         i.removeExtra("mt_inst")
     }

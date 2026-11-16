@@ -42,9 +42,12 @@ func (a *App) Start() {
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
+	// 刚装完更新：把更新前开着的实例都开回来，不看“启动时恢复”设置（update.go 留的记号，只管一次）
+	_, once := os.Stat(a.p("state", "restore-once"))
+	_ = os.Remove(a.p("state", "restore-once"))
 	a.mu.Lock()
 	ids := []string{a.inst0().ID}
-	if a.Settings.RestoreOnStart {
+	if a.Settings.RestoreOnStart || once == nil {
 		for _, id := range st.Running {
 			if in := a.instLocked(id); in != nil && in.No != 0 {
 				ids = append(ids, id)
@@ -460,6 +463,10 @@ func (a *App) Delete(id string) error {
 
 // Shutdown 程序退出：关闭全部实例（保留恢复列表）并停止 mihomo。
 func (a *App) Shutdown() {
+	a.shutOnce.Do(a.shutdown) // 可能同时被叫到两次（安装更新时自己退 + 安装程序让我们退）：只做一次，后来的等前一个做完
+}
+
+func (a *App) shutdown() {
 	a.mu.Lock()
 	a.quitting = true
 	var ids []string

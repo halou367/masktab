@@ -4,6 +4,7 @@
 // 外壳（电脑 newtab.js / 手机 newtab.js）只给几样它自己才有的东西：
 //   host.recent()      最近访问 [{url, title, at}]（电脑取内核自己的历史记录；手机由 app 按实例记）
 //   host.openNode()    去“节点与出口”    host.pc   电脑版（多一个标题，书签一行四个）
+//   host.openUpdate()  去“组件与更新”（有新版本时搜索框下面有一行提示）
 import { api } from './api.js';
 import { h, icon, flag, avatar, delayText, delayCls, ringEl, ask, confirmDlg, toast, applyTheme } from './ui.js';
 import { shownExit, mismatch, disguise, exitQ, cfRep, TYPE_NAME } from './common.js';
@@ -25,6 +26,11 @@ export async function renderNtp(root, st, me, host) {
   const input = h('input', { id: 'q', autocomplete: 'off', placeholder: '搜索或输入网址', 'aria-label': '搜索或输入网址', enterkeyhint: 'go' });
   const form = h('form', { class: 'nq', onsubmit: (e) => { e.preventDefault(); const v = input.value.trim(); if (v) location.href = toUrl(v, search); } }, icon('search', 22), input);
   const kids = [form]; // 电脑上以前顶上还有一行“编号 + 新标签页”：下面的实例卡已经说了是哪个实例，不重复（演示定稿）
+  // 有新版本（决策 N-3）：一行提示，点了去“组件与更新”。在那一页点过“这一版先不更新”就不再提示这一版。
+  const up = st.update;
+  if (up?.available && st.settings?.updateSkip !== up.latest && host.openUpdate) {
+    kids.push(h('button', { class: 'nswarn out upd', 'aria-label': '有新版本', onclick: () => host.openUpdate() }, icon('update', 16), `MaskTab 有新版本 ${up.latest}`, h('span', { class: 'grow' }), up.phase === 'ready' ? '已下载，去安装' : '去更新', icon('chevR', 16)));
+  }
   if (!hide.has('card') && me.kind !== 'normal') kids.push(...statCard(st, me, host));
   if (!hide.has('bookmarks')) kids.push(bookmarks(st, host));
   if (!hide.has('recent')) {

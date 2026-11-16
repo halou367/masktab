@@ -436,5 +436,69 @@ Y
 }
 proxy_phase || { echo "代理测试准备失败"; fail=1; }
 
+# ---------- 在线更新（决策 N-3）：在模拟器上真的走一遍“查到新版本 → 下载 → 系统安装 → 重新打开” ----------
+# 假的 GitHub 就是上面那个静态文件服务（10.0.2.2:18080）：接口那个地址放一份版本信息，下载地址放的就是正在测的这个 APK
+# （版本号写成 0.1.99999，所以算“新版本”；包名、签名相同，系统按覆盖安装处理）。核心服务用调试属性 debug.masktab.update 指过去。
+# 三步用测试参数 mt_update 触发（和页面按钮调的是同一个接口）；系统的确认框要真的点一下。
+update_phase() {
+  local W=/tmp/mt-node ver=0.1.99999 D sum size k n0 t0 t1 st b PAT
+  curl -fs -m 5 http://127.0.0.1:18080/sub.yaml > /dev/null || { echo "失败：在线更新：文件服务不在了"; return 1; }
+  D=$W/halou367/masktab/releases/download/v$ver
+  mkdir -p "$D" $W/repos/halou367/masktab/releases
+  cp "$APK" "$D/MaskTab-android-x86_64.apk"
+  sum=$(sha256sum "$APK" | cut -d' ' -f1); size=$(stat -c %s "$APK")
+  printf '{"tag_name":"v%s","body":"这一版的改动\\n- 模拟器里的更新测试\\n\\n---\\n\\n安装说明","assets":[{"name":"MaskTab-android-x86_64.apk","size":%s,"digest":"sha256:%s"}]}\n' "$ver" "$size" "$sum" > $W/repos/halou367/masktab/releases/latest
+  A shell setprop debug.masktab.update http://10.0.2.2:18080
+  upd() { A shell am start -n $ACT --es mt_update "$1" > /dev/null; }
+  state() { n0=$(count "在线更新（测试）：state"); upd state; for k in 1 2 3 4 5; do sleep 1; [ "$(count "在线更新（测试）：state")" -gt "$n0" ] && break; done; grep "在线更新（测试）：state" "$OUT/logcat-live.txt" | tail -1; }
+  t0=$(A shell dumpsys package $PKG | grep -m1 lastUpdateTime | tr -d '\r ')
+
+  # 1. 检查
+  PAT="在线更新（测试）：check → 200"; n0=$(count "$PAT"); upd check
+  for k in $(seq 1 15); do sleep 2; [ "$(count "$PAT")" -gt "$n0" ] && break; done
+  st=$(grep "在线更新（测试）：check" "$OUT/logcat-live.txt" | tail -1)
+  if echo "$st" | grep -q '"available":true' && echo "$st" | grep -q "\"latest\":\"$ver\""; then echo "通过：在线更新：查到新版本 $ver"; else echo "失败：在线更新：没查到新版本（$(echo "$st" | cut -c1-300)）"; return 1; fi
+  A shell am start -n $ACT --es mt_open settings/about > /dev/null; sleep 6; shot 20-update-available
+
+  # 2. 下载（校验 SHA-256）
+  upd download
+  for k in $(seq 1 40); do sleep 3; st=$(state); echo "$st" | grep -q '"phase":"ready"' && break; echo "$st" | grep -q '"error"' && break; done
+  if echo "$st" | grep -q '"phase":"ready"'; then echo "通过：在线更新：安装包下载好并校验通过"; else echo "失败：在线更新：没下载好（$(echo "$st" | sed 's/.*state //' | cut -c1-300)）"; return 1; fi
+  sleep 2; shot 21-update-ready
+
+  # 3. 安装。第一次：系统还没允许 MaskTab 安装应用，app 要把那一页打开并说明
+  PAT="在线更新：还没有“安装未知应用”的许可"; n0=$(count "$PAT"); upd install; sleep 6
+  if [ "$(count "$PAT")" -gt "$n0" ]; then
+    shot 22-update-allow-page
+    echo "通过：在线更新：没有许可时打开了系统的“安装未知应用”页面"
+    A shell appops set $PKG REQUEST_INSTALL_PACKAGES allow
+    A shell input keyevent KEYCODE_BACK; sleep 2
+    upd install; sleep 2
+  else echo "说明：在线更新：模拟器上本来就有安装许可，没有经过“允许”那一页"; fi
+  PAT="在线更新：等用户在系统界面上确认"
+  for k in $(seq 1 30); do sleep 2; [ "$(count "$PAT")" -gt 0 ] && break; done
+  if [ "$(count "$PAT")" -gt 0 ]; then echo "通过：在线更新：安装包交给了系统，系统弹出确认"; else echo "失败：在线更新：系统的确认界面没有出来"; grep "在线更新" "$OUT/logcat-live.txt" | tail -5 | cut -c1-300; shot 23-update-no-confirm; return 1; fi
+  sleep 4; shot 23-update-confirm
+  # 点系统确认框的确定按钮（android:id/button1；找不到就按文字找）
+  A shell uiautomator dump /sdcard/mt-ui.xml > /dev/null 2>&1; A shell cat /sdcard/mt-ui.xml > "$OUT/ui-update.xml" 2>/dev/null
+  b=$(grep -o '<node[^>]*resource-id="android:id/button1"[^>]*>' "$OUT/ui-update.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1)
+  if [ -n "$b" ]; then
+    # shellcheck disable=SC2046
+    set -- $(echo "$b" | grep -o '[0-9]\+'); echo "点系统确认框的确定按钮：($(( ($1 + $3) / 2 )),$(( ($2 + $4) / 2 )))"; A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
+  else tap_native "Update" || tap_native "Install" || tap_native "更新" || tap_native "安装" || { echo "失败：在线更新：系统确认框里没找到确定按钮"; return 1; }; fi
+  # 4. 装好：系统记的“最后更新时间”变了；本应用被系统关掉
+  for k in $(seq 1 60); do sleep 2; t1=$(A shell dumpsys package $PKG | grep -m1 lastUpdateTime | tr -d '\r '); [ -n "$t1" ] && [ "$t1" != "$t0" ] && break; done
+  shot 24-update-installed
+  if [ -n "$t1" ] && [ "$t1" != "$t0" ]; then echo "通过：在线更新：系统装好了（$t0 → $t1）"; else echo "失败：在线更新：等了 2 分钟系统也没装好"; grep "在线更新" "$OUT/logcat-live.txt" | tail -5 | cut -c1-300; return 1; fi
+  # 5. 重新打开：数据还在（四个实例），页面能开
+  sleep 3; A shell am start -n $ACT > /dev/null; sleep 25
+  n0=$(ready instances); A shell am start -n $ACT --es mt_open instances > /dev/null; sleep 8; shot 25-update-reopened
+  if [ "$(ready instances)" -gt "$n0" ]; then echo "通过：在线更新：装完重新打开，页面正常"; else echo "失败：在线更新：装完重新打开后页面没有就绪"; return 1; fi
+  closepanel
+  return 0
+}
+update_phase || fail=1
+A shell setprop debug.masktab.update '""' || true
+
 if A logcat -d | grep -E "FATAL EXCEPTION|Process: $PKG" > "$OUT/crash-proxy.txt"; then echo "第二轮 logcat 里有崩溃："; cat "$OUT/crash-proxy.txt"; fail=1; else rm -f "$OUT/crash-proxy.txt"; fi
 exit $fail

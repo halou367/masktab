@@ -16,6 +16,7 @@
 ;   - data 目录（实例、登录状态、订阅、扩展、设置）：安装与升级都不碰；卸载时默认保留。
 ;
 ; 装到当前用户目录，不需要管理员权限。静默安装：MaskTab-Setup.exe /S /D=C:\某目录（/D 必须在最后，不加引号）。
+; 在线更新（MaskTab 自己下载安装包后运行）：MaskTab-Setup.exe /S /RELAUNCH /D=<现在的安装目录>，装完把 MaskTab 重新打开。
 
 Unicode true
 ManifestDPIAware true
@@ -161,6 +162,15 @@ Section "MaskTab" SecMain
   ${GetSize} "$INSTDIR" "/S=0K /G=0" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
+
+  ; ---- 在线更新：带 /RELAUNCH 时装完把 MaskTab 重新打开（有界面安装时由最后一页的“运行 MaskTab”负责）----
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/RELAUNCH" $R1
+  ${IfNot} ${Errors}
+    DetailPrint "重新打开 MaskTab"
+    Exec '"$INSTDIR\masktab.exe"'
+  ${EndIf}
 SectionEnd
 
 Section "Uninstall"

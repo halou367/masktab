@@ -137,16 +137,47 @@ jobs:
           Need ((Get-Item "C:\mt\kernel\fingerprint-chromium\$env:KVER\installed.ok").LastWriteTimeUtc -eq $mark) '完整包覆盖安装时跳过了已有的内核'
           Need ((Get-FileHash C:\mt\data\config\instances.json).Hash -eq $data) '完整包覆盖安装没有动数据'
 
-          # 3) 卸载：程序与内核删除，数据保留
+          # 3) 在线更新（决策 N-3）：假的 GitHub 上放着“0.1.99999”，安装包就是刚构建的这个。走真的那条路：
+          #    查到新版本 → 下载并校验 → MaskTab 自己运行安装程序、退出 → 安装程序装完把它重新打开 → 更新前开着的实例恢复
+          $srv = Start-Process -PassThru -FilePath node -ArgumentList 'scripts\fake-github.mjs', '18090', '0.1.99999', 'MaskTab-Setup.exe', 'out\MaskTab-Setup.exe' -RedirectStandardOutput smoke-out-fakegh.log
+          $env:MASKTAB_UPDATE_API = 'http://127.0.0.1:18090'; $env:MASKTAB_UPDATE_WEB = 'http://127.0.0.1:18090'
+          Remove-Item C:\mt\uninstall.exe   # 安装程序会重新写出它：用来确认安装程序真的运行过
+          Start-Process -FilePath C:\mt\masktab.exe -ArgumentList '-no-open', '-keep'
+          Start-Sleep 6
+          function Api($m, $p) { $l = (Get-Content C:\mt\data\state\running.lock -Raw).Trim() -split '\s+'; Invoke-RestMethod -Method $m -Uri "http://127.0.0.1:$($l[0])$p" -Headers @{ 'X-MaskTab-Token' = $l[1] } -TimeoutSec 90 }
+          function Until($sec, $what) { for ($i = 0; $i -lt $sec; $i++) { try { if (& $what) { return $true } } catch { }; Start-Sleep 1 }; return $false }
+          $old = (Get-Process masktab).Id
+          $id = ((Api GET /api/state).instances | Where-Object { $_.no -eq 1 }).id
+          Api POST "/api/instances/$id/launch" | Out-Null
+          Need (Until 90 { ((Api GET /api/state).instances | Where-Object { $_.id -eq $id }).rt.running }) '更新前：实例 #1 开着'
+          $u = Api POST /api/update/check
+          "检查结果：当前 $($u.current)，最新 $($u.latest)，available=$($u.available)，install=$($u.install)，size=$($u.size)"
+          Need ($u.available -and $u.latest -eq '0.1.99999' -and $u.install -eq 'self') '在线更新：查到新版本，电脑版自己安装'
+          Api POST /api/update/download | Out-Null
+          Need (Until 90 { (Api GET /api/state).update.phase -eq 'ready' }) '在线更新：安装包下载好并校验通过'
+          Api POST /api/update/install | Out-Null
+          Need (Until 120 { $p = Get-Process masktab -ErrorAction SilentlyContinue; $p -and ($p.Id -notcontains $old) -and (Test-Path C:\mt\data\state\running.lock) -and (Api GET /api/state).version }) '在线更新：旧进程退出，安装程序装完把 MaskTab 重新打开'
+          Need (Test-Path C:\mt\uninstall.exe) '在线更新：安装程序运行过（uninstall.exe 重新写出）'
+          Need ((Get-FileHash C:\mt\masktab.exe).Hash -eq (Get-FileHash dist\masktab.exe).Hash) '在线更新：masktab.exe 是安装包里的那一份'
+          Need (Until 120 { ((Api GET /api/state).instances | Where-Object { $_.id -eq $id }).rt.running }) '在线更新：更新前开着的实例 #1 恢复了'
+          Need (-not (Test-Path C:\mt\data\state\restore-once)) '在线更新：“恢复一次”的记号用完就删了'
+          if (Test-Path shots) { try { Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height; $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen(0, 0, 0, 0, $bmp.Size); $bmp.Save("$PWD\shots\8-after-online-update.png") } catch { "截图没成：$_" } }
+          Start-Process -Wait -FilePath C:\mt\masktab.exe -ArgumentList '-quit'
+          Need ((Get-Process masktab -ErrorAction SilentlyContinue) -eq $null) '在线更新后 MaskTab 能正常退出'
+          Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+          $env:MASKTAB_UPDATE_API = $null; $env:MASKTAB_UPDATE_WEB = $null
+
+          # 4) 卸载：程序与内核删除，数据保留
           Start-Process -Wait -FilePath C:\mt\uninstall.exe -ArgumentList '/S', '_?=C:\mt'
           Need (-not (Test-Path C:\mt\masktab.exe)) '卸载删除了程序'
           Need (-not (Test-Path C:\mt\kernel)) '卸载删除了内核'
-          Need ((Get-FileHash C:\mt\data\config\instances.json).Hash -eq $data) '卸载保留了数据'
+          Need (Test-Path C:\mt\data\config\instances.json) '卸载保留了数据'
       - name: 收集测试结果
         if: always()
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force smoke-out | Out-Null
+          if (Test-Path smoke-out-fakegh.log) { Move-Item smoke-out-fakegh.log smoke-out\fake-github.log -Force }
           foreach ($f in 'smoke-result.md', 'smoke-core.log', 'state\masktab.log', 'core\mihomo.log') { if (Test-Path "C:\mt\data\$f") { Copy-Item "C:\mt\data\$f" smoke-out\ } }
       - uses: actions/upload-artifact@v4
         if: always()
@@ -221,6 +252,11 @@ jobs:
       KVER: ${{ needs.windows.outputs.kver }}
       MVER: ${{ needs.windows.outputs.mver }}
     steps:
+      # 取代码只为了从提交记录里列出“这一版的改动”（在线更新的界面会显示这一段，决策 N-3）
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/download-artifact@v4
         with:
           name: MaskTab-Setup-Full
@@ -239,8 +275,18 @@ jobs:
         run: |
           ls -la out
           for f in MaskTab-Setup-Full.exe MaskTab-Setup.exe MaskTab-android-arm64-v8a.apk; do [ -s "out/$f" ] || { echo "缺少 $f"; exit 1; }; done
+          # 校验值表：在线更新连不上 GitHub 接口（被限流、被墙）时，从网页这条路取版本号和校验值（internal/update 的 viaWeb）
+          (cd out && sha256sum MaskTab-Setup-Full.exe MaskTab-Setup.exe MaskTab-android-arm64-v8a.apk > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          # 这一版的改动 = 上一个版本的标签到现在的提交标题（合并提交不算）；写在最前面，用一行 --- 和安装说明隔开（核心服务按这条线截取）
+          PREV=$(git tag --list 'v0.1.*' --sort=-v:refname | head -1)
           {
+            echo "这一版的改动"
+            if [ -n "$PREV" ]; then git log --no-merges --format='- %s' "$PREV..$GITHUB_SHA" | head -15; else git log --no-merges --format='- %s' -5 "$GITHUB_SHA"; fi
+            echo
+            echo "---"
+            echo
             echo "电脑（Windows）"
+            echo "- 已经装了的：设置 → 组件与更新 里直接更新（电脑、手机都可以）。"
             echo "- 首次安装：下载 MaskTab-Setup-Full.exe（自带浏览器内核 $KVER 与代理内核 $MVER，装完不需要再下载）。"
             echo "- 升级：下载 MaskTab-Setup.exe 直接覆盖安装；数据、内核都不会动。"
             echo
@@ -249,5 +295,6 @@ jobs:
             echo
             echo "两端是同一份代码、同一个版本号 $VER。"
           } > notes.md
-          gh release create "v$VER" out/MaskTab-Setup-Full.exe out/MaskTab-Setup.exe out/MaskTab-android-arm64-v8a.apk \
+          cat notes.md
+          gh release create "v$VER" out/MaskTab-Setup-Full.exe out/MaskTab-Setup.exe out/MaskTab-android-arm64-v8a.apk out/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "MaskTab $VER" --notes-file notes.md

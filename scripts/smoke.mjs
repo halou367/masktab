@@ -256,7 +256,7 @@ try {
     // 任务栏图标：两个实例各是自己颜色的方块（决策 UI-14）。只有 Windows 有界面时能看。
     const cols = [(await inst(a.id))?.color, (await inst(b.id))?.color];
     const n = await taskbarColors('6-desktop.png', cols);
-    if (n) rec(n.length === 2 && n[0] >= 120 && n[1] >= 120 ? 'ok' : 'warn', '任务栏上两个实例的图标是各自的颜色', `${cols.join(' / ')} 的像素数 ${n.join(' / ')}`);
+    if (n) rec(n.length === 2 && n[0] >= 120 && n[1] >= 120 ? 'ok' : 'fail', '任务栏上两个实例的图标是各自的颜色', `${cols.join(' / ')} 的像素数 ${n.join(' / ')}`);
   }
   if (typeof arg('click', '') === 'string' && arg('click', '')) { const [cx, cy] = arg('click').split(',').map(Number); await clickAt(cx, cy); await sleep(2000); await desktopShot('6b-after-click.png'); }
 

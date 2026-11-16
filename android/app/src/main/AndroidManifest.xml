@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 在线更新（决策 N-3）：从 GitHub 下载新版本后请系统安装；第一次用时系统会让用户确认“允许 MaskTab 安装应用” -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- networkSecurityConfig：只放行本机 mihomo 控制接口与 ip-api.com 的明文 HTTP（见 res/xml/network_security_config.xml）
          extractNativeLibs：mihomo 以 libmihomo.so 放在 jniLibs，必须解压到 nativeLibraryDir 才能执行 -->
@@ -33,5 +35,7 @@
                 <data android:scheme="https" />
             </intent-filter>
         </activity>
+        <!-- 系统安装更新时的进展通知（Updater.kt），只收本应用自己发的 -->
+        <receiver android:name=".UpdateReceiver" android:exported="false" />
     </application>
 </manifest>

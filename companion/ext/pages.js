@@ -29,7 +29,7 @@ export function settingsHome(c) {
     row({ ic: 'sub', t: '订阅与地址库', s: `${st.subscriptions.length} 个订阅 · 地址库 ${st.exits.length} 条`, chev: true, onclick: () => c.open('exits') }),
     me?.kind !== 'normal' && row({ ic: 'finger', t: '指纹与伪装', s: dz.total ? `一致性 ${dz.pass}/${dz.total}` : '出口探测后判断', chev: true, onclick: () => c.open('fp') }),
     row({ ic: 'ext', t: '扩展', s: hosted(st) ? 'Firefox 扩展（全部实例共用）' : `${st.extensions.length} 个 · ${st.extensions.filter((x) => x.enabled).length} 个已启用`, chev: true, onclick: () => c.open(hosted(st) ? 'addons' : 'extensions') }),
-    row({ ic: 'update', t: '组件与更新', s: `${st.kernel.name} ${(st.kernel.version || '').split('.')[0]} · mihomo ${st.core.version || '—'}${st.core.ok ? '' : '（未运行）'}`, chev: true, onclick: () => c.open('settings/about') }),
+    row({ ic: 'update', t: '组件与更新', s: st.update?.available ? h('span', { class: 'mid' }, `有新版本 ${st.update.latest}`) : `${st.kernel.name} ${(st.kernel.version || '').split('.')[0]} · mihomo ${st.core.version || '—'}${st.core.ok ? '' : '（未运行）'}`, chev: true, onclick: () => c.open('settings/about') }),
     row({ ic: 'bug', t: '诊断', s: '出口探测、日志、复制诊断信息', chev: true, onclick: () => c.open('diag') }),
     hosted(st) && row({ ic: 'shield', t: '人机验证诊断', s: (s.fpOff || []).length ? h('span', { class: 'mid' }, `已关掉 ${(s.fpOff || []).length} 项伪装`) : '验证一直过不去时，逐项排查是哪一项引起的', chev: true, onclick: () => c.open('settings/verify') }),
     sec('基本设置')];
@@ -117,13 +117,41 @@ export function verifyView(c) {
 }
 
 // ---------- 组件与更新 ----------
+// 在线更新（决策 N-3）：状态在 st.update（核心服务的 update.go）。电脑：下载后自己运行安装程序；手机：下载后调系统的安装界面。
+const mb = (n) => (n > 0 ? (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB' : '');
+const whenText = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? '刚刚' : m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`; };
 export function settingsAbout(c) {
-  const { st } = c;
+  const { st } = c, u = st.update || { current: st.version, phase: '', install: 'manual', page: 'https://github.com/halou367/masktab/releases' }, s = st.settings;
+  const check = () => c.act(async () => { const r = await api('POST', '/api/update/check'); toast(r.available ? `有新版本 ${r.latest}` : '已是最新版本'); });
+  const download = () => c.act(() => api('POST', '/api/update/download'));
+  const install = async () => {
+    if (u.install === 'self' && !(await confirmDlg(`安装 ${u.latest}？`, 'MaskTab 会先关掉全部窗口，装好后自动重新打开，现在开着的实例会恢复。大约十几秒。', '安装'))) return;
+    c.act(() => api('POST', '/api/update/install'), u.install === 'self' ? '正在安装，马上重新打开…' : '');
+  };
+  const busy = u.phase === 'checking' || u.phase === 'downloading' || u.phase === 'installing';
+  const pct = u.phase === 'downloading' && u.total > 0 ? Math.max(3, Math.min(100, (100 * u.done) / u.total)) : 0;
+  const btn = (t, fn) => h('button', { class: 'btn fill sm', onclick: (e) => { e.stopPropagation(); fn(); } }, t);
+  let main;
+  if (u.phase === 'checking') main = row({ ic: 'update', t: '正在检查更新…', s: `当前 ${u.current}` });
+  else if (u.phase === 'installing') main = row({ ic: 'update', t: `正在安装 ${u.latest}`, s: 'MaskTab 马上关闭并重新打开' });
+  else if (u.phase === 'downloading') main = row({ ic: 'update', t: `正在下载 ${u.latest}`, s: [u.total > 0 ? `${mb(u.done) || '0 MB'} / ${mb(u.total)}` : mb(u.done) || '连接中…', u.source ? ` · ${u.source}` : ''] });
+  else if (u.phase === 'ready') main = row({ ic: 'update', t: `${u.latest} 已下载`, s: u.install === 'host' ? '点“安装”后由系统安装；装好时 MaskTab 会关掉，再点图标打开，数据不会动' : '点“安装”后自动重新打开，数据不会动', trail: btn('安装', install), onclick: install });
+  else if (u.available && u.install === 'manual') main = row({ ic: 'update', t: `有新版本 ${u.latest}`, s: `当前 ${u.current} · 这个系统上请到发布页下载`, chev: true, onclick: () => c.link(u.page) });
+  else if (u.available) main = row({ ic: 'update', t: `有新版本 ${u.latest}`, s: [`当前 ${u.current}`, u.size ? ` · ${mb(u.size)}` : ''], trail: btn('更新', download), onclick: download });
+  else main = row({ ic: 'update', t: u.checkedAt && u.latest ? '已是最新版本' : '检查更新', s: u.checkedAt && u.latest ? `${u.current} · ${whenText(u.checkedAt)}检查过，点这里再查一次` : `当前 ${u.current}`, onclick: check });
+  const notes = u.available && u.notes ? u.notes.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 14) : [];
   return [appBar('组件与更新', c.back),
+    busy && h('div', { class: 'prog' }, h('i', { class: pct ? '' : 'ind', style: { width: pct + '%' } })),
+    sec('MaskTab'),
+    main,
+    u.error && h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, u.error), h('button', { class: 'lk', onclick: () => c.link(u.page) }, '去发布页')),
+    notes.length > 0 && h('div', { class: 'foot' }, notes.map((l) => h('div', {}, l))),
+    u.available && !busy && u.phase !== 'ready' && s.updateSkip !== u.latest && row({ ic: 'close', t: '这一版先不更新', s: '新标签页上不再提示这一版；出了更新的版本会再提示', onclick: () => set(c, 'updateSkip', u.latest, '好，这一版不再提示') }),
+    row({ ic: 'refresh', t: '自动检查更新', s: '每 6 小时到 GitHub 查一次；只查版本号，下载和安装要你点', trail: sw(!s.updateOff, '自动检查更新', (v) => set(c, 'updateOff', !v)) }),
+    row({ ic: 'link', t: '发布页', s: '全部版本和安装包；覆盖安装，数据不会动', chev: true, onclick: () => c.link('https://github.com/halou367/masktab/releases') }),
+    sec('组件'),
     row({ ic: 'globe', t: '浏览器内核', s: `${st.kernel.name} ${st.kernel.version}` }),
-    row({ ic: 'swap', t: '代理内核', s: `mihomo ${st.core.version || '—'}${st.core.ok ? ' · 运行中' : '（未运行）'}${st.core.error ? ' · ' + st.core.error : ''}` }),
-    row({ ic: 'mask', t: 'MaskTab', s: st.version }),
-    row({ ic: 'update', t: '检查更新', s: '到 GitHub Releases 下载新版本；覆盖安装，数据不会动', chev: true, onclick: () => c.link('https://github.com/halou367/masktab/releases') })];
+    row({ ic: 'swap', t: '代理内核', s: `mihomo ${st.core.version || '—'}${st.core.ok ? ' · 运行中' : '（未运行）'}${st.core.error ? ' · ' + st.core.error : ''}` })];
 }
 
 // ---------- 新标签页 ----------
