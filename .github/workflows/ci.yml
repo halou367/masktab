@@ -70,9 +70,28 @@ jobs:
       - name: 构建安装程序
         shell: pwsh
         run: |
+          # NSIS：旧的 runner 镜像自带；新镜像（windows-2025-vs2026，2026-11 起）没有，而且 choco 装它不稳
+          # （运行 43881369841、43885836953 都死在这里）。次序：自带的 → choco（试两次，输出留着）→ 官方便携包（校验 SHA-256）。
           $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress | Out-Null }
+          foreach ($i in 1..2) {
+            if (Test-Path $nsis) { break }
+            choco install nsis -y --no-progress
+            if (-not (Test-Path $nsis)) { Start-Sleep -Seconds 8 }
+          }
+          if (-not (Test-Path $nsis)) {
+            $zip = Join-Path $env:RUNNER_TEMP 'nsis.zip'
+            foreach ($u in @('https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip', 'https://prdownloads.sourceforge.net/nsis/nsis-3.11.zip?download')) {
+              curl.exe -sSL --retry 3 --max-time 120 -o $zip $u
+              if ($LASTEXITCODE -eq 0 -and (Test-Path $zip) -and (Get-FileHash $zip -Algorithm SHA256).Hash -eq 'C7D27F780DDB6CFFB4730138CD1591E841F4B7EDB155856901CDF5F214394FA1') {
+                Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'nsis') -Force
+                $nsis = Join-Path $env:RUNNER_TEMP 'nsis\nsis-3.11\makensis.exe'
+                break
+              }
+              Write-Host "便携包下载失败或校验不对：$u"
+            }
+          }
           if (-not (Test-Path $nsis)) { throw "找不到 makensis" }
+          Write-Host "makensis：$nsis"
           $root = (Get-Location).Path
           $kernel = Join-Path $root "pack\kernel\fingerprint-chromium\$env:KVER"
           if (-not (Test-Path $kernel)) { throw "内核目录不存在：$kernel" }
