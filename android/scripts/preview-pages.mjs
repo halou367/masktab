@@ -388,7 +388,7 @@ if (desk) {
     const u = new URL(q.url, 'http://x');
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
     if (u.pathname.startsWith('/api/')) {
-      const many = deskMany ? [...fixture.instances, ...Array.from({ length: 7 }, (_, k) => ({ ...fixture.instances[k % 2 ? 0 : 2], id: 'x' + k, no: 21 + k, name: `user${k}@example.com`, color: ['#8e24aa', '#00897b', '#e8710a'][k % 3] }))] : fixture.instances;
+      const many = deskMany ? [...fixture.instances, ...Array.from({ length: deskMany === true ? 7 : deskMany }, (_, k) => ({ ...fixture.instances[k % 2 ? 0 : 2], id: 'x' + k, no: 21 + k, name: `user${k}@example.com`, color: ['#8e24aa', '#00897b', '#e8710a'][k % 3] }))] : fixture.instances;
       const st = { ...fixture, instances: many, settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
       r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : { ok: true })); return;
     }
@@ -466,6 +466,36 @@ if (desk) {
   check('电脑版指纹与伪装：五个伪装项开关、没有“固定”', fpd.title === '指纹与伪装' && fpd.sw === 5 && fpd.fixed === 0, fpd);
   const fpm = await (async () => { await mp.evaluate(() => { location.hash = 'fp'; }); await mp.waitForTimeout(400); return mp.evaluate(() => ({ sw: document.querySelectorAll('.row .sw').length, fixed: document.querySelectorAll('.fixed').length })); })();
   check('手机指纹与伪装：系统、浏览器、伪装项标“固定”并写明原因', fpm.sw === 0 && fpm.fixed === 3, fpm);
+  // 弹窗里一屏能看到几个实例（需求方 2026-11-16：只能看到 3 个，切换麻烦。决策 UI-13）
+  for (const [extra, others, dense] of [[4, 6, false], [6, 8, true]]) {
+    deskTheme = undefined; deskMany = extra;
+    const c3 = await br.newContext({ viewport: { width: 380, height: 600 }, deviceScaleFactor: 2, locale: 'zh-CN', colorScheme: 'light' });
+    await c3.addInitScript(mock, fixture);
+    const p3 = await c3.newPage(); p3.on('pageerror', (e) => errors.push(`电脑弹窗 ${others} 个实例: ${e.message}`));
+    await p3.goto(dbase + 'popup.html'); await p3.waitForTimeout(600);
+    const g = await p3.evaluate(() => { const l = document.querySelector('.amenu .insts'), lb = l.getBoundingClientRect(), mi = [...document.querySelectorAll('.amenu .mis .mi')].map((x) => x.getBoundingClientRect());
+      const rows = [...l.children].map((x) => x.getBoundingClientRect());
+      return { n: rows.length, seen: rows.filter((r) => r.top >= lb.top - 1 && r.bottom <= Math.min(lb.bottom, 600) + 1).length, dense: l.classList.contains('dense'), scroll: l.scrollHeight > l.clientHeight + 1, qs: document.querySelectorAll('.qs').length,
+        cols: mi.length === 4 && Math.abs(mi[0].top - mi[1].top) < 1 && Math.abs(mi[2].top - mi[3].top) < 1 && mi[2].top > mi[0].top, page: document.documentElement.scrollHeight,
+        order: [...l.children].map((x) => (x.classList.contains('run') ? 'r' : 'i')).join('') }; });
+    check(`电脑弹窗：${others} 个别的实例一屏全看得到（${dense ? '一行一个的紧凑排法' : '两行一个'}），不用滚、不出搜索框`, g.n === others && g.seen === others && g.dense === dense && !g.scroll && g.qs === 0 && g.page <= 600, g);
+    if (!dense) check('电脑弹窗：四个入口排成两列；开着的实例排在休眠的前面', g.cols && /^r*i*$/.test(g.order), g);
+    await p3.screenshot({ path: path.join(out, `desk-menu-${others}.png`) });
+    if (!dense) {
+      // 直接打字 = 搜索：不用先点搜索框；数字先按编号排；回车打开第一个；↓ 进列表
+      await p3.keyboard.type('2'); await p3.waitForTimeout(300);
+      const t = await p3.evaluate(() => ({ v: document.querySelector('.qs input')?.value, focus: document.activeElement === document.querySelector('.qs input'), first: document.querySelector('.insts .ai .n')?.textContent, n: document.querySelectorAll('.insts .ai').length }));
+      check('电脑弹窗：直接打字就出搜索框并筛选，数字先按编号排', t.v === '2' && t.focus && /^#2\d /.test(t.first || '') && t.n < others, t);
+      await p3.keyboard.press('ArrowDown'); await p3.keyboard.press('ArrowDown');
+      const ar = await p3.evaluate(() => [...document.querySelectorAll('.insts .ai')].indexOf(document.activeElement));
+      await p3.keyboard.press('ArrowUp'); await p3.keyboard.press('ArrowUp');
+      const back = await p3.evaluate(() => document.activeElement === document.querySelector('.qs input'));
+      const [rq] = await Promise.all([p3.waitForRequest((r) => /\/api\/instances\/[^/]+\/launch$/.test(r.url()), { timeout: 3000 }).catch(() => null), p3.keyboard.press('Enter')]);
+      check('电脑弹窗：↓↑ 在列表里挪动，回车打开第一个', ar === 1 && back && !!rq && /instances\/x0\/launch$/.test(rq.url()), { ar, back, url: rq?.url() });
+      await p3.screenshot({ path: path.join(out, 'desk-menu-typed.png') });
+    }
+    await c3.close(); deskTheme = fixture.settings?.theme; deskMany = false;
+  }
   // 电脑版设置页：左边导航 + 共用的页面
   // 左边照定稿的演示：MaskTab 的七页 + “浏览器”一组两页，没有“概览”；这些页没有“返回”（导航就在旁边）；不带 # 时打开“实例”
   for (const [hash, title, on] of [['', '实例', '实例'], ['settings', '基本设置', '基本设置'], ['settings/ntp', '自定义新标签页', '基本设置'], ['exits', '订阅与地址库', '订阅与地址库'], ['node', '节点与出口', '节点与出口'], ['fp', '指纹与伪装', '指纹与伪装'], ['settings/adv', '高级', '高级'], ['extensions', '扩展', '扩展']]) {

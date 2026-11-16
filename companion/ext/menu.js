@@ -29,7 +29,11 @@ export function stepLine(i, steps) {
 const nameOf = (i) => i.name || (i.kind === 'normal' ? '普通窗口' : '伪装实例');
 const exitText = (i) => { if (i.kind === 'normal' || i.proxy.state !== 'on') return '直连'; const ex = shownExit(i); return ex ? ex.ip : i.rt?.running || i.rt?.starting ? '出口探测中' : '出口未探测'; }; // 休眠的实例没在探测，和实例页写一样的话
 
-let q = '';
+let q = '', askQ = false; // askQ = 用户开始打字了：实例不多、平时不显示搜索框时也把它显示出来
+// 电脑弹窗里直接打字就是搜索（popup.js 在没有输入框聚焦时调它）：显示搜索框，之后由调用方聚焦。
+export function menuSearch() { askQ = true; }
+// 搜索时的排序：输入的是数字时，编号正好是它的排最前，其次是编号以它开头的（“1”→ #1、#12、#16…），再是别处含它的。
+const rank = (x, s) => { if (!/^\d+$/.test(s)) return 0; const no = String(x.no); return no === s ? 0 : no.startsWith(s) ? 1 : 2; };
 export function menuView(st, nav) {
   const me = st.me, rt = me.rt, on = me.proxy.state === 'on', ex = on ? shownExit(me) : null;
   const sites = uniqSites(me.acct?.sites || []);
@@ -48,28 +52,46 @@ export function menuView(st, nav) {
       sites.length > 0 && h('div', { class: 'sites', title: '记住了账号的站点' }, sites.slice(0, 8).map((s) => siteIcon(s, 15)), sites.length > 8 && h('span', { class: 'sub' }, `+${sites.length - 8}`))),
     on && h('span', { class: 'rep', title: `纯净度 ${q2.score ?? '未知'} · CF 信誉 ${cf.text}` }, ringEl(q2.score, 36), cfDot(cf.st, 'CF'))));
   const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic, 22), h('span', { class: 'grow' }, label), k != null && k !== '' && h('span', { class: 'k' }, k), h('span', { class: 'chev' }, icon('chevR', 20)));
-  kids.push(mi('key', '账号管理', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),
-    mi('globe', '节点与出口', nav.node, ex ? [flag(ex.country), cname(ex.country)] : on ? '' : '直连'),
+  // 四个入口包在一起：手机上还是一行一个；电脑弹窗里排成两列（弹窗最高 600，省下的高度给下面的实例列表，决策 UI-13）
+  kids.push(h('div', { class: 'mis' }, mi('key', '账号管理', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),
+    mi('globe', '节点与出口', nav.node, ex ? [flag(ex.country), h('span', { class: 'cn' }, cname(ex.country))] : on ? '' : '直连'),
     me.kind !== 'normal' && mi('finger', '指纹与伪装', nav.fp, dz.total ? `${dz.pass}/${dz.total}` : ''),
-    nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : ''));
+    nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : '')));
 
-  const others = st.instances.filter((x) => x.id !== me.id);
-  const match = (x) => !q || `#${x.no} ${x.name || ''} ${exitText(x)}`.toLowerCase().includes(q.toLowerCase());
-  const list = others.filter(match);
-  const search = h('input', { placeholder: '搜索实例：名称 / 邮箱 / 编号', value: q, 'aria-label': '搜索实例' });
+  // 开着的排在前面（和实例页“运行中 / 休眠”两组一个次序），组内还是拖出来的次序：要切过去的多半是开着的
+  const live = (x) => (x.rt.running || x.rt.starting ? 0 : 1);
+  const others = st.instances.filter((x) => x.id !== me.id).sort((a, b) => live(a) - live(b));
+  const qs = q.trim().toLowerCase();
+  const match = (x) => !qs || `#${x.no} ${x.name || ''} ${exitText(x)}`.toLowerCase().includes(qs);
+  const list = others.filter(match).sort((a, b) => rank(a, qs) - rank(b, qs));
+  const showQ = others.length > 8 || askQ || !!q; // 一屏放得下时不占这一行；直接打字会把它叫出来
+  const search = h('input', { placeholder: '搜索：编号 / 名称 / 邮箱，回车切换', value: q, 'aria-label': '搜索实例' });
+  // 回车 = 第一个；↓ 进列表（列表里 ↑↓ 挪动、回车打开）
+  search.onkeydown = (ev) => {
+    const first = document.querySelector('.insts .ai');
+    if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); first?.click(); }
+    else if (ev.key === 'ArrowDown') { ev.preventDefault(); first?.focus(); }
+  };
+  const move = (ev) => {
+    if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+    ev.preventDefault();
+    const to = ev.key === 'ArrowDown' ? ev.currentTarget.nextElementSibling : ev.currentTarget.previousElementSibling;
+    (to || (ev.key === 'ArrowUp' ? document.querySelector('.qs input') : null))?.focus();
+  };
   search.oninput = () => { q = search.value; nav.render(); const s = document.querySelector('.qs input'); if (s) { s.focus(); s.setSelectionRange(q.length, q.length); } };
   // 标题这一行右边：管理实例、导入邮箱、设置、关闭这个实例（图标，悬停有字）和“新建实例”。演示定稿里菜单底下不再有一串文字项。
   const tool = (ic, tip, fn) => h('button', { class: 'ib sm', title: tip, 'aria-label': tip, onclick: fn }, icon(ic, 19));
-  kids.push(h('div', { class: 'lbl' }, h('span', {}, `其它实例（${others.length}）`),
+  kids.push(h('div', { class: 'lbl' }, h('span', { title: MOBILE ? null : '直接打字就能搜索（编号 / 名称 / 邮箱），回车切换到第一个' }, `其它实例（${others.length}）`),
       h('span', { class: 'tools' },
         tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), tool('gear', '设置', () => nav.open('settings')),
         me.kind !== 'normal' && tool('power', '关闭这个实例', () => run(() => api('POST', `/api/instances/${me.id}/stop`))),
         h('button', { class: 'btn tonal sm', title: '新建实例' + (MOBILE ? '' : '（Ctrl+M）'), onclick: () => run(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('add', 16), h('span', { class: 'bt' }, '新建实例')))),
-    others.length > 5 && h('div', { class: 'qs' }, icon('search', 18), search),
+    showQ && h('div', { class: 'qs' }, icon('search', 18), search),
     h('div', { class: 'insts' }, list.map((x) => {
       const xe = x.proxy.state === 'on' ? shownExit(x) : null;
       return h('button', {
-        class: 'ai ' + (x.rt.running || x.rt.starting ? 'run' : 'idle'), style: { '--c': x.color }, title: x.rt.running ? `切换到 #${x.no} 的窗口` : `打开 #${x.no}`,
+        class: 'ai ' + (x.rt.running || x.rt.starting ? 'run' : 'idle'), style: { '--c': x.color }, 'data-iid': x.id, onkeydown: move,
+        title: (x.rt.running ? `切换到 #${x.no} 的窗口` : `打开 #${x.no}`) + `\n${nameOf(x)}\n${xe ? [xe.ip, cname(xe.country)].filter(Boolean).join(' · ') : exitText(x)}`,
         onclick: () => run(async () => { await api('POST', `/api/instances/${x.id}/launch`); if (x.rt.running && !MOBILE) window.close(); }, x.rt.running ? null : `正在打开 #${x.no}…`),
       }, face(x, false, true, true),
       h('span', { class: 'tx' }, h('span', { class: 'n' }, `#${x.no} ${nameOf(x)}`),

@@ -10,6 +10,20 @@ body.menu .amenu>*{flex:none}
 body.menu .amenu>.insts{flex:0 1 auto;min-height:0;overflow-y:auto;padding:0;border-radius:var(--r-xl) var(--r-xl) 0 0;margin:0 var(--gut) 8px;scroll-snap-type:y proximity}
 body.menu .amenu>.insts>.ai{scroll-snap-align:start;flex:none}
 .amenu .hero{padding-top:10px}
+/* 四个入口排成两列（决策 UI-13）：弹窗最高只有 600，一行一个时下面只剩三个实例的位置 */
+.amenu .mis{display:grid;grid-template-columns:1fr 1fr;gap:2px;margin:0 var(--gut);border-radius:var(--r-xl);overflow:hidden}
+.amenu .mis .mi{width:auto;margin:0;border-radius:0;min-height:44px;padding:0 12px;gap:10px;font-size:13.5px;min-width:0}
+.amenu .mis .mi:last-child:nth-child(odd){grid-column:span 2}
+.amenu .mis .mi>.ic{width:20px;height:20px;flex:none} .amenu .mis .mi .grow{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;text-align:left}
+.amenu .mis .mi .chev,.amenu .mis .mi .cn{display:none} .amenu .mis .mi .k{font-size:13px;flex:none}
+.amenu .lbl{padding-top:12px;padding-bottom:6px}
+/* 实例多时一行一个：小头像、名字，出口只留国旗（IP 在悬停提示里） */
+html.pc .insts.dense .ai{min-height:34px;padding:2px 12px;gap:10px}
+.insts.dense .ai .face{--s:24px}
+.insts.dense .ai .tx{display:flex;align-items:center;gap:8px}
+.insts.dense .ai .n{flex:1;min-width:0}
+.insts.dense .ai .s{margin:0;flex:none;max-width:45%} .insts.dense .ai .s .mono{display:none}
+.insts.dense .ai .stp{flex:none}
 /* 滚动条照浏览器菜单里的：细、没有底槽、颜色跟着色调 */
 ::-webkit-scrollbar{width:10px;height:10px} ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--div);border-radius:10px;border:3px solid transparent;background-clip:content-box}
