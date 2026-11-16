@@ -18,11 +18,13 @@ const record = () => run(async () => {
   window.close();
 });
 
-async function load() {
+// soft = 后台自动刷新：取回状态时用户已经在输入框里打字（或开着对话框）就先不重画，免得打断输入法；下一次重画会用上新状态。
+async function load(soft) {
   try { st = await api('GET', '/api/state'); } catch (e) { root.replaceChildren(h('div', { class: 'warn bad', style: { marginTop: '8px' } }, icon('warn', 20), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
   applyTheme(st.settings?.theme || 'system', st.me?.color);
   await syncIcons(st);
   panel.set(st);
+  if (soft === true && !idle()) return;
   render();
   chrome.runtime.sendMessage('repaint').catch(() => {});
 }
@@ -35,9 +37,17 @@ function render() {
   const kids = menu && me ? menuView(st, nav) : panel.kids();
   document.body.classList.toggle('menu', menu);
   root.className = menu ? '' : 'np';
-  const at = document.activeElement?.dataset?.iid; // 键盘正停在哪个实例上：重画后放回去
+  // 键盘正停在哪里：重画后放回去。停在某个实例上就回到那个实例；停在搜索框里就回到搜索框、光标位置不变。
+  // （后台刷新状态的重画可能正好落在用户打字的时候：以前这时焦点就丢了，接着打的字、↓、回车都没有反应。）
+  const act = document.activeElement, at = act?.dataset?.iid, inQ = act?.matches?.('.qs input') ? [act.selectionStart, act.selectionEnd] : null;
   root.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
-  if (!menu) panel.after(); else { fitList(); if (at) document.querySelector(`.insts .ai[data-iid="${CSS.escape(at)}"]`)?.focus(); }
+  if (!menu) panel.after();
+  else {
+    fitList();
+    const s = inQ && document.querySelector('.qs input');
+    if (at) document.querySelector(`.insts .ai[data-iid="${CSS.escape(at)}"]`)?.focus();
+    else if (s) { s.focus(); s.setSelectionRange(inQ[0], inQ[1]); }
+  }
 }
 // 首页上直接打字 = 搜索实例：不用先点搜索框（实例不多时搜索框平时不显示）。打的这个字会进到刚聚焦的搜索框里。
 document.addEventListener('keydown', (ev) => {
@@ -65,14 +75,14 @@ const idle = () => !document.querySelector('input:focus, select:focus, textarea:
 async function poll() {
   let seq = st?.seq || 0;
   for (;;) {
-    try { const r = await api('GET', `/api/events?since=${seq}`); seq = r.seq; if (idle()) await load(); await new Promise((r2) => setTimeout(r2, 200)); }
+    try { const r = await api('GET', `/api/events?since=${seq}`); seq = r.seq; if (idle()) await load(true); await new Promise((r2) => setTimeout(r2, 200)); }
     catch { await new Promise((r) => setTimeout(r, 2000)); }
   }
 }
 await load();
 if (st) {
   panel.refreshSubs();
-  setInterval(() => { if (idle()) load(); }, 4000);
+  setInterval(() => { if (idle()) load(true); }, 4000);
   poll();
 }
 try { chrome.runtime.sendMessage('wake').catch(() => {}); } catch { /* 忽略 */ } // 任何扩展页面打开时都叫醒后台
