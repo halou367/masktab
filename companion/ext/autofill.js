@@ -105,6 +105,7 @@
   const REC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
   const KEY = '<svg class="key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/></svg>';
   let pop = null, toastEl = null;
+  let noteShown = ''; // 已经显示过的“已记住 / 已录入”提示（按记录的 id）：同一条不在这一页重复弹
   const mount = () => { if (!host.isConnected) document.documentElement.append(host); };
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   function closePop() { pop?.remove(); pop = null; }
@@ -235,7 +236,7 @@
     if (key === lastSaved) return;
     lastSaved = key;
     const r = await send({ t: 'vault:remember', user, pass });
-    if (r?.ok && r.r?.saved) { info = null; hideAsk(); toast(r.r.msg, () => send({ t: 'vault:undo', id: r.r.saved.id })); }
+    if (r?.ok && r.r?.saved) { info = null; hideAsk(); noteShown = r.r.saved.id; toast(r.r.msg, () => send({ t: 'vault:undo', id: r.r.saved.id })); }
   }
   document.addEventListener('submit', () => capture(), true);
   // pointerdown 比 click 早：有的网页在 click 里就把表单换掉了。
@@ -450,6 +451,7 @@
     // 落库在后台做：规则（手动录入才写，自动录入沿用已有的）和账号都记在“输入它们的那个站点”名下，哪怕现在已经跳到了别的域名。
     const sv = await send({ t: 'vault:rec-finish', rec: r });
     info = null; infoAt = 0;
+    if (sv?.ok && sv.r?.saved) noteShown = sv.r.saved.id;
     if (sv?.ok && sv.r?.saved) toast(sv.r.msg + (r.auto ? '' : '。其它实例打开这个网站会自动录入'), () => send({ t: 'vault:undo', id: sv.r.saved.id }));
     else toast('录入没有保存成功：' + (sv?.error || (sv?.ok ? '没有录到内容' : '后台没有回应')));
   }
@@ -461,12 +463,16 @@
     reply({ ok: true });
   });
   // 跨页面的登录流程：换页后接着录；上一页刚存好、提示还没来得及看的，在这一页补上。
+  const showNote = (n) => { if (!n || (n.id || n.msg) === noteShown) return; noteShown = n.id || n.msg; toast(n.msg, n.id ? () => send({ t: 'vault:undo', id: n.id }) : null); };
   const boot = send({ t: 'vault:rec-get' }).then((r) => {
     const x = r?.r;
     if (x?.off) recOff = true;
-    if (x?.note) toast(x.note.msg, x.note.id ? () => send({ t: 'vault:undo', id: x.note.id }) : null);
+    showNote(x?.note);
     if (x?.rec && !rec) { rec = x.rec; paintBar(); watch(); }
   });
+  // 提交登录后网站马上跳走时，后台往往还没存完（要查重、入库、取网页图标），这一页刚打开时问不到那条提示：
+  // 过一会儿再问两次。同一条只显示一次。（CI 上“跳回原网站后补上已记住的提示”偶发失败就是这个：要么没有提示，要么显示的是上一条。）
+  for (const ms of [1200, 3000]) setTimeout(() => send({ t: 'vault:rec-get' }).then((r) => showNote(r?.r?.note)).catch(() => {}), ms);
   // 告诉后台“现在显示的是这个标签页”（手机上从菜单点“录入登录”时要知道转给谁）。
   const fromMenu = () => { const a = document.activeElement; recOff = false; startRec(false, isField(a) ? a : null); };
   const vis = async () => { const r = await send({ t: 'vault:vis', on: document.visibilityState === 'visible' }); if (r?.r?.start) fromMenu(); };
