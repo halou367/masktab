@@ -24,11 +24,11 @@ export function instancesView(c) {
       h('button', { class: 'btn tonal', title: '新建伪装实例（Ctrl+M）', onclick: () => c.act(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('add', 18), '新建'));
   // 分成“运行中 / 休眠”两组（演示定稿，决策 UI-10）；拖动排序只在同一组里换位置。
   const mk = c.lite ? cardLite : card, live = st.instances.filter((i) => i.rt.running || i.rt.starting), idle = st.instances.filter((i) => !(i.rt.running || i.rt.starting));
-  const group = (t, list, cls) => list.length > 0 && [sec([t, ' · ', list.length]), h('div', { class: 'grid' + (c.lite ? ' lt' : '') + cls }, list.map(mk))];
-  const grid = h('div', { class: 'grids' }, group('运行中', live, ''), group('休眠', idle, ' idle'));
+  const group = (t, list, cls, note) => list.length > 0 && [sec([t, ' · ', list.length], note), h('div', { class: 'grid' + (c.lite ? ' lt' : '') + cls }, list.map(mk))];
+  const grid = h('div', { class: 'grids' }, group('运行中', live, '', '长按卡片拖动排序'), group('休眠', idle, ' idle', live.length ? null : '长按卡片拖动排序'));
   dragSort(grid);
   const out = [head, st.vault?.error ? h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, st.vault.error)) : null, grid,
-    h('div', { class: 'foot noic' }, '点卡片看账号与密码；长按拖动排序。'), rulesBox(st)];
+    rulesBox(st)];
   const cur = sub && sub !== 'import' && st.instances.find((i) => i.id === sub);
   if (cur) out.push(drawer(cur));
   if (sub === 'import') out.push(importBox());
@@ -69,19 +69,18 @@ function card(i) {
   const sites = cardSites(i);
   // 运行中 / 休眠不写字（决策 UI-9）：头像右上角的点、右边是“关闭”还是“打开”已经说了；只有正在启动时写进度。
   const state = rt.starting ? stepLine(i, ctx.st.launchSteps) : null;
-  const warn = rt.error ? h('div', { class: 'cw bad', title: rt.error }, icon('warn', 14), rt.error)
-    : rt.needRestart?.length ? h('div', { class: 'cw mid' }, icon('refresh', 14), '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、')) : null;
+  const warn = rt.error ? h('div', { class: 'cw bad', title: rt.error }, icon('warn', 14), h('span', {}, rt.error))
+    : rt.needRestart?.length ? h('div', { class: 'cw mid' }, icon('refresh', 14), h('span', {}, '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、'))) : null;
   const el = h('div', { class: 'cardi' + (rt.running ? ' running' : '') + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color }, title: '点开看账号与 Cookie；长按拖动排序',
     onclick: (ev) => { if (ev.target.closest('button,input,.fl') || el.dataset.dragged) return; setRoute(i.id); } },
-  h('div', { class: 'ct' }, face(i, false, true, true), h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm', title: nameOf(i) }, nameOf(i))), exitLine(i))),
-  h('div', { class: 'cs' }, sites.length ? [sites.slice(0, MAXI).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
+  h('div', { class: 'ct' }, face(i, false, true, true), h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm', title: nameOf(i) }, nameOf(i))), state || exitLine(i)),
+    // 动作在名字右边（演示定稿）：运行中 = 关闭，休眠 = 打开。有改动等着重启时多一个“重启”；平时要重启，点开卡片，在详情顶上。
+    rt.running ? [rt.needRestart?.length > 0 && ibtn('refresh', '重启（让改动生效）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`)), 'need'), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
+      : !rt.starting && ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
+  sites.length > 0 && h('div', { class: 'cs' }, sites.length ? [sites.slice(0, MAXI).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
     sites.length > MAXI && h('span', { class: 'more', title: sites.slice(MAXI).map(siteTip).join('\n') }, `+${sites.length - MAXI}`)]
     : null),
-  warn,
-  h('div', { class: 'cb' }, state, h('span', { class: 'grow' }),
-    h('span', { class: 'cnt', title: `${i.acct?.cookieN || 0} 条 Cookie` }, icon('cookie', 13), i.acct?.cookieN || 0),
-    rt.running ? [ibtn('refresh', '重启', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`))), ibtn('stop', '关闭', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
-      : !rt.starting && ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'on')));
+  warn);
   return el;
 }
 
@@ -89,14 +88,15 @@ function card(i) {
 function exitLine(i) {
   const rt = i.rt, on = i.kind !== 'normal' && i.proxy.state === 'on', ex = on ? shownExit(i) : null;
   return h('div', { class: 'cx' },
-    ex ? [flag(ex.country), h('span', { class: 'mono', title: [cname(ex.country), ex.city, ex.org].filter(Boolean).join(' · ') }, ex.ip), rt.running && h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency))]
+    ex ? [h('span', { class: 'xi' }, flag(ex.country), h('span', { class: 'mono', title: [cname(ex.country), ex.city, ex.org].filter(Boolean).join(' · ') }, ex.ip)), rt.running && h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency))]
       : h('span', {}, on ? '出口未探测' : '直连'),
-    i.acct?.count > 0 && h('span', { class: 'cnt2', title: `${i.acct.count} 个账号` }, icon('key', 13), i.acct.count));
+    i.acct?.count > 0 && h('span', { class: 'cnt2', title: `${i.acct.count} 个账号` }, icon('key', 13), i.acct.count),
+    i.acct?.cookieN > 0 && h('span', { class: 'cnt2', title: `${i.acct.cookieN} 条 Cookie` }, icon('cookie', 13), i.acct.cookieN));
 }
 // 手机精简版的卡片：一行——头像（国旗角标、运行点）、编号和名称、延迟、开 / 关；有记住账号或 Cookie 的网站时下面多一排图标。
 function cardLite(i) {
   const rt = i.rt, on = i.proxy.state === 'on', sites = cardSites(i), MAXL = 8;
-  const el = h('div', { class: 'cardi lt' + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color },
+  const el = h('div', { class: 'cardi lt' + (rt.running ? ' running' : '') + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color },
     onclick: (ev) => { if (ev.target.closest('button,input') || el.dataset.dragged) return; setRoute(i.id); } },
   h('div', { class: 'ct' }, face(i, false, true, true),
     h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))), rt.starting ? stepLine(i, ctx.st.launchSteps) : exitLine(i)),
@@ -170,7 +170,8 @@ function drawer(i) {
     const show = shown.has(a.id);
     return h('div', { class: 'acc' }, a.site === '*' ? h('span', { class: 'site' }, icon('mail', 14)) : siteIcon(new URL(a.site).hostname, 16),
       h('div', { class: 'grow' }, h('div', { class: 'u' }, a.user || '（无用户名）'),
-        h('div', { class: 'sub' }, a.site === '*' ? '邮箱账号（任意站点登录时可用）' : siteName(new URL(a.site).hostname), ' · ',
+        // 站点、密码、来源各是一格，靠间距分开（以前中间写“·”，折行时点会挂在行尾）
+        h('div', { class: 'sub' }, h('span', {}, a.site === '*' ? '邮箱账号 · 任意站点' : siteName(new URL(a.site).hostname)),
           h('span', { class: 'pw' }, show ? a.pass : '•'.repeat(Math.min(12, Math.max(6, a.pass.length)))),
           a.src === 'import' && h('span', { class: 'tag' }, '导入'), a.src === 'saved' && h('span', { class: 'tag' }, '自动记住'))),
       ibtn('eye', show ? '隐藏密码' : '显示密码', () => { show ? shown.delete(a.id) : shown.add(a.id); ctx.render(); }),
@@ -179,18 +180,21 @@ function drawer(i) {
       ibtn('trash', '删除这条', () => confirm(`删除 ${a.user} 的这条记录？`) && run(async () => { await api('DELETE', `/api/vault/${a.id}`); await loadAccts(i.id, true); await ctx.load(true); }), 'danger'));
   };
   const form = (a) => h('form', { class: 'acc edit', onsubmit: (ev) => { ev.preventDefault(); const f = new FormData(ev.target); save({ id: a?.id || undefined, site: f.get('site'), user: f.get('user'), pass: f.get('pass') }); } },
-    h('input', { name: 'site', placeholder: '站点，如 github.com（* = 任意站点）', value: a ? (a.site === '*' ? '*' : a.site) : '', required: true }),
-    h('input', { name: 'user', placeholder: '用户名 / 邮箱', value: a?.user || '' }),
-    h('input', { name: 'pass', placeholder: '密码', value: a?.pass || '', required: true }),
-    h('button', { class: 'ib on', title: '保存' }, icon('check')), ibtn('chevL', '取消', () => { editing = ''; ctx.render(); }));
+    h('input', { name: 'site', placeholder: '站点，如 github.com（* = 任意站点）', 'aria-label': '站点', value: a ? (a.site === '*' ? '*' : a.site) : '', required: true }),
+    h('input', { name: 'user', placeholder: '用户名 / 邮箱', 'aria-label': '用户名', value: a?.user || '' }),
+    h('input', { name: 'pass', placeholder: '密码', 'aria-label': '密码', value: a?.pass || '', required: true }),
+    h('div', { class: 'ea' }, h('button', { class: 'btn', type: 'button', onclick: () => { editing = ''; ctx.render(); } }, '取消'), h('button', { class: 'btn pri' }, icon('check', 16), '保存')));
   const cookies = i.acct?.cookies || [];
   return h('div', { class: 'scrim', onclick: (ev) => ev.target === ev.currentTarget && close() },
     h('aside', { class: 'drawer', style: { '--c': i.color } },
-      h('div', { class: 'dh' }, ibtn('back', '收起', close), face(i, true), h('div', { class: 'grow' },
+      h('div', { class: 'dh' }, ibtn('back', '收起', close), face(i, true, true, true), h('div', { class: 'grow' },
         h('input', { class: 'name', value: i.name || '', placeholder: nameOf(i), title: '名称（回车保存）', onchange: (ev) => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { name: ev.target.value })) }),
-        h('div', { class: 'sub', style: { paddingLeft: '8px' } }, `#${i.no} · `, i.proxy.state === 'on' ? (shownExit(i) ? `${shownExit(i).ip} · ${cname(shownExit(i).country)}` : '代理') : '直连'))),
+        h('div', { class: 'sub el', style: { paddingLeft: '8px' } }, `#${i.no} · `, i.proxy.state === 'on' ? (shownExit(i) ? `${shownExit(i).ip} · ${cname(shownExit(i).country)}` : '代理') : '直连')),
+        // 电脑上开关也在这里（卡片上平时只有“关闭 / 打开”一个按钮）；手机屏窄，这一行留给名字，开关在卡片上
+        ctx.lite ? null : i.rt.running ? [ibtn('refresh', '重启', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`))), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
+          : !i.rt.starting && ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)))),
       h('div', { class: 'sw2', style: { padding: '4px 16px 0' }, title: '实例颜色' }, ctx.st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, title: '实例颜色', onclick: () => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
-      h('h3', {}, icon('key', 16), '账号与密码', h('span', { class: 'grow' }), ibtn('plus', '手动添加一条', () => { editing = 'new'; ctx.render(); })),
+      h('h3', {}, icon('key', 16), '账号管理', h('span', { class: 'grow' }), ibtn('plus', '手动添加一条', () => { editing = 'new'; ctx.render(); })),
       h('div', { class: 'sub hint' }, '在这个实例里登录过的账号会自动记住；网站不让浏览器记密码也照样记。下次打开登录页自动填好，不会替你点登录。'),
       editing === 'new' && form(null),
       items == null ? h('div', { class: 'sub' }, '读取中…') : items.length ? items.map(row) : h('div', { class: 'sub' }, '还没有记住的账号'),
@@ -220,10 +224,10 @@ function importBox() {
       h('h3', {}, icon('mail', 18), '导入邮箱', h('span', { class: 'grow' }), ibtn('x', '关闭', close)),
       h('div', { class: 'sub hint' }, '一行一个邮箱，可以在后面跟它自己的密码（空格、逗号、|、---- 都行）。每个邮箱建一个实例，用邮箱命名，相互隔离；登录时自动填邮箱和密码，注册新站时提示用默认密码。'),
       h('textarea', { rows: 8, placeholder: 'alice@gmail.com\nbob@outlook.com----他自己的密码\ncarol@gmail.com', value: imp.text, oninput: (ev) => { imp.text = ev.target.value; const s = ev.target.selectionStart; ctx.render(); const t = document.querySelector('.modal textarea'); t.focus(); t.setSelectionRange(s, s); } }),
-      h('div', { class: 'row', style: { margin: '10px 0' } }, icon('key', 16),
-        h('input', { class: 'grow', type: 'text', autocomplete: 'off', placeholder: hasDef ? '默认密码（留空 = 用已保存的默认密码）' : '默认密码（没写密码的邮箱用它）', value: imp.pass, oninput: (ev) => { imp.pass = ev.target.value; } }),
+      h('div', { class: 'frow' }, icon('key', 18),
+        h('input', { class: 'grow', type: 'text', autocomplete: 'off', placeholder: hasDef ? '默认密码（留空用已存的）' : '默认密码（没写密码的用它）', title: hasDef ? '留空 = 用已保存的默认密码' : '没写密码的邮箱用它', value: imp.pass, oninput: (ev) => { imp.pass = ev.target.value; } }),
         h('label', { class: 'ck', title: '以后注册新站、导入时都用它' }, h('input', { type: 'checkbox', checked: imp.save, onchange: (ev) => { imp.save = ev.target.checked; } }), '设为默认')),
-      h('div', { class: 'row' }, h('span', { class: 'sub grow' }, p.ok ? `将创建 ${p.ok} 个实例${p.own ? `，其中 ${p.own} 个带自己的密码` : ''}${p.bad ? `；${p.bad} 行不是邮箱，会跳过` : ''}` : '还没有邮箱'),
+      h('div', { class: 'frow' }, h('span', { class: 'sub grow' }, p.ok ? `将创建 ${p.ok} 个实例${p.own ? `，其中 ${p.own} 个带自己的密码` : ''}${p.bad ? `；${p.bad} 行不是邮箱，会跳过` : ''}` : '还没有邮箱'),
         h('button', { class: 'btn pri', disabled: !p.ok, onclick: () => run(async () => {
           if (!imp.pass && !hasDef && p.own < p.ok && !confirm('没有设默认密码，没写密码的邮箱将只记邮箱、不记密码。继续？')) return;
           const r = await api('POST', '/api/import/emails', { text: imp.text, password: imp.pass, save: imp.save });

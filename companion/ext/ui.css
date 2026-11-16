@@ -314,7 +314,11 @@ html.pc .drawer { left: auto; width: 480px; box-shadow: -10px 0 30px rgba(0, 0, 
 .dh input.name:focus { border-color: var(--acc); }
 .drawer h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--acc); margin: 18px 16px 6px; }
 .drawer > .sub, .drawer .hint { margin: 0 16px 8px; line-height: 1.5; display: block; }
-.drawer .acc, .acc { display: flex; align-items: center; gap: 10px; padding: 10px 16px; min-height: 56px; border-bottom: 1px solid var(--div); }
+.drawer .acc { display: flex; align-items: center; gap: 12px; padding: 8px 6px 8px 14px; min-height: 56px; margin: 2px var(--gut) 0; background: var(--surf2); border-radius: var(--r-xs); }
+.drawer :not(.acc) + .acc { border-top-left-radius: var(--r-xl); border-top-right-radius: var(--r-xl); }
+.drawer .acc:not(:has(+ .acc)) { border-bottom-left-radius: var(--r-xl); border-bottom-right-radius: var(--r-xl); }
+.drawer .acc > .grow { min-width: 0; } .drawer .acc .sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.drawer .acc .ib { width: 34px; height: 34px; flex: none; } .drawer .acc > .site { flex: none; }
 .acc .u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .acc .pw { font-family: var(--mono); }
 .acc.edit { flex-wrap: wrap; } .acc.edit input { flex: 1 1 140px; min-width: 0; }
 .cks { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px; }
@@ -363,10 +367,11 @@ html.pc .drawer { left: auto; width: 480px; box-shadow: -10px 0 30px rgba(0, 0, 
 .nrow .t2 { font-size: 12.5px; color: var(--on3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .accs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 6px 4px; }
 .accs::-webkit-scrollbar { display: none; }
-.acc { flex: none; width: 88px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px; border-radius: 16px; color: var(--on); text-decoration: none; border: 0; min-height: 0; }
+/* 新标签页“已存账号的网站”那一排的格子。一定要带 .accs：实例抽屉里的账号行也叫 .acc，以前这里没限定，把抽屉里的行压成了 88 宽的竖条 */
+.accs .acc { flex: none; width: 88px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px; border-radius: 16px; color: var(--on); text-decoration: none; border: 0; min-height: 0; }
 .accs .acc .site { width: 40px; height: 40px; margin-bottom: 4px; } .accs .acc .site img { width: 24px; height: 24px; }
-.acc .an { font-size: 13px; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acc .au { font-size: 11px; color: var(--on3); max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.accs .acc .an { font-size: 13px; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.accs .acc .au { font-size: 11px; color: var(--on3); max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.pc .ntp { max-width: 640px; margin: 0 auto; padding-top: 56px; }
 html.pc .ntp .logo { display: flex; align-items: center; justify-content: center; gap: 14px; font-size: 28px; margin-bottom: 22px; }
 html.pc .ntp .tiles { grid-template-columns: repeat(4, 1fr); }
@@ -491,3 +496,65 @@ html.pc .ntp .ninst, html.pc .ntp .nstat, html.pc .ntp .nsec, html.pc .ntp .nq, 
 @media (max-width: 350px) { .btn.sm .bt { display: none; } .btn.sm { padding: 0 8px; } }
 /* 手机上“其它实例”标题右边只有“新建实例”（照定稿的演示）；电脑弹窗是唯一的入口，留着图标按钮 */
 html:not(.pc) .amenu .lbl .tools .ib { display: none; }
+
+/* ---------- UI-12（2026-11-16）：v0.1.60 之后查出来的界面异常，逐条见 docs/decisions.md ---------- */
+/* 1. 实例详情里的账号行、编辑表单。新标签页的“已存账号”磁贴也叫 .acc，UI-10 加它时写成了不带前缀的 .acc，
+      把这里的行压成了一列一列的竖条（v0.1.57、v0.1.60 都带着这个毛病）。现在磁贴一律写 .accs .acc，行一律写 .drawer .acc。 */
+.drawer .acc.edit { flex-wrap: wrap; gap: 8px; padding: 12px 14px; align-items: stretch; }
+.drawer .acc.edit input { flex: 1 1 100%; min-width: 0; height: 40px; padding: 0 12px; border-radius: var(--r-m); background: var(--bg); border-color: transparent; }
+.drawer .acc.edit input:focus { border-color: var(--acc); }
+.drawer .acc.edit input[name="user"], .drawer .acc.edit input[name="pass"] { flex: 1 1 150px; }
+.drawer .acc.edit .ea { flex: 1 1 100%; display: flex; justify-content: flex-end; gap: 8px; }
+.drawer h3 { font-size: 13px; color: var(--on2); margin: 20px calc(var(--gut) + 14px) 6px; min-height: 34px; }
+.drawer h3 .ib { width: 34px; height: 34px; margin-right: -8px; }
+.drawer > .sub, .drawer .hint { margin: 0 calc(var(--gut) + 14px) 10px; font-size: 12.5px; }
+.drawer .cks, .rules .cks { padding: 0 var(--gut); }
+.drawer .sw2 { padding-left: calc(var(--gut) + 14px) !important; }
+.drawer .dz { margin: 28px var(--gut) 0; }
+/* 2. 电脑的实例卡片照演示：动作在名字右边，卡片只有“名字 + 出口”两行（有网站图标时多一排），不再有底下那一行 */
+.ct > .ib { flex: none; }
+.cardi { padding: 10px 8px 10px 14px; }
+html.pc .ct > .ib { width: 34px; height: 34px; }
+.ct > .ib.need { color: var(--mid); }
+.cardi.running:not(.cur) { background: color-mix(in srgb, var(--c) 26%, var(--surf2)); --ring: color-mix(in srgb, var(--c) 26%, var(--surf2)); }
+:root[data-theme="light"] .cardi.running:not(.cur) { background: color-mix(in srgb, var(--c) 16%, var(--surf)); --ring: color-mix(in srgb, var(--c) 16%, var(--surf)); }
+.cx .cnt2 { display: inline-flex; align-items: center; gap: 3px; }
+.cx .cnt2 + .cnt2 { margin-left: 2px; }
+/* 出口那一行放不下时，先让延迟、账号数、Cookie 数掉到看不见的第二行，IP 留全；IP 自己都放不下（IPv6）才省略 */
+.cx { flex-wrap: wrap; height: 18px; overflow: hidden; row-gap: 4px; margin-top: 2px; }
+.cx .xi { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 18px; }
+.cx .xi .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cx > * { flex: none; height: 18px; } .cx > .xi { flex: 0 1 auto; }
+.cw > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; } .cw > .ic { flex: none; }
+.rules { margin-top: 6px; } .rules h3 { font-size: 13px; color: var(--on2); margin: 14px calc(var(--gut) + 14px) 8px; }
+.rules .tipq { font-size: 12px; } .rules > .sub { padding: 0 calc(var(--gut) + 14px); font-size: 12.5px; line-height: 1.5; }
+/* 3. 电脑设置页左边：顶上是 MaskTab 的标记（以前写的是“设置”加一个齿轮） */
+.pnav .h { font-size: 20px; padding: 12px 12px 14px; }
+.pnav .h .lg { width: 32px; height: 32px; border-radius: 50%; background: var(--tonal); color: var(--acc); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+/* 4. 搜索框（弹窗的“搜索实例”、新标签页的搜索）：聚焦时不在圆角框里面再画一个方框，改成整条描边 */
+.qs input:focus-visible, .nq input:focus-visible { outline: none; }
+.qs:focus-within { box-shadow: inset 0 0 0 2px var(--acc); }
+/* 5. 导入邮箱的对话框：这两行以前借用了设置页的 .row（UI-10 之后 .row 是一块带底色的卡片），窄屏上输入框被挤得只剩半句提示 */
+.frow { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; flex-wrap: wrap; color: var(--on2); }
+.frow > input[type="text"] { flex: 1 1 200px; min-width: 0; color: var(--on); }
+.frow > .ic { flex: none; } .frow label.ck { margin: 0; box-shadow: none; padding: 0; color: var(--on); }
+.frow .sub.grow { flex: 1 1 160px; }
+.modal .hint { display: block; margin: 0 0 10px; line-height: 1.5; }
+/* 6. 新标签页“伪装概况”第三格：和前两格一样是一个圈（里面写 CF），不再是一个灰底上的小点 */
+.cfbig { background: none; box-shadow: inset 0 0 0 4px color-mix(in srgb, currentColor 18%, transparent); color: var(--on3); font-size: 13px; font-weight: 600; }
+.cfbig.good { color: var(--good); box-shadow: inset 0 0 0 4px var(--good); }
+.cfbig.mid { color: var(--mid); box-shadow: inset 0 0 0 4px var(--mid); }
+.cfbig.bad { color: var(--bad); box-shadow: inset 0 0 0 4px var(--bad); }
+/* 7. 弹窗“其它实例”里运行中的那几行：浅色下实例色只掺 16%（30% 时灰色的 #0 是一块发脏的深灰，像被禁用了） */
+:root[data-theme="light"] .ai.run { background: color-mix(in srgb, var(--c) 16%, var(--surf2)); --ring: color-mix(in srgb, var(--c) 16%, var(--surf2)); }
+.cx { line-height: 18px; } .ct .stp { margin-top: 3px; height: 18px; }
+/* 账号行不是按钮：不要鼠标移上去的那层水波（.acc 在上面水波的名单里，是给新标签页的磁贴用的） */
+.drawer .acc::before { display: none; }
+.drawer .acc { gap: 4px; } .drawer .acc > .grow { margin-left: 8px; }
+.drawer .acc .sub { gap: 2px 8px; }
+.dh .sub.el { display: block; }
+/* 窄屏：“已标记的网站”标题一行放不下时省略中间的说明，“怎么用？”不折行 */
+.rules h3 { flex-wrap: nowrap; white-space: nowrap; } .rules h3 > .sub:not(.tipq) { min-width: 0; overflow: hidden; text-overflow: ellipsis; } .rules h3 .tipq { flex: none; }
+.dh > .grow { min-width: 0; }
+.frow .btn { margin-left: auto; }
+@media (max-width: 380px) { .drawer .acc { padding-left: 10px; } .drawer .acc .ib { width: 30px; height: 30px; } .drawer .acc > .grow { margin-left: 6px; } }

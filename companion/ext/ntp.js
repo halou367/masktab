@@ -24,7 +24,7 @@ export async function renderNtp(root, st, me, host) {
   const search = st.settings?.searchUrl;
   const input = h('input', { id: 'q', autocomplete: 'off', placeholder: '搜索或输入网址', 'aria-label': '搜索或输入网址', enterkeyhint: 'go' });
   const form = h('form', { class: 'nq', onsubmit: (e) => { e.preventDefault(); const v = input.value.trim(); if (v) location.href = toUrl(v, search); } }, icon('search', 22), input);
-  const kids = [host.pc && h('div', { class: 'logo' }, h('span', { class: 'av', style: { '--c': me.color, '--s': '44px' } }, String(me.no)), '新标签页'), form];
+  const kids = [form]; // 电脑上以前顶上还有一行“编号 + 新标签页”：下面的实例卡已经说了是哪个实例，不重复（演示定稿）
   if (!hide.has('card') && me.kind !== 'normal') kids.push(...statCard(st, me, host));
   if (!hide.has('bookmarks')) kids.push(bookmarks(st, host));
   if (!hide.has('recent')) {
@@ -54,7 +54,7 @@ function statCard(st, me, host) {
     h('div', { class: 'nsg' },
       cell(ringEl(dz.pct, 44), '伪装度', dz.total ? `${dz.pass}/${dz.total} 项一致` : '待判断'),
       cell(ringEl(q.score, 44), '纯净度', q.score != null ? '出口 IP' : '查不到'),
-      cell(h('span', { class: 'cfbig ' + cf.st }, h('i')), 'CF 信誉', cf.text)),
+      cell(h('span', { class: 'cfbig ' + cf.st }, 'CF'), 'CF 信誉', cf.text)),
     mismatch(me) && h('div', { class: 'nswarn' }, icon('warn', 16), '两路出口不在同一国家', h('span', { class: 'grow' }), h('span', { title: '普网' }, flag(rt.probe.direct.country)), h('span', { title: 'CF 网站' }, flag(rt.probe.cf.country))));
   return [inst, stat, !on && h('div', { class: 'nswarn out' }, icon('warn', 16), '直连中，网站看到真实 IP')];
 }

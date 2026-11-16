@@ -36,7 +36,17 @@ function render() {
   document.body.classList.toggle('menu', menu);
   root.className = menu ? '' : 'np';
   root.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
-  if (!menu) panel.after();
+  if (!menu) panel.after(); else fitList();
+}
+// “其它实例”多到要滚时，把那一段的高度收成整数行：弹窗底边不再切着半行（2026-11-16 用户截图）。滚动时也停在整行上（popup.html 里的 scroll-snap）。
+function fitList() {
+  const l = document.querySelector('.amenu > .insts');
+  if (!l) return;
+  l.style.maxHeight = '';
+  const a = l.children[0], b = l.children[1];
+  if (!b || l.scrollHeight <= l.clientHeight + 1) return;
+  const pitch = b.offsetTop - a.offsetTop, gap = pitch - a.offsetHeight;
+  l.style.maxHeight = Math.max(2, Math.floor((l.clientHeight + gap) / pitch)) * pitch - gap + 'px';
 }
 panel.init(root, { load, render, open, back: () => { menu = true; render(); scrollTo(0, 0); }, backTitle: '返回实例菜单', keys: true });
 

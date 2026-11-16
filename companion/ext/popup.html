@@ -7,7 +7,8 @@ html{width:380px} body{max-height:600px;overflow-x:hidden;background:var(--bg);-
 body.menu{overflow:hidden} body.menu #root{padding:8px 0 0}
 body.menu .amenu{display:flex;flex-direction:column;max-height:592px;padding-bottom:0}
 body.menu .amenu>*{flex:none}
-body.menu .amenu>.insts{flex:0 1 auto;min-height:0;overflow-y:auto;padding-bottom:10px;border-radius:var(--r-xl) var(--r-xl) 0 0;margin:0 var(--gut);padding-left:0;padding-right:0}
+body.menu .amenu>.insts{flex:0 1 auto;min-height:0;overflow-y:auto;padding:0;border-radius:var(--r-xl) var(--r-xl) 0 0;margin:0 var(--gut) 8px;scroll-snap-type:y proximity}
+body.menu .amenu>.insts>.ai{scroll-snap-align:start;flex:none}
 .amenu .hero{padding-top:10px}
 /* 滚动条照浏览器菜单里的：细、没有底槽、颜色跟着色调 */
 ::-webkit-scrollbar{width:10px;height:10px} ::-webkit-scrollbar-track{background:transparent}

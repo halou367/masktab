@@ -38,8 +38,19 @@ const ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9h
 const light = JSON.parse(JSON.stringify(fixture)); light.settings.theme = 'light';
 // 两路出口不同国家的样子（黄色提示）
 const split = JSON.parse(JSON.stringify(fixture)); { const m = split.instances.find((x) => x.id === split.me.id); m.rt.probe.direct = { ...m.rt.probe.direct, country: 'HK', city: 'Hong Kong', timezone: 'Asia/Hong_Kong' }; split.me = m; }
+// 实例详情里的账号行（v0.1.57、v0.1.60 上被新标签页的同名样式压成了一列列竖条，没有任何检查拦住）：
+// 每条是横着的一行——够宽、不高，四个按钮在同一行上、都在行里面；用户名那一格至少有 90 宽。
+const accRows = (pg2) => pg2.evaluate(() => [...document.querySelectorAll('.drawer .acc:not(.edit)')].map((r) => {
+  const b = r.getBoundingClientRect(), ib = [...r.querySelectorAll('.ib')].map((x) => x.getBoundingClientRect()), u = r.querySelector('.u')?.getBoundingClientRect();
+  return { w: Math.round(b.width), h: Math.round(b.height), n: ib.length, oneLine: ib.every((x) => Math.abs(x.top - ib[0].top) < 2), inside: ib.every((x) => x.right <= b.right + 1 && x.left >= b.left), u: Math.round(u?.width || 0) };
+}));
+const accOk = (rows, minW) => rows.length >= 3 && rows.every((r) => r.w >= minW && r.h <= 110 && r.n === 4 && r.oneLine && r.inside && r.u >= 90);
+const accForm = (pg2) => pg2.evaluate(() => { const f = document.querySelector('.drawer .acc.edit'), d = document.querySelector('.drawer').getBoundingClientRect(); if (!f) return null;
+  const ins = [...f.querySelectorAll('input')].map((x) => x.getBoundingClientRect()), bt = [...f.querySelectorAll('.btn')].map((x) => x.getBoundingClientRect());
+  return { ins: ins.map((x) => Math.round(x.width)), h: ins.map((x) => Math.round(x.height)), inside: [...ins, ...bt].every((x) => x.left >= d.left && x.right <= d.right + 1), btn: bt.length }; });
 const mock = (state) => {
-  const vault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' }], hasDefault: true };
+  const vault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
+    { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol.very.long.mailbox.name30827@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const addons = [{ id: 'ublock0@raymondhill.net', name: 'uBlock Origin', version: '1.62.0', enabled: true, desc: '高效的广告拦截器', action: true, options: true }];
   const recent = [{ url: 'https://github.com/halou367/masktab', title: 'halou367/masktab', at: Date.now() - 180e3 }, { url: 'https://ippure.com/', title: 'IPPure · 浏览器指纹检测', at: Date.now() - 720e3 }, { url: 'https://mail.google.com/mail/u/0/', title: 'Gmail - 收件箱', at: Date.now() - 3600e3 }];
   const reply = (m, p, b) => {
@@ -332,6 +343,13 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
   await pg.waitForTimeout(300);
   i = await info();
   check('点卡片打开账号抽屉', i.hash === 'instances/p2' && await pg.locator('.drawer').count() === 1, i);
+  { const rows = await accRows(pg); check('手机账号抽屉：每条账号是横着的一行，四个按钮在同一行', accOk(rows, 280), rows);
+    await pg.screenshot({ path: path.join(out, 'drawer-rows.png') });
+    await pg.locator('.drawer button[title="编辑"]').first().click(); await pg.waitForTimeout(200);
+    const fm = await accForm(pg);
+    check('手机账号抽屉：编辑表单三个输入框都够宽、不出抽屉，有“取消 / 保存”', !!fm && fm.ins.length === 3 && fm.ins.every((w) => w >= 120) && fm.h.every((x) => x <= 48) && fm.inside && fm.btn === 2, fm);
+    await pg.screenshot({ path: path.join(out, 'drawer-edit.png') });
+    await pg.locator('.drawer .acc.edit .btn', { hasText: '取消' }).click(); await pg.waitForTimeout(200); }
   await pg.locator('.drawer button[title="收起"]').click();
   await pg.waitForTimeout(300);
   check('抽屉收起回到实例页', (await info()).hash === 'instances', await info());
@@ -364,13 +382,15 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
 // 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹页里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
 if (desk) {
   let deskTheme = fixture.settings?.theme, deskMany = false;
+  const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
+    { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const dsrv = http.createServer((q, r) => {
     const u = new URL(q.url, 'http://x');
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
     if (u.pathname.startsWith('/api/')) {
       const many = deskMany ? [...fixture.instances, ...Array.from({ length: 7 }, (_, k) => ({ ...fixture.instances[k % 2 ? 0 : 2], id: 'x' + k, no: 21 + k, name: `user${k}@example.com`, color: ['#8e24aa', '#00897b', '#e8710a'][k % 3] }))] : fixture.instances;
       const st = { ...fixture, instances: many, settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
-      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : { ok: true })); return;
+      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : { ok: true })); return;
     }
     const f = path.join(desk, decodeURIComponent(u.pathname));
     if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); r.end(); return; }
@@ -398,7 +418,14 @@ if (desk) {
     if (scheme === 'light') {
       // 实例多的时候：弹窗整体不滚（不出现两条滚动条），只有“其它实例”那一段自己滚；整个弹窗不超过 600 高
       const sc = await p2.evaluate(() => { const l = document.querySelector('.amenu .insts'), de = document.documentElement; return { page: de.scrollHeight, body: document.body.scrollHeight, bodyH: document.body.clientHeight, list: l.scrollHeight, listH: l.clientHeight, n: l.children.length, bottom: Math.round(l.getBoundingClientRect().bottom) }; });
-      check('电脑版：实例多时弹窗整体不滚，只有“其它实例”一段滚，不超过 600 高', sc.page <= 600 && sc.body <= sc.bodyH + 1 && sc.list > sc.listH && sc.listH >= 120 && sc.bottom <= 600 && sc.n >= 9, sc);
+      check('电脑版：实例多时弹窗整体不滚，只有“其它实例”一段滚，不超过 600 高', sc.page <= 600 && sc.body <= sc.bodyH + 1 && sc.list > sc.listH && sc.listH >= 96 && sc.bottom <= 600 && sc.n >= 9, sc);
+      // 那一段的高度是整数行：弹窗底边不切着半行（需求方 2026-11-16 的截图）
+      const whole = await p2.evaluate(() => { const l = document.querySelector('.amenu .insts'), a = l.children[0], b = l.children[1], pitch = b.offsetTop - a.offsetTop, gap = pitch - a.offsetHeight; return { h: l.clientHeight, pitch, gap, rem: (l.clientHeight + gap) % pitch }; });
+      check('电脑版：“其它实例”那一段显示整数行，底边不切半行', whole.pitch > 30 && whole.rem === 0, whole);
+      // 搜索框聚焦：不在圆角框里面再画一个方框
+      const fo = await p2.evaluate(() => { const x = document.querySelector('.qs input'); x.focus(); const c = getComputedStyle(x); return { outline: c.outlineStyle, shadow: getComputedStyle(x.parentElement).boxShadow }; });
+      check('电脑版：搜索框聚焦时里面没有方框，整条描边', fo.outline === 'none' && fo.shadow !== 'none', fo);
+      await p2.evaluate(() => document.activeElement.blur());
       const bgs = await p2.evaluate(() => { const g = (e) => getComputedStyle(e).backgroundColor; return { body: g(document.body), row: g(document.querySelector('.amenu .mi')) }; });
       check('电脑版：浅色下弹窗底色是带色调的浅色、每一块是白的（照浏览器自己的菜单）', bgs.row === 'rgb(255, 255, 255)' && /^rgb\((2[2-5]\d), (2[2-5]\d), (2[2-5]\d)\)$/.test(bgs.body) && bgs.body !== bgs.row, bgs);
     }
@@ -440,15 +467,16 @@ if (desk) {
   const fpm = await (async () => { await mp.evaluate(() => { location.hash = 'fp'; }); await mp.waitForTimeout(400); return mp.evaluate(() => ({ sw: document.querySelectorAll('.row .sw').length, fixed: document.querySelectorAll('.fixed').length })); })();
   check('手机指纹与伪装：系统、浏览器、伪装项标“固定”并写明原因', fpm.sw === 0 && fpm.fixed === 3, fpm);
   // 电脑版设置页：左边导航 + 共用的页面
-  for (const [hash, title] of [['settings', '设置'], ['exits', '订阅与地址库'], ['node', '节点与出口'], ['settings/adv', '高级'], ['extensions', '扩展']]) {
+  // 左边照定稿的演示：MaskTab 的七页 + “浏览器”一组两页，没有“概览”；这些页没有“返回”（导航就在旁边）；不带 # 时打开“实例”
+  for (const [hash, title, on] of [['', '实例', '实例'], ['settings', '基本设置', '基本设置'], ['settings/ntp', '自定义新标签页', '基本设置'], ['exits', '订阅与地址库', '订阅与地址库'], ['node', '节点与出口', '节点与出口'], ['fp', '指纹与伪装', '指纹与伪装'], ['settings/adv', '高级', '高级'], ['extensions', '扩展', '扩展']]) {
     const ap = await dctx.newPage();
     ap.on('pageerror', (e) => errors.push(`电脑版设置页 ${hash}: ${e.message}`));
     await ap.setViewportSize({ width: 1280, height: 820 });
     await ap.goto(dbase + 'app.html#' + hash);
     await ap.waitForTimeout(500);
-    const got = await ap.evaluate(() => ({ h1: (document.querySelector('.appbar h1')?.childNodes[0]?.textContent || '').trim(), nav: document.querySelectorAll('.pnav button').length, on: document.querySelector('.pnav button.on')?.textContent }));
-    check(`电脑版设置页：${title}`, got.h1 === title && got.nav === 10, got);
-    await ap.screenshot({ path: path.join(out, `desk-${hash.replace('/', '-')}.png`) });
+    const got = await ap.evaluate(() => ({ h1: (document.querySelector('.appbar h1')?.childNodes[0]?.textContent || '').trim(), nav: document.querySelectorAll('.pnav button').length, on: document.querySelector('.pnav button.on')?.textContent, back: document.querySelectorAll('.appbar button[title^="返回"]').length }));
+    check(`电脑版设置页：${title}`, got.h1 === title && got.nav === 9 && got.on === on && got.back === (hash === 'settings/ntp' ? 1 : 0), got);
+    await ap.screenshot({ path: path.join(out, `desk-${(hash || 'home').replace('/', '-')}.png`) });
     await ap.close();
   }
   {
@@ -472,6 +500,22 @@ if (desk) {
   await ip.waitForTimeout(700);
   const dc = await cards(ip);
   await ip.screenshot({ path: path.join(out, 'desk-instances.png') });
+  { // 卡片照演示：动作在名字右边，没有底下那一行；没有网站图标、没有提示的卡片不超过 76 高
+    const cs = await ip.evaluate(() => [...document.querySelectorAll('.cardi')].map((c) => ({ id: c.dataset.id, h: Math.round(c.getBoundingClientRect().height), act: c.querySelectorAll('.ct > .ib').length, cb: c.querySelectorAll('.cb').length, extra: c.querySelectorAll('.cs, .cw').length,
+      sameRow: (() => { const b = c.querySelector('.ct > .ib'), f = c.querySelector('.face'); if (!b) return true; const x = b.getBoundingClientRect(), y = f.getBoundingClientRect(); return x.top < y.bottom && x.bottom > y.top; })() })));
+    check('电脑实例页：卡片的开 / 关在名字右边，没有底下那一行', cs.length >= 3 && cs.every((c) => c.cb === 0 && c.act >= 1 && c.sameRow), cs);
+    await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#instances/p2'); await ip.waitForTimeout(700);
+    const rows = await accRows(ip);
+    check('电脑账号抽屉：每条账号是横着的一行，四个按钮在同一行', accOk(rows, 400), rows);
+    await ip.screenshot({ path: path.join(out, 'desk-drawer.png') });
+    await ip.locator('.drawer button[title="编辑"]').first().click(); await ip.waitForTimeout(200);
+    const fm = await accForm(ip);
+    check('电脑账号抽屉：编辑表单三个输入框都够宽、不出抽屉，有“取消 / 保存”', !!fm && fm.ins.length === 3 && fm.ins.every((w) => w >= 150) && fm.h.every((x) => x <= 48) && fm.inside && fm.btn === 2, fm);
+    await ip.screenshot({ path: path.join(out, 'desk-drawer-edit.png') });
+    await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#instances/import'); await ip.waitForTimeout(600);
+    const im = await ip.evaluate(() => { const m = document.querySelector('.modal'), x = m?.querySelector('input[type="text"]'); return m ? { w: Math.round(x.getBoundingClientRect().width), bg: getComputedStyle(x.parentElement).backgroundColor } : null; });
+    check('电脑导入邮箱：默认密码输入框够宽', !!im && im.w >= 300, im);
+    await ip.screenshot({ path: path.join(out, 'desk-import.png') }); }
   const pp = await ctx.newPage();
   await pp.goto(base + 'app.html#instances');
   await pp.waitForTimeout(700);
@@ -510,6 +554,11 @@ check('窄屏（320 / 360 宽）左右不被裁：没有横向溢出、没有元
     const ms = getComputedStyle(m); return { scroll: sc.scrollHeight > sc.clientHeight, scOv: getComputedStyle(sc).overflowY, mOv: ms.overflowY, mH: m.scrollHeight, mCH: m.clientHeight, top: m.getBoundingClientRect().top }; });
   check('矮屏导入邮箱：遮罩滚动，弹框不滚、不截断、顶边可见', !r.none && r.scroll && r.scOv === 'auto' && r.mOv === 'visible' && r.mH === r.mCH && r.top >= 0, r);
   for (const x of await roundScroll(pg)) check('矮屏导入邮箱：没有圆角滚动容器', false, x);
+  // 窄屏（360）：默认密码那一格不被挤成半句提示（2026-11-16：这一行借了设置页的 .row，被压得很窄）
+  await pg.setViewportSize({ width: 360, height: 720 }); await pg.waitForTimeout(200);
+  const iw = await pg.evaluate(() => { const m = document.querySelector('.modal').getBoundingClientRect(), x = document.querySelector('.modal input[type="text"]').getBoundingClientRect(); return { w: Math.round(x.width), inside: x.right <= m.right && x.left >= m.left }; });
+  check('窄屏导入邮箱：默认密码输入框至少 200 宽、在弹框里面', iw.w >= 200 && iw.inside, iw);
+  await pg.screenshot({ path: path.join(out, 'import-narrow.png') });
   await pg.screenshot({ path: path.join(out, 'import-short.png') });
   await c.close();
 }

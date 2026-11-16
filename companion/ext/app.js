@@ -7,12 +7,13 @@ import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagV
 
 // 电脑版设置页的外壳：左边导航（照 Chrome 桌面设置页），右边一栏放共用的页面（pages.js / instances.js / panel.js，和手机同一份）。
 // 路由 = 地址 # 后面：settings（概览）、instances[/id|/import]、node、fp、exits、extensions、settings/adv|about|ntp、diag。
-const NAV = [['', [['settings', 'tune', '概览']]],
-  ['MaskTab', [['instances', 'layers', '实例'], ['node', 'globe', '节点与出口'], ['exits', 'sub', '订阅与地址库'], ['fp', 'finger', '指纹与伪装'], ['extensions', 'ext', '扩展'], ['settings/about', 'update', '组件与更新'], ['diag', 'bug', '诊断']]],
-  ['基本设置', [['settings/ntp', 'addhome', '新标签页'], ['settings/adv', 'tune', '高级']]]];
+// 左边导航照定稿的演示（决策 UI-10）：上面一组是 MaskTab 自己的页，下面“浏览器”一组是基本设置和高级。
+// 没有“概览”：它只是把左边这几项再列一遍。“新标签页”的设置从“基本设置”里点进去。
+const NAV = [['', [['instances', 'layers', '实例'], ['node', 'globe', '节点与出口'], ['exits', 'sub', '订阅与地址库'], ['fp', 'finger', '指纹与伪装'], ['extensions', 'ext', '扩展'], ['settings/about', 'update', '组件与更新'], ['diag', 'bug', '诊断']]],
+  ['浏览器', [['settings', 'gear', '基本设置'], ['settings/adv', 'tune', '高级']]]];
 const TITLES = Object.fromEntries(NAV.flatMap(([, l]) => l.map(([r, , t]) => [r, t])));
 let st = null;
-const route = () => location.hash.slice(1) || 'settings';
+const route = () => location.hash.slice(1) || 'instances';
 const page = () => { const r = route(); return r.startsWith('settings/') ? r : r.split('/')[0]; };
 const editing = () => document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
 const act = (fn, ok) => run(async () => { await fn(); await load(true); }, ok);
@@ -28,7 +29,7 @@ async function load(force) {
   if (force || (!editing() && !document.querySelector('.scrim'))) render();
 }
 
-panel.init(main, { load: () => load(true), render: () => render(), open, back, backTitle: '返回设置' });
+panel.init(main, { load: () => load(true), render: () => render(), open, back: null });
 
 // 全局扩展（电脑专有：Chrome 扩展库；手机是火狐扩展，在 app 里管）
 function extensions() {
@@ -49,7 +50,7 @@ function extensions() {
     else if (v === 'rollback' && await confirmDlg('把共享数据回滚到上一份？', '重启实例后生效。', '回滚')) act(() => api('POST', `/api/extensions/${x.id}/rollback`, { backup: x.backups[0] }), '已回滚，重启实例后生效');
     else if (v === 'del' && await confirmDlg(`移除“${x.name}”？`, '', '移除', true)) act(() => api('DELETE', `/api/extensions/${x.id}`));
   };
-  return [appBar(['扩展', h('span', { class: 'cnt' }, String(st.extensions.length))], back, h('button', { class: 'btn tonal', onclick: addExt }, icon('add', 18), '添加')),
+  return [appBar(['扩展', h('span', { class: 'cnt' }, String(st.extensions.length))], null, h('button', { class: 'btn tonal', onclick: addExt }, icon('add', 18), '添加')),
     st.extensions.map((x) => row({ ic: 'ext', t: [x.name, h('span', { class: 'sub' }, x.version)], s: [`${x.scope === 'all' ? '全部实例' : `${x.instanceIds.length} 个实例`} · 数据${x.data === 'shared' ? '共享' : '独立'}`, x.warn && h('span', { class: 'mid' }, ' · ' + x.warn)],
       trail: [sw(x.enabled, x.enabled ? '停用' : '启用', (v) => act(() => api('PATCH', `/api/extensions/${x.id}`, { enabled: v }))), ibtn('more', '更多', more(x))] })),
     !st.extensions.length && h('div', { class: 'empty' }, '全局库里还没有扩展。'),
@@ -69,16 +70,18 @@ async function diagText() {
 function render() {
   if (!st) return;
   const p = page();
-  document.getElementById('nav').replaceChildren(h('div', { class: 'h' }, icon('gear', 26), '设置'),
-    ...NAV.flatMap(([g, l]) => [g && h('div', { class: 'g' }, g), ...l.map(([r, ic, t]) => h('button', { class: p === r ? 'on' : '', onclick: () => open(r) }, icon(ic, 20), t))]).filter(Boolean));
+  const at = p === 'settings/ntp' ? 'settings' : p; // “新标签页”的设置是从“基本设置”点进去的
+  document.getElementById('nav').replaceChildren(h('div', { class: 'h' }, h('span', { class: 'lg' }, icon('mask', 20)), 'MaskTab'),
+    ...NAV.flatMap(([g, l]) => [g && h('div', { class: 'g' }, g), ...l.map(([r, ic, t]) => h('button', { class: at === r ? 'on' : '', onclick: () => open(r) }, icon(ic, 20), t))]).filter(Boolean));
   const c = { st, act, open, back, render, link: (u) => chrome.tabs.create({ url: u }), diag: diagText };
   let kids;
   if (p === 'node' || p === 'fp') {
     if (lastPage !== p) panel.home(p === 'fp');
     kids = panel.kids();
   } else {
-    kids = ({ settings: () => settingsHome({ ...c, back: null }), instances: () => instancesView({ st, act, load, render }), exits: () => exitsView({ ...c, back }), extensions,
-      'settings/adv': () => settingsAdv({ ...c, back }), 'settings/about': () => settingsAbout({ ...c, back }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back }) }[p] || (() => settingsHome({ ...c, back: null })))();
+    // 左边导航里有的页没有“返回”（导航就在旁边）；只有从“基本设置”点进去的“新标签页”有
+    kids = ({ settings: () => settingsHome({ ...c, back: null, pc: true }), instances: () => instancesView({ st, act, load, render }), exits: () => exitsView({ ...c, back: null }), extensions,
+      'settings/adv': () => settingsAdv({ ...c, back: null }), 'settings/about': () => settingsAbout({ ...c, back: null }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back: null }) }[p] || (() => instancesView({ st, act, load, render })))();
   }
   main.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
   if (p === 'node' || p === 'fp') panel.after();

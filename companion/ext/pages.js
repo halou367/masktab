@@ -20,7 +20,8 @@ export function settingsHome(c) {
   const ex = me && me.proxy.state === 'on' ? shownExit(me) : null, dz = disguise(me);
   const run = st.instances.filter((i) => i.rt.running).length;
   const pick = async (title, opts, cur, k) => { const v = await choose(title, opts, cur); if (v != null && v !== cur) set(c, k, v); };
-  return [appBar('设置', c.back),
+  // 电脑设置页（c.pc）：左边导航已经列了 MaskTab 的各页，这里只剩“基本设置”这一组（演示定稿，决策 UI-10）
+  const top = c.pc ? [appBar('基本设置', c.back)] : [appBar('设置', c.back),
     me && row({ ic: face(me), t: `#${me.no} ${me.name || '未命名'}`, s: '当前实例', chev: true, onclick: () => c.open(`instances/${me.id}`) }), // 出口在下面“节点与出口”那一行，这里不重复
     sec('MaskTab'),
     row({ ic: 'layers', t: '实例', s: `${st.instances.length} 个 · ${run} 个运行中`, chev: true, onclick: () => c.open('instances') }),
@@ -31,7 +32,8 @@ export function settingsHome(c) {
     row({ ic: 'update', t: '组件与更新', s: `${st.kernel.name} ${(st.kernel.version || '').split('.')[0]} · mihomo ${st.core.version || '—'}${st.core.ok ? '' : '（未运行）'}`, chev: true, onclick: () => c.open('settings/about') }),
     row({ ic: 'bug', t: '诊断', s: '出口探测、日志、复制诊断信息', chev: true, onclick: () => c.open('diag') }),
     hosted(st) && row({ ic: 'shield', t: '人机验证诊断', s: (s.fpOff || []).length ? h('span', { class: 'mid' }, `已关掉 ${(s.fpOff || []).length} 项伪装`) : '验证一直过不去时，逐项排查是哪一项引起的', chev: true, onclick: () => c.open('settings/verify') }),
-    sec('基本设置'),
+    sec('基本设置')];
+  return [...top,
     row({ ic: 'search', t: '搜索引擎', s: engineName(s.searchUrl), drop: true, onclick: async () => {
       const v = await choose('搜索引擎', [...ENGINES, ['', '自定义…']], ENGINES.some((e) => e[0] === s.searchUrl) ? s.searchUrl : '');
       if (v == null) return;
@@ -197,7 +199,7 @@ export function exitsView(c) {
 let diagText = '';
 export function diagView(c) {
   const { st } = c, me = st.me, p = me?.rt?.probe;
-  const line = (ic, t, i) => row({ ic, t, s: i ? [flag(i.country), h('span', { class: 'mono' }, i.ip), ` · ${[cname(i.country), i.city, i.org].filter(Boolean).join(' · ')}${i.timezone ? ' · ' + i.timezone : ''}`] : '探测不到' });
+  const line = (ic, t, i) => row({ ic, t, s: i ? [flag(i.country), h('span', { class: 'mono' }, i.ip), h('span', {}, [cname(i.country), i.city, i.org, i.timezone].filter(Boolean).join('\u00a0· '))] : '探测不到' }); // IP 和后面的说明之间靠间距分开，不写“·”（折行时下一行会以点开头）；说明里的点跟着前一个词
   const q = (ip) => (ip && st.ipq?.[ip]) || null;
   const copyIt = async () => {
     try { diagText = await c.diag(); } catch (e) { diagText = '读取失败：' + e.message; }

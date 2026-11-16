@@ -27,7 +27,7 @@ export function stepLine(i, steps) {
 }
 
 const nameOf = (i) => i.name || (i.kind === 'normal' ? '普通窗口' : '伪装实例');
-const exitText = (i) => { if (i.kind === 'normal' || i.proxy.state !== 'on') return '直连'; const ex = shownExit(i); return ex ? ex.ip : '出口探测中'; };
+const exitText = (i) => { if (i.kind === 'normal' || i.proxy.state !== 'on') return '直连'; const ex = shownExit(i); return ex ? ex.ip : i.rt?.running || i.rt?.starting ? '出口探测中' : '出口未探测'; }; // 休眠的实例没在探测，和实例页写一样的话
 
 let q = '';
 export function menuView(st, nav) {

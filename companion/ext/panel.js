@@ -29,7 +29,7 @@ const render = () => host.render();
 const patch = (body) => run(async () => { await api('PATCH', `/api/instances/${st.me.id}`, body); await load(); });
 const stop = (fn) => (ev) => { ev.stopPropagation(); fn(ev); };
 const go = (v) => () => { view = v; flt = ''; kindFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; fresh = true; render(); };
-const home = () => { if (view === 'fp' && fpDirect) { host.back(); return; } view = ''; fresh = true; render(); };
+const home = () => { if (view === 'fp' && fpDirect) { host.back?.(); return; } view = ''; fresh = true; render(); };
 
 // ---------- 小工具 ----------
 const org = (i) => (i?.org || '').replace(/^AS\d+\s*/, '').replace(/,?\s+(Inc|LLC|Ltd|Co|Corp|Limited|Corporation|Company)\b\.?.*$/i, '').replace(/^The\s+/i, '');
@@ -312,7 +312,7 @@ function exitCard(me, fixAuto) {
 function mainView(me, sub) {
   const rt = me.rt, px = me.proxy, on = px.state === 'on', p = rt.probe, et = isET(sub), kids = [];
   const exitAuto = px.exitMode !== 'manual', entryAuto = px.entryMode !== 'manual', region = (px.region || '').toUpperCase();
-  kids.push(appBar('节点与出口', { fn: () => host.back(), title: host.backTitle || '返回' },
+  kids.push(appBar('节点与出口', host.back && { fn: () => host.back(), title: host.backTitle || '返回' },
     on && h('button', { class: 'ib', title: '重新探测出口', 'aria-label': '重新探测出口', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); }, '正在探测…') }, icon('refresh', 22))));
   const banner = (bad, text, ...acts) => h('div', { class: 'warn' + (bad ? ' bad' : '') }, icon('warn', 20), h('span', { class: 'tx' }, text), acts);
   const lk = (text, fn) => h('button', { class: 'lk', onclick: fn }, text);
@@ -401,7 +401,7 @@ function fpView(me) {
   const off = new Set(me.fp.disableSpoofing || []);
   const tz = fi.tz || rt.launchedTz || '';
   const pending = rt.running && fi.tz && rt.launchedTz && fi.tz !== rt.launchedTz;
-  const kids = [appBar('指纹与伪装', { fn: home, title: '返回' })];
+  const kids = [appBar('指纹与伪装', (!fpDirect || host.back) && { fn: home, title: '返回' })]; // 电脑设置页里它是左边导航的一项，没有“返回”
   if (me.kind === 'normal') return [...kids, h('div', { class: 'empty' }, '普通窗口不做伪装')];
   kids.push(h('div', { class: 'card', style: { display: 'flex', alignItems: 'center', gap: '16px' } }, ringEl(dz.pct, 64, '伪装度'),
     h('div', { class: 'grow' }, h('div', { style: { fontSize: '16px' } }, dz.total ? `一致性 ${dz.pass}/${dz.total}` : '还判断不了'), h('div', { class: 'sub', style: { marginTop: '4px' } }, '伪装度 = 下面能判断的检查项里通过的比例；出口探测出来前有几项判断不了，不计入。'))));
