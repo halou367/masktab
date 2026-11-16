@@ -351,7 +351,7 @@ function mainView(me, sub) {
       kids.push(row({ ic: 'edit', t: '自定义 ProxyIP', s: own ? cur : 'IP、域名或 socks5 / http 代理', cls: own ? 'on' : '', aria: '自定义 ProxyIP', onclick: () => customAddr(me, sub, 'exit') }));
     } else {
       const cur = entry ? [flagOf(ecc(entry), guessCC(entry.label)), h('span', {}, entry.label || addrText(entry)), dly(entry)] : '未选择';
-      kids.push(row({ ic: 'swap', t: '从列表里选', s: cur, cls: 'on', chev: true, aria: '选节点', onclick: go('entry') }));
+      kids.push(row({ ic: 'swap', t: '从列表里选', s: cur, cls: entry ? 'on' : '', chev: true, aria: '选节点', onclick: go('entry') })); // 还没选时不换底色
     }
     if (et) {
       const er = (px.entryRegion || '').toUpperCase();
@@ -363,7 +363,7 @@ function mainView(me, sub) {
         kids.push(row({ ic: 'flagI', t: '入口国家', trail: er ? [flag(er), cname(er)] : '跟随出口', drop: true, aria: '入口国家', onclick: (ev) => pickEntryRegion(ev.currentTarget, me, sub) }));
       } else {
         const own = !!entry && entry.from !== 'sub', live = sub.nodes.filter((n) => n.delay > 0).length;
-        kids.push(row({ ic: 'enter', t: '从列表里选', s: !own ? (cur || '未选择') : `${live} 个可用`, cls: own ? '' : 'on', chev: true, aria: '选入口', onclick: go('entry') }));
+        kids.push(row({ ic: 'enter', t: '从列表里选', s: !own ? (cur || '未选择') : `${live} 个可用`, cls: own || !entry ? '' : 'on', chev: true, aria: '选入口', onclick: go('entry') }));
         kids.push(row({ ic: 'edit', t: '自定义入口地址', s: own ? cur : 'IP 或域名', cls: own ? 'on' : '', aria: '自定义入口地址', onclick: () => customAddr(me, sub, 'entry') }));
       }
     }
