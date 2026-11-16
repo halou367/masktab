@@ -483,3 +483,16 @@ v0.1.55 只套了 UI-9 的四条规则，页面还是旧样子，需求方不认
 - 真机 v0.1.50：600010 没了，换成 300010；切代理 / Workers 出口换国家后一直不过，彻底重启 app 才过。
 - 分支 `fix/turnstile-hotswitch` 的提交（00ad600）：手机运行中不热换时区 / 语言，改提示重启 app；edgetunnel 不按 Workers（Cloudflare WARP）出口定时区。见 decisions A-11。随 v0.1.51 一起发布（见上面“v0.1.51”一节）。
 - 报告与真机二分步骤：项目 work/turnstile-diag/REPORT-300010.md。下一步：等真机二分结果再决定是否要更细的“热更新”。
+
+## 2026-11-16 任务栏图标按实例颜色区分；在线更新（分支 feat/taskbar-update）
+
+- 需求方（附截图：任务栏上四个一模一样的图标）：“任务栏不会区分，可以按照颜色区分；希望增加在线更新，手机电脑都可以通过 github 在线更新。”
+- **任务栏图标**（decisions UI-14，更正 UI-6）：每个实例的窗口在任务栏上是自己颜色的方块加编号，各自一组。`internal/tbicon`、`internal/core/taskbar_windows.go`、`masktab.exe -open <id>`。
+  - CI（Windows，有桌面）：截图里两个实例是蓝 1、红 2；重启实例后还在；冒烟测试加了一项硬性检查。真机未验证。
+- **在线更新**（decisions N-3）：`internal/update`（查版本）、`internal/core/update*.go`（下载、校验、电脑上运行安装程序）、`Updater.kt`（手机上交给系统安装）、
+  `pages.js` 的“组件与更新”页、`ntp.js` 的提示、`installer/masktab.nsi` 的 `/RELAUNCH`、`ci.yml`（`SHA256SUMS.txt`、发布说明里的“这一版的改动”）。
+  - 本地：`go vet`（Linux / Windows / 安卓）、`go test ./...`、页面检查 123 项通过。
+  - CI：Windows 上用假 GitHub 走完整个更新（9 项）；安卓模拟器上走完整个更新（下载 → 系统安装 → 重新打开）。详见 N-3 的“证据”。
+  - 未验证：真手机、真 Windows、国内网络下的下载；网页那条路（`SHA256SUMS.txt`）要等这一版发出来之后用真的 GitHub 再查一次。
+- 注意：从这一版起，**提交标题会出现在更新页的“这一版的改动”里**（“CI：”“文档：”“测试：”开头的除外）。
+

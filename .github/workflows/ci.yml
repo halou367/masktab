@@ -282,7 +282,9 @@ jobs:
           PREV=$(git tag --list 'v0.1.*' --sort=-v:refname | head -1)
           {
             echo "这一版的改动"
-            if [ -n "$PREV" ]; then git log --no-merges --format='- %s' "$PREV..$GITHUB_SHA" | head -15; else git log --no-merges --format='- %s' -5 "$GITHUB_SHA"; fi
+            # 只列用户看得见的改动：标题以“CI：”“文档：”“测试：”开头的提交不列；一条都不剩时写一句
+            if [ -n "$PREV" ]; then git log --no-merges --format='- %s' "$PREV..$GITHUB_SHA"; else git log --no-merges --format='- %s' -5 "$GITHUB_SHA"; fi | grep -v -E '^- (CI|文档|测试)：' | head -15 > changes.txt || true
+            if [ -s changes.txt ]; then cat changes.txt; else echo "- 内部调整，没有用户看得见的改动"; fi
             echo
             echo "---"
             echo
