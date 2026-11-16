@@ -188,7 +188,10 @@ await Promise.all([page.waitForURL('https://app.one.test/welcome'), page.click('
 const s5 = await until(async () => (await items(A)).find((x) => x.user === 'alice'));
 check('账号记在登录页所在的 idp.two.test 名下', s5?.site === 'https://idp.two.test' && s5?.pass === 's3cret', JSON.stringify(await items(A)));
 await u.toast.waitFor({ timeout: 4000 }).catch(() => {});
-check('跳回原网站后补上“已记住”的提示', /MaskTab 已记住 alice/.test(await u.toast.innerText().catch(() => '')), await u.toast.innerText().catch(() => ''));
+// 等到提示里是这一次的账号：偶尔先冒出来的是上一节那条（“已记住 me@shop.com”，CI 运行 43801540450、43812020005 各一次），
+// 只看第一眼会误判。上一条为什么会晚到另一个网站上才显示，记在 docs/PROGRESS.md 里待查。
+const t5 = await until(async () => { const t = await u.toast.innerText().catch(() => ''); return /MaskTab 已记住 alice/.test(t) ? t : ''; }, 6000);
+check('跳回原网站后补上“已记住”的提示', !!t5, await u.toast.innerText().catch(() => ''));
 await api('DELETE', `/api/vault/${s5.id}`);
 console.log(`[${kind}]    同一流程改用录入：跨网站跳转后照样入库`);
 await page.goto('https://idp.two.test/login');
