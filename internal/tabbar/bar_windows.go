@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -39,6 +40,8 @@ var (
 	pEnumWindows              = user32.NewProc("EnumWindows")
 	pGetClassNameW            = user32.NewProc("GetClassNameW")
 	pGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	pAttachThreadInput        = user32.NewProc("AttachThreadInput")
+	pGetCurrentThreadId       = kern32.NewProc("GetCurrentThreadId")
 	pGetWindow                = user32.NewProc("GetWindow")
 	pGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
 	pSetWindowLongPtrW        = user32.NewProc("SetWindowLongPtrW")
@@ -174,6 +177,7 @@ type bar struct {
 	sig    string            // 上次画的是什么
 	bg     [3]int            // 栏的底色 = 当前窗口标题栏的颜色
 	bgBy   map[string][3]int // 各实例窗口标题栏的颜色（从屏幕上量到的）
+	swAt   time.Time         // 上一次换标签是什么时候
 	font   uintptr
 	fontB  uintptr
 	fontSc float64
@@ -488,10 +492,17 @@ func (b *bar) sync() {
 	// 别的实例自己跑到最前面了（别处让它聚焦）：就切到它。这一遍里刚换过的话不看，前台还没来得及变
 	if !switched {
 		for id, h := range main {
-			if h == fg && id != b.active {
-				b.switchTo(id)
+			if h != fg || id == b.active {
+				continue
+			}
+			// 刚换完标签的一小会儿里，一个藏着的窗口成了前台：那是系统在我们藏起原来的前台窗口时自己挑的
+			//（真机上遇到过：点 #2 结果跳到 #3），不是谁要它出来。把前台交还给当前这个
+			if !isVisible(h) && time.Since(b.swAt) < 1500*time.Millisecond {
+				b.front(main[b.active])
 				break
 			}
+			b.switchTo(id)
+			break
 		}
 	}
 	for id, h := range main {
@@ -597,6 +608,33 @@ func (b *bar) hookLoc(pid int) {
 	b.locHook, _, _ = pSetWinEventHook.Call(evLocation, evLocation, 0, evLocCB, uintptr(pid), 0, 0)
 }
 
+// front 把窗口设成前台窗口。Windows 只让“刚收到过鼠标键盘操作”的程序这样做：点实例栏时我们有这个资格，
+// 从头像菜单里切换实例时没有（操作是在浏览器里发生的）。那时如果前台正是我们管的窗口（或实例栏自己），
+// 就借它的线程去设；前台是别的程序（用户在干别的）就不抢。
+func (b *bar) front(h uintptr) {
+	_, _, _ = pSetForegroundWindow.Call(h)
+	fg, _, _ := pGetForegroundWindow.Call()
+	if fg == h || fg == 0 {
+		return
+	}
+	ours := fg == b.hwnd
+	for _, w := range b.main {
+		ours = ours || w == fg
+	}
+	if !ours {
+		return
+	}
+	ft, _, _ := pGetWindowThreadProcessId.Call(fg, 0)
+	me, _, _ := pGetCurrentThreadId.Call()
+	if ft == 0 || ft == me {
+		return
+	}
+	if ok, _, _ := pAttachThreadInput.Call(me, ft, 1); ok != 0 {
+		_, _, _ = pSetForegroundWindow.Call(h)
+		_, _, _ = pAttachThreadInput.Call(me, ft, 0)
+	}
+}
+
 // switchTo 把这个实例的窗口摆到当前位置显示出来，再把原来那个藏起来。
 func (b *bar) switchTo(id string) {
 	tgt := b.main[id]
@@ -618,7 +656,8 @@ func (b *bar) switchTo(id string) {
 		_, _, _ = pSetWindowPos.Call(tgt, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 	}
 	show(tgt, swShow)
-	_, _, _ = pSetForegroundWindow.Call(tgt)
+	b.front(tgt) // 要在藏起原来那个之前：前台窗口被藏起来时，系统会自己另挑一个窗口当前台
+	b.swAt = time.Now()
 	b.owner = 0
 	b.own(tgt)
 	mu.Lock()
