@@ -48,6 +48,7 @@
 | 扩展库 | `internal/extlib` |
 | 在线更新 | `internal/update`（查版本）、`internal/core/update*.go`（下载安装）、`installer/masktab.nsi`、手机 `Updater.kt` |
 | Windows 任务栏图标 | `internal/tbicon`、`internal/core/taskbar_windows.go` |
+| 合并窗口（Windows，实例标签栏） | `internal/tabbar`、`internal/core/mergewin.go`；真机调试 `scripts/win-dev.ps1` |
 | 程序入口、命令行参数 | `cmd/masktab/main.go` |
 
 ## 界面（`companion/ext`，手机共用其中一部分）

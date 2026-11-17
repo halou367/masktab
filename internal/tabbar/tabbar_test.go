@@ -128,6 +128,12 @@ func TestDraw(t *testing.T) {
 	if (TabPaint{Color: red, Active: true}).Ink(lk) != [3]int{255, 255, 255} || (TabPaint{Color: [3]int{249, 171, 0}, Active: true}).Ink(lk) != [3]int{32, 33, 36} {
 		t.Fatal("选中标签的字色不对")
 	}
+	// 黄色实例：标题栏就是黄色，选中的标签要比它浅，不能和底色一样
+	yellow := [3]int{249, 171, 0}
+	ly := LookOn(FrameGuess(yellow))
+	if f := (TabPaint{Color: yellow, Active: true}).Fill(ly); near(f, ly.Bg) {
+		t.Fatalf("黄色实例选中的标签 %v 和底色 %v 分不出来", f, ly.Bg)
+	}
 	// 上面两个角透明，别处不透明
 	RoundTop(c.Pix, c.W, c.H, 8)
 	alpha := func(x, y int) byte { return c.Pix[(y*c.W+x)*4+3] }

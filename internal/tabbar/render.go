@@ -139,12 +139,28 @@ type TabPaint struct {
 // Fill 返回这个标签的底色：选中的是实例自己的颜色，没选中的压进底色里一些。
 func (p TabPaint) Fill(lk Look) [3]int {
 	switch {
+	case p.Active && near(p.Color, lk.Bg):
+		// 实例颜色和底色几乎一样（黄色这类浅色，标题栏就是它本身）：照浏览器自己选中的标签页那样用更浅的一档，不然看不出哪个选中了
+		return Tint([3]int{255, 255, 255}, p.Color, 0.62)
 	case p.Active:
 		return p.Color
 	case p.Hover:
 		return Tint(p.Color, lk.Bg, 0.8)
 	}
 	return Tint(p.Color, lk.Bg, 0.58)
+}
+
+// near 报告两个颜色是不是近到放在一起分不出来。
+func near(a, b [3]int) bool {
+	d := 0
+	for i := range a {
+		if v := a[i] - b[i]; v < 0 {
+			d -= v
+		} else {
+			d += v
+		}
+	}
+	return d < 90
 }
 
 // Ink 返回这个标签上字的颜色：按标签的底色深浅，白字或黑字。
