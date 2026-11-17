@@ -12,7 +12,11 @@ gh() { curl -fsS -H "Authorization: Bearer $T" -H "Accept: application/vnd.githu
 publish=true; ref=main
 if [ "${1:-}" = "--check" ]; then publish=false; ref="${2:-$(git branch --show-current)}"; fi
 sha=$(gh "$API/commits/$ref" | python3 -c "import json,sys; print(json.load(sys.stdin)['sha'])")
-[ "$sha" = "$(git rev-parse "$ref" 2>/dev/null)" ] || echo "注意：远端 $ref 是 ${sha:0:7}，和本地不一样（没推送？）。跑的是远端那个。"
+if [ "$sha" != "$(git rev-parse "$ref" 2>/dev/null)" ]; then
+  # 发版时远端和本地不一样就停：2026-11-17 有一次 main 没推上去（沙箱重置后分支没了上游，git push 报错没被看到），差点把旧的提交发出去
+  if [ $publish = true ]; then echo "停：远端 $ref 是 ${sha:0:7}，本地是 $(git rev-parse --short "$ref")。先 git push origin $ref，再发版。"; exit 2; fi
+  echo "注意：远端 $ref 是 ${sha:0:7}，和本地不一样（没推送？）。跑的是远端那个。"
+fi
 before=$(gh "$API/actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=1" | python3 -c "import json,sys; r=json.load(sys.stdin)['workflow_runs']; print(r[0]['id'] if r else 0)")
 gh -X POST "$API/actions/workflows/ci.yml/dispatches" -d "{\"ref\":\"$ref\",\"inputs\":{\"publish\":\"$publish\"}}" > /dev/null
 echo "已触发：$ref（${sha:0:7}），$([ $publish = true ] && echo 全套通过后发布 || echo 只跑全套检查)"
