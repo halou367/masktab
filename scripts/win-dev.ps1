@@ -11,6 +11,7 @@
 #   start | stop           start / stop the dev core service (separate data dir, never the installed one)
 #   api <METHOD> <path> [json]
 #   bar                    print the tab bar state (GET /api/debug/tabbar)
+#   log [n]                last n lines of the dev core log
 #   click <x> <y> [dbl|mid]   post a mouse click to the tab bar at bar-relative pixels (does not move the real cursor)
 #   shot <name>            capture tab bar + visible instance window into <dev>\shots\<name>.png
 param([string]$cmd, [string]$a1, [string]$a2, [string]$a3)
@@ -87,9 +88,13 @@ switch ($cmd) {
   }
   'stop' { Stop-Dev; 'stopped' }
   'api' { Api $a1 $a2 $a3 | ConvertTo-Json -Depth 12 -Compress }
-  'bar' { (Api GET '/api/debug/tabbar').data | ConvertTo-Json -Depth 8 -Compress }
+  'log' {
+    $fs = [System.IO.File]::Open("$data\state\masktab.log", 'Open', 'Read', 'ReadWrite'); $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+    $n = 15; if ($a1) { $n = [int]$a1 }; $sr.ReadToEnd().Split("`n") | ? { $_.Trim() } | select -Last $n; $sr.Close()
+  }
+  'bar' { (Api GET '/api/debug/tabbar') | ConvertTo-Json -Depth 8 -Compress }
   'click' {
-    $d = (Api GET '/api/debug/tabbar').data; $h = [IntPtr][long]$d.bar
+    $d = (Api GET '/api/debug/tabbar'); $h = [IntPtr][long]$d.bar
     $lp = [IntPtr](([int]$a2 -shl 16) -bor ([int]$a1 -band 0xFFFF))
     [void][W]::PostMessage($h, 0x0200, [IntPtr]0, $lp)
     switch ($a3) {
@@ -99,10 +104,10 @@ switch ($cmd) {
       default { [void][W]::PostMessage($h, 0x0201, [IntPtr]1, $lp); [void][W]::PostMessage($h, 0x0202, [IntPtr]0, $lp) }
     }
     Start-Sleep -Milliseconds 700
-    (Api GET '/api/debug/tabbar').data | ConvertTo-Json -Depth 8 -Compress
+    (Api GET '/api/debug/tabbar') | ConvertTo-Json -Depth 8 -Compress
   }
   'shot' {
-    $d = (Api GET '/api/debug/tabbar').data
+    $d = (Api GET '/api/debug/tabbar')
     $wins = @($d.windows | ? { $_.visible })
     $items = @()
     foreach ($w in $wins) { $items += ,@([IntPtr][long]$w.hwnd, $w.rect) }
