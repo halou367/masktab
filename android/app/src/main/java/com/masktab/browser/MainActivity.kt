@@ -76,6 +76,8 @@ class MainActivity : Activity(), CoreUi {
     private var pageDim = false; private var pageSheet = false
     private var ntpDim = false; private var ntpSheet = false
     private var inTop = 0; private var inBottom = 0; private var inLeft = 0; private var inRight = 0; private var inIme = 0
+    // 底部能点的系统按钮有多高（三键导航 = 导航栏高度；手势导航 = 0）。为 0 时网页一直画到屏幕最底下（决策 UI-23）
+    private var inTap = -1
     override var prompts: Prompts? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -167,13 +169,19 @@ class MainActivity : Activity(), CoreUi {
             val b = ins.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
             inTop = b.top; inBottom = b.bottom; inLeft = b.left; inRight = b.right
             inIme = ins.getInsets(WindowInsets.Type.ime()).bottom
+            inTap = ins.getInsets(WindowInsets.Type.tappableElement()).bottom
         } else {
             @Suppress("DEPRECATION")
             run { inTop = ins.systemWindowInsetTop; inLeft = ins.systemWindowInsetLeft; inRight = ins.systemWindowInsetRight; inBottom = minOf(ins.systemWindowInsetBottom, ins.stableInsetBottom); inIme = ins.systemWindowInsetBottom }
             if (Build.VERSION.SDK_INT >= 28) ins.displayCutout?.let { inTop = maxOf(inTop, it.safeInsetTop); inLeft = maxOf(inLeft, it.safeInsetLeft); inRight = maxOf(inRight, it.safeInsetRight) }
         }
+        if (Build.VERSION.SDK_INT == 29) @Suppress("DEPRECATION") run { inTap = ins.tappableElementInsets.bottom }
         root.insetTop = inTop; root.insetBottom = inBottom; root.insetLeft = inLeft; root.insetRight = inRight
-        col.setPadding(inLeft, inTop, inRight, maxOf(inBottom, inIme))
+        // 底部黑边（决策 UI-23）：手势导航时手势条底下没有能点的东西，网页 / 内置页面一直画到屏幕最底下，和 Chrome 一样；
+        // GeckoView 会把手势条的高度作为 env(safe-area-inset-bottom) 交给页面（viewport-fit=cover 的页面自己让开）。
+        // 三键导航（或拿不到的老系统）照旧让开导航栏，免得按钮盖住网页。键盘弹出时按键盘让开。
+        val navPad = if (inTap == 0) 0 else inBottom
+        col.setPadding(inLeft, inTop, inRight, maxOf(navPad, inIme))
         startup?.insets(inTop, inBottom, inLeft, inRight)
         overlay?.let { fitOverlay(it) }
         root.invalidate()

@@ -1200,3 +1200,16 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   - 没验证：手机；电脑工具栏小窗里的同样几处；自动选择在 SSTP 一类里“不通自动换”的过程；VPN Gate 列表定时刷新、淘汰不通的过程。
 - **还剩的问题**：DNS 检测看到的解析器仍是 Cloudflare（见上）；SSTP 每条新连接首字节 1.5 ~ 2 秒；全局出口测下载要排队、很慢；VPN Gate 的公共服务器大多是机房 IP（SoftEther 那批纯净度 30 上下），住宅的要在列表里挑。
 - **回退**：删掉地址库里的 VPN Gate 源即可；`exitType` 留空就是以前的行为。
+
+### UI-23 手机底部黑边：手势导航时网页画到屏幕最底下（2026-11-18，分支 iter/polish，需求方：“手机的客户端底部会有黑边，不完全支持全屏”）
+
+- **现象**：手机上网页 / 内置页面的下面总有一条和页面颜色不一样的底（深色主题下是黑的）。
+- **原因**：UI-4 让整列内容按导航栏 / 手势条的高度让开底部，露出来的那条由 `BarsLayout` 涂成工具栏底色。三键导航时这样对；手势导航时手势条底下没有能点的东西，让开反而留下一条和网页颜色对不上的“黑边”。
+- **做法**：
+  - `MainActivity.onInsets` 读 `WindowInsets.Type.tappableElement()`（安卓 10 用 `tappableElementInsets`）的底边。为 0（手势导航）时内容列底部不再让开，GeckoView 一直画到屏幕最底下，和 Chrome 一样；三键导航和拿不到这个值的老系统照旧让开。键盘弹出时仍按键盘让开。
+  - GeckoView 会把系统栏的 insets 作为 `env(safe-area-inset-*)` 交给 `viewport-fit=cover` 的页面（`GeckoView.onGlobalLayout` → `safeAreaInsetsChanged`）。内置页面都带 `viewport-fit=cover`：`ui.css` 里 `body`、抽屉、遮罩（底部表单本来就让开）按 `env(safe-area-inset-bottom)` 让开手势条；手机外壳 `#root` 的最小高度扣掉这一段，短页面不会多出滚动。
+  - 普通网站：没写 `viewport-fit=cover` 的拿到的是 0，最后一行会被细细的手势条压着（手势条只画一条线，点击照样落到网页），和 Chrome 手势导航下的样子一样。
+  - 原生浮层（头像菜单、三点菜单等）仍按完整的 `inBottom` 留边，不受影响。
+- **防再犯**：`preview-pages.mjs` 的 safe 段加两项：模拟底部 24px 安全区，节点页滚到底内容要让开；设置页不能因此多出滚动。去掉 `ui.css` 里那行时第一项会失败（本地试过）。
+- **没验证**：Kotlin 改动沙箱编译不了，靠 CI 构建；GeckoView 算给页面的底部安全区是不是正好等于手势条（而不是整个窗口的 insets）只读过源码，没在真机上看过；需求方那台 vivo V2419A 还没装这一版。
+- **回退**：`onInsets` 里把 `navPad` 改回 `inBottom` 即可，CSS 的 `env()` 在不铺到底时为 0，不用动。

@@ -3,7 +3,7 @@
 html, body { min-height: 100%; }
 body { background: var(--bg); overscroll-behavior-y: none; }
 body.pg-idle { background: var(--bg); }
-#root { min-height: 100vh; padding-bottom: 8px; }
+#root { min-height: calc(100vh - env(safe-area-inset-bottom, 0px)); padding-bottom: 8px; }
 .boot { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 60vh; color: var(--on2); font-size: 14px; }
 .boot i, .dotspin { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid var(--div); border-top-color: var(--acc); animation: spin .8s linear infinite; display: inline-block; flex: none; }
 .oops { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 18vh 24px 24px; color: var(--on); }

@@ -789,6 +789,18 @@ if (want('safe')) {
       return { pl: s.paddingLeft, pr: s.paddingRight, cover: m.includes('viewport-fit=cover'), minL: Math.min(...xs.map((r) => r.left)), maxR: Math.max(...xs.map((r) => r.right)), W: innerWidth }; });
     check('左右安全区：页面内容让开左右各 40px', got.cover && got.pl === '40px' && got.pr === '40px' && got.minL >= 40 && got.maxR <= got.W - 40 + 1, got);
     await pg.screenshot({ path: path.join(out, 'safe-area-node.png') });
+    // 底部（决策 UI-23）：手势导航时页面画到屏幕最底下，GeckoView 把手势条高度作为 env(safe-area-inset-bottom) 给页面。
+    // 模拟底部 24px：页面滚到底，最后一个元素不能落进手势条；短页面不能因此多出滚动；底部表单让开手势条。
+    await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { left: 0, right: 0, top: 0, bottom: 24 } });
+    await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(600);
+    const bot = await pg.evaluate(() => { scrollTo(0, 1e6); const s = getComputedStyle(document.body);
+      const xs = [...document.querySelectorAll('#root *')].map((e) => e.getBoundingClientRect()).filter((r) => r.width && r.height);
+      return { pb: s.paddingBottom, maxB: Math.max(...xs.map((r) => r.bottom)), H: innerHeight }; });
+    check('底部安全区：页面滚到底，内容让开手势条 24px', bot.pb === '24px' && bot.maxB <= bot.H - 24 + 1, bot);
+    await pg.goto(base + 'app.html#settings'); await pg.waitForTimeout(600);
+    const shortPg = await pg.evaluate(() => ({ sh: document.documentElement.scrollHeight, H: innerHeight, rootH: document.querySelector('#root')?.getBoundingClientRect().height }));
+    check('底部安全区：页面不比屏幕高时不会因为让开手势条多出滚动', shortPg.sh <= shortPg.H + 1 || shortPg.rootH > shortPg.H - 24, shortPg);
+    await pg.screenshot({ path: path.join(out, 'safe-area-bottom.png') });
   } else flow.push('跳过：这个 Chromium 不支持模拟安全区');
   await c.close();
 }
