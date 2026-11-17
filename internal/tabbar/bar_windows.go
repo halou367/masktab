@@ -48,7 +48,7 @@ type group struct {
 	filled  bool // 铺满屏幕（代替最大化）
 	fillTo  Rect
 	settle  time.Time // 这之前先不显示栏：窗口正在放最大化 / 还原的动画（见 toggleFill）
-	inset   [4]int // 窗口外面那圈看不见的边：左、上、右、下各多宽（见 noteInset）
+	inset   [4]int    // 窗口外面那圈看不见的边：左、上、右、下各多宽（见 noteInset）
 	insetOK bool
 
 	moving  bool    // 用户正拖着浏览器窗口
