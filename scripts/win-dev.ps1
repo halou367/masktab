@@ -113,10 +113,11 @@ switch ($cmd) {
     foreach ($w in $wins) { $items += ,@([IntPtr][long]$w.hwnd, $w.rect) }
     if ($d.shown) { $items += ,@([IntPtr][long]$d.bar, $d.rect) }
     if ($items.Count -eq 0) { 'nothing visible'; break }
+    # careful: PowerShell variable names are case-insensitive ($b and $B are the same variable)
     $L = ($items | % { $_[1].L } | measure -Minimum).Minimum; $T = ($items | % { $_[1].T } | measure -Minimum).Minimum
     $R = ($items | % { $_[1].R } | measure -Maximum).Maximum; $B = ($items | % { $_[1].B } | measure -Maximum).Maximum
     $bmp = New-Object System.Drawing.Bitmap ([int]($R - $L)), ([int]($B - $T)); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.Clear([System.Drawing.Color]::FromArgb(255, 255, 0, 255))
-    foreach ($it in $items) { $b = [W]::Grab($it[0]); if ($b) { $g.DrawImage($b, [int]($it[1].L - $L), [int]($it[1].T - $T)); $b.Dispose() } }
+    foreach ($it in $items) { $img = [W]::Grab($it[0]); if ($img) { $g.DrawImage($img, [int]($it[1].L - $L), [int]($it[1].T - $T)); $img.Dispose() } }
     $g.Dispose(); $out = "$dev\shots\$a1.png"; $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
     # what is really on screen at the middle of the bar (no pixels read: only which window is there)
     $top = 'n/a'; if ($d.shown) { $pt = New-Object System.Drawing.Point ([int](($d.rect.L + $d.rect.R) / 2)), ([int](($d.rect.T + $d.rect.B) / 2)); $top = if ([W]::GetAncestor([W]::WindowFromPoint($pt), 2) -eq [IntPtr][long]$d.bar) { 'bar' } else { 'OTHER WINDOW' } }

@@ -9,4 +9,3 @@ func Poke()                 {}
 func Focus(string)          {}
 func Release()              {}
 func Debug() map[string]any { return nil }
-func SystemDark() bool      { return false }

@@ -28,7 +28,6 @@ type Item struct {
 // State 是核心服务这一刻的情况。
 type State struct {
 	Enabled bool
-	Dark    bool
 	Tabs    []Tab  // 按显示顺序
 	Menu    []Item // “＋”菜单：还没打开的实例、新建
 }
@@ -62,7 +61,7 @@ func (r Rect) Move(dx, dy int) Rect { return Rect{r.L + dx, r.T + dy, r.R + dx, 
 
 // 实例栏的尺寸（100% 缩放下的像素；乘以缩放比例后使用）。
 const (
-	BarH    = 34  // 栏高
+	BarH    = 38  // 栏高（含压在窗口上的那一截）
 	tabH    = 26  // 标签高
 	tabMaxW = 190 // 标签最宽
 	tabMinW = 44  // 再窄就只剩编号
@@ -70,8 +69,9 @@ const (
 	padX    = 8  // 栏左右留白
 	plusW   = 28 // “＋”
 	closeW  = 18 // “×”的点击范围
-	// 栏的下沿压住窗口上沿多少：盖住窗口顶上那一条边线和圆角缺口，两者看起来连成一体
-	Overlap = 1
+	// 栏的下沿压住窗口上沿多少。内核窗口最上面有 6 像素只是标题栏的底色（标签页从第 7 像素开始），
+	// 栏用同一个颜色压住其中 5 像素：窗口上面两个圆角留出的缺口被盖住，栏和窗口看起来是一整块
+	Overlap = 5
 )
 
 // Slot 是一个标签占的位置（相对实例栏左上角）。
@@ -92,7 +92,7 @@ func px(v int, scale float64) int { return int(float64(v)*scale + 0.5) }
 func Lay(width, n int, scale float64) Layout {
 	var l Layout
 	pad, gap, plus, h := px(padX, scale), px(tabGap, scale), px(plusW, scale), px(tabH, scale)
-	top := (px(BarH, scale) - h) / 2
+	top := (px(BarH-Overlap, scale)-h)/2 + px(1, scale) // 在没压住窗口的那一截里居中，略靠下
 	if n <= 0 {
 		l.Plus = Rect{pad, top, pad + plus, top + h}
 		return l

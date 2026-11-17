@@ -30,8 +30,6 @@ func (h mergeHost) State() tabbar.State {
 	if !st.Enabled {
 		return st
 	}
-	// 实例栏的深浅跟着浏览器窗口的标题栏走，而标题栏跟的是系统的设置
-	st.Dark = tabbar.SystemDark()
 	list := append([]*model.Instance(nil), a.Instances...)
 	sort.SliceStable(list, func(i, j int) bool { return list[i].No < list[j].No })
 	for _, in := range list {

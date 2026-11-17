@@ -110,25 +110,38 @@ func TestLabelAndColor(t *testing.T) {
 }
 
 func TestDraw(t *testing.T) {
-	lk := LookFor(true)
-	l := Lay(800, 2, 1)
 	blue, red := [3]int{26, 115, 232}, [3]int{217, 48, 37}
-	c := Draw(800, l, []TabPaint{{Color: blue, Active: true}, {Color: red}}, lk, 1, false)
+	lk := LookOn(FrameGuess(red))
+	l := Lay(800, 2, 1)
+	c := Draw(800, l, []TabPaint{{Color: red, Active: true}, {Color: blue}}, lk, 1, false)
 	mid := func(r Rect) [3]int { return c.At(r.L+20, (r.T+r.B)/2) }
-	if mid(l.Slots[0].Tab) != blue {
+	if mid(l.Slots[0].Tab) != red {
 		t.Fatalf("选中的标签该是实例自己的颜色，得到 %v", mid(l.Slots[0].Tab))
 	}
-	if got := mid(l.Slots[1].Tab); got != Tint(red, lk.Bg, 0.3) {
-		t.Fatalf("没选中的标签该是淡淡的实例色，得到 %v", got)
+	if got := mid(l.Slots[1].Tab); got != Tint(blue, lk.Bg, 0.58) {
+		t.Fatalf("没选中的标签该是压暗一些的实例色，得到 %v", got)
 	}
-	if c.At(l.Slots[0].Tab.L, l.Slots[0].Tab.T) != lk.Bg {
-		t.Fatal("圆角：标签最角上那个点该是底色")
+	if c.At(l.Slots[0].Tab.L, l.Slots[0].Tab.T) != lk.Bg || c.At(700, 5) != lk.Bg {
+		t.Fatal("标签最角上的点（圆角外面）和空白处该是底色")
 	}
-	if c.At(700, 5) != lk.Bg {
-		t.Fatal("空白处该是底色")
-	}
-	// 选中的蓝标签上是白字，黄标签上是黑字
-	if (TabPaint{Color: blue, Active: true}).Ink(lk) != [3]int{255, 255, 255} || (TabPaint{Color: [3]int{249, 171, 0}, Active: true}).Ink(lk) != [3]int{32, 33, 36} {
+	// 字色跟着标签底色：红底白字，黄底黑字
+	if (TabPaint{Color: red, Active: true}).Ink(lk) != [3]int{255, 255, 255} || (TabPaint{Color: [3]int{249, 171, 0}, Active: true}).Ink(lk) != [3]int{32, 33, 36} {
 		t.Fatal("选中标签的字色不对")
+	}
+	// 上面两个角透明，别处不透明
+	RoundTop(c.Pix, c.W, c.H, 8)
+	alpha := func(x, y int) byte { return c.Pix[(y*c.W+x)*4+3] }
+	if alpha(0, 0) != 0 || alpha(c.W-1, 0) != 0 || alpha(20, 0) != 255 || alpha(0, c.H-1) != 255 || alpha(c.W-1, c.H-1) != 255 {
+		t.Fatalf("圆角：左上 %d 右上 %d 上边中间 %d 左下 %d 右下 %d", alpha(0, 0), alpha(c.W-1, 0), alpha(20, 0), alpha(0, c.H-1), alpha(c.W-1, c.H-1))
+	}
+}
+
+func TestVote(t *testing.T) {
+	a, b := [3]int{1, 2, 3}, [3]int{9, 9, 9}
+	if c, ok := Vote([][3]int{b, a, a}); !ok || c != a {
+		t.Fatal("三个点里两个一样：取那两个的颜色")
+	}
+	if _, ok := Vote([][3]int{a, b, {5, 5, 5}}); ok {
+		t.Fatal("三个点各不相同：不算数")
 	}
 }

@@ -19,7 +19,6 @@ var (
 	gdi32  = syscall.NewLazyDLL("gdi32.dll")
 	dwmapi = syscall.NewLazyDLL("dwmapi.dll")
 	kern32 = syscall.NewLazyDLL("kernel32.dll")
-	advapi = syscall.NewLazyDLL("advapi32.dll")
 
 	pRegisterClassExW         = user32.NewProc("RegisterClassExW")
 	pCreateWindowExW          = user32.NewProc("CreateWindowExW")
@@ -46,9 +45,6 @@ var (
 	pMonitorFromWindow        = user32.NewProc("MonitorFromWindow")
 	pGetMonitorInfoW          = user32.NewProc("GetMonitorInfoW")
 	pSetTimer                 = user32.NewProc("SetTimer")
-	pInvalidateRect           = user32.NewProc("InvalidateRect")
-	pBeginPaint               = user32.NewProc("BeginPaint")
-	pEndPaint                 = user32.NewProc("EndPaint")
 	pSetCapture               = user32.NewProc("SetCapture")
 	pReleaseCapture           = user32.NewProc("ReleaseCapture")
 	pGetCursorPos             = user32.NewProc("GetCursorPos")
@@ -63,23 +59,25 @@ var (
 	pTrackPopupMenu           = user32.NewProc("TrackPopupMenu")
 	pDestroyMenu              = user32.NewProc("DestroyMenu")
 	pDrawTextW                = user32.NewProc("DrawTextW")
-	pSetWindowRgn             = user32.NewProc("SetWindowRgn")
+	pUpdateLayeredWindow      = user32.NewProc("UpdateLayeredWindow")
+	pGetDC                    = user32.NewProc("GetDC")
+	pReleaseDC                = user32.NewProc("ReleaseDC")
+	pWindowFromPoint          = user32.NewProc("WindowFromPoint")
+	pGetAncestor              = user32.NewProc("GetAncestor")
 
-	pCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
-	pCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	pSelectObject           = gdi32.NewProc("SelectObject")
-	pDeleteObject           = gdi32.NewProc("DeleteObject")
-	pDeleteDC               = gdi32.NewProc("DeleteDC")
-	pBitBlt                 = gdi32.NewProc("BitBlt")
-	pSetDIBitsToDevice      = gdi32.NewProc("SetDIBitsToDevice")
-	pCreateFontW            = gdi32.NewProc("CreateFontW")
-	pSetBkMode              = gdi32.NewProc("SetBkMode")
-	pSetTextColor           = gdi32.NewProc("SetTextColor")
-	pCreateRoundRectRgn     = gdi32.NewProc("CreateRoundRectRgn")
+	pCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	pCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
+	pGetPixel           = gdi32.NewProc("GetPixel")
+	pGdiFlush           = gdi32.NewProc("GdiFlush")
+	pSelectObject       = gdi32.NewProc("SelectObject")
+	pDeleteObject       = gdi32.NewProc("DeleteObject")
+	pDeleteDC           = gdi32.NewProc("DeleteDC")
+	pCreateFontW        = gdi32.NewProc("CreateFontW")
+	pSetBkMode          = gdi32.NewProc("SetBkMode")
+	pSetTextColor       = gdi32.NewProc("SetTextColor")
 
 	pDwmGetWindowAttribute = dwmapi.NewProc("DwmGetWindowAttribute")
 	pGetModuleHandleW      = kern32.NewProc("GetModuleHandleW")
-	pRegGetValueW          = advapi.NewProc("RegGetValueW")
 )
 
 type rect32 struct{ L, T, R, B int32 }
@@ -113,15 +111,6 @@ type msg struct {
 	Private uint32
 }
 
-type paintStruct struct {
-	Hdc      uintptr
-	Erase    int32
-	Paint    rect32
-	Restore  int32
-	IncUpd   int32
-	Reserved [32]byte
-}
-
 type monitorInfo struct {
 	Size    uint32
 	Monitor rect32
@@ -148,8 +137,6 @@ type bitmapInfoHeader struct {
 }
 
 const (
-	wmPaint         = 0x000F
-	wmEraseBkgnd    = 0x0014
 	wmMouseActivate = 0x0021
 	wmTimer         = 0x0113
 	wmMouseMove     = 0x0200
@@ -184,7 +171,9 @@ type bar struct {
 	shown  bool
 	scale  float64
 	lay    Layout
-	sig    string // 上次画的是什么
+	sig    string            // 上次画的是什么
+	bg     [3]int            // 栏的底色 = 当前窗口标题栏的颜色
+	bgBy   map[string][3]int // 各实例窗口标题栏的颜色（从屏幕上量到的）
 	font   uintptr
 	fontB  uintptr
 	fontSc float64
@@ -228,7 +217,7 @@ func Run(h Host) {
 	if pSetThreadDpiCtx.Find() == nil {
 		_, _, _ = pSetThreadDpiCtx.Call(^uintptr(3)) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 	}
-	b := &bar{host: h, main: map[string]uintptr{}, scale: 1, hover: -1}
+	b := &bar{host: h, main: map[string]uintptr{}, bgBy: map[string][3]int{}, scale: 1, hover: -1}
 	theBar = b
 	inst, _, _ := pGetModuleHandleW.Call(0)
 	cls, _ := syscall.UTF16PtrFromString("MaskTabBar")
@@ -239,8 +228,8 @@ func Run(h Host) {
 		h.Logf("合并窗口：注册窗口类失败：%v", err)
 		return
 	}
-	// 工具窗口（任务栏上没有按钮）、点它不抢焦点
-	b.hwnd, _, _ = pCreateWindowExW.Call(0x80|0x08000000, uintptr(unsafe.Pointer(cls)), 0, 0x80000000 /* WS_POPUP */, 0, 0, 100, 34, 0, 0, inst, 0)
+	// 工具窗口（任务栏上没有按钮）、点它不抢焦点、分层窗口（自己给每个点定透明度：圆角是平滑的）
+	b.hwnd, _, _ = pCreateWindowExW.Call(0x80|0x08000000|0x80000, uintptr(unsafe.Pointer(cls)), 0, 0x80000000 /* WS_POPUP */, 0, 0, 100, 34, 0, 0, inst, 0)
 	if b.hwnd == 0 {
 		h.Logf("合并窗口：建实例栏失败")
 		return
@@ -299,15 +288,6 @@ func Debug() map[string]any {
 	mu.Lock()
 	defer mu.Unlock()
 	return snap
-}
-
-// SystemDark 报告系统的应用是不是深色模式。
-func SystemDark() bool {
-	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`)
-	name, _ := syscall.UTF16PtrFromString("AppsUseLightTheme")
-	var v, n uint32 = 1, 4
-	r, _, _ := pRegGetValueW.Call(0x80000001 /* HKCU */, uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(name)), 0x10 /* 只要 DWORD */, 0, uintptr(unsafe.Pointer(&v)), uintptr(unsafe.Pointer(&n)))
-	return r == 0 && v == 0
 }
 
 // ---------- 窗口的小工具 ----------
@@ -534,8 +514,51 @@ func (b *bar) sync() {
 	}
 	b.hookLoc(pidOf(h))
 	b.place()
+	if !switched && b.shown && !b.moving && !b.drag.on {
+		if c, ok := frameColor(h, visRect(h), b.scale); ok {
+			b.bgBy[b.active] = c
+		}
+	}
+	b.pickBg()
 	b.repaintIfChanged()
 	b.snapshot()
+}
+
+// pickBg 定栏的底色：量到过当前窗口标题栏的颜色就用它，没有就按实例颜色估一个。
+func (b *bar) pickBg() {
+	if c, ok := b.bgBy[b.active]; ok {
+		b.bg = c
+		return
+	}
+	for _, t := range b.tabs {
+		if t.ID == b.active {
+			b.bg = FrameGuess(t.Color)
+		}
+	}
+}
+
+// frameColor 从屏幕上量窗口标题栏的颜色：紧挨着实例栏下沿的那一行整行都是标题栏的底色，取三个点，至少两个一样才算。
+// 只在那个点上确实是这个窗口时才量（被别的窗口挡住就不量）。内核按实例颜色生成主题，窗口在不在前台颜色还不一样，
+// 自己算不如直接量准。
+func frameColor(h uintptr, vis Rect, sc float64) ([3]int, bool) {
+	dc, _, _ := pGetDC.Call(0)
+	if dc == 0 {
+		return [3]int{}, false
+	}
+	defer pReleaseDC.Call(0, dc)
+	y := vis.T + px(Overlap, sc)
+	var got [][3]int
+	for _, f := range []int{25, 50, 75} {
+		x := vis.L + vis.W()*f/100
+		at, _, _ := pWindowFromPoint.Call(uintptr(uint32(x)) | uintptr(uint32(y))<<32)
+		if root, _, _ := pGetAncestor.Call(at, 2 /* 顶层窗口 */); root != h {
+			continue
+		}
+		if c, _, _ := pGetPixel.Call(dc, uintptr(x), uintptr(y)); uint32(c) != 0xFFFFFFFF {
+			got = append(got, [3]int{int(c & 0xFF), int(c >> 8 & 0xFF), int(c >> 16 & 0xFF)})
+		}
+	}
+	return Vote(got)
 }
 
 func covers(a, b Rect) bool { return a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B }
@@ -602,6 +625,7 @@ func (b *bar) switchTo(id string) {
 	}
 	b.hookLoc(pidOf(tgt))
 	b.place()
+	b.pickBg()
 	b.repaintIfChanged()
 	b.snapshot()
 }
@@ -666,10 +690,6 @@ func (b *bar) place() {
 	_, _, _ = pSetWindowPos.Call(b.hwnd, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), flags)
 	b.shown = true
 	if resized {
-		// 上面两个角是圆的（和 Windows 11 的窗口一样），下面是直的：和下面的窗口接上
-		rad := px(8, sc)
-		rgn, _, _ := pCreateRoundRectRgn.Call(0, 0, uintptr(r.W()+1), uintptr(r.H()+rad*2), uintptr(rad*2), uintptr(rad*2))
-		_, _, _ = pSetWindowRgn.Call(b.hwnd, rgn, 1)
 		b.sig = ""
 		b.repaintIfChanged()
 	}
@@ -731,7 +751,7 @@ func (b *bar) snapshot() {
 		slots = append(slots, s.Tab)
 	}
 	s := map[string]any{"bar": b.hwnd, "shown": b.shown, "rect": b.rect, "scale": b.scale, "active": b.active, "filled": b.filled,
-		"windows": wins, "slots": slots, "plus": b.lay.Plus, "enabled": b.st.Enabled, "dark": b.st.Dark}
+		"windows": wins, "slots": slots, "plus": b.lay.Plus, "enabled": b.st.Enabled, "bg": b.bg}
 	mu.Lock()
 	snap = s
 	mu.Unlock()
@@ -747,17 +767,14 @@ func (b *bar) repaintIfChanged() {
 		sb.WriteByte(byte(t.Color[1]))
 		sb.WriteByte(byte(t.Color[2]))
 	}
-	sig := sb.String() + "@" + b.active + string(rune('0'+b.hover+1)) + string(rune('0'+b.hoverKind))
-	if b.st.Dark {
-		sig += "D"
-	}
-	sig += string(rune(b.rect.W())) + string(rune(int(b.scale*100)))
+	sig := sb.String() + "@" + b.active + string(rune('0'+b.hover+1)) + string(rune('0'+b.hoverKind)) +
+		string(rune(b.rect.W())) + string(rune(int(b.scale*100))) + string(rune(b.bg[0]<<16|b.bg[1]<<8|b.bg[2]))
 	if sig == b.sig {
 		return
 	}
 	b.sig = sig
 	b.lay = Lay(b.rect.W(), len(b.tabs), b.scale)
-	_, _, _ = pInvalidateRect.Call(b.hwnd, 0, 0)
+	b.render()
 }
 
 func rgb(c [3]int) uintptr { return uintptr(c[0]) | uintptr(c[1])<<8 | uintptr(c[2])<<16 }
@@ -773,32 +790,43 @@ func (b *bar) fonts() {
 	}
 	face, _ := syscall.UTF16PtrFromString("Microsoft YaHei UI")
 	mk := func(weight uintptr) uintptr {
-		f, _, _ := pCreateFontW.Call(uintptr(-px(12, b.scale))&0xFFFFFFFF, 0, 0, 0, weight, 0, 0, 0, 1 /* 默认字符集 */, 0, 0, 5 /* ClearType */, 0, uintptr(unsafe.Pointer(face)))
+		// 不用 ClearType（彩色的次像素边）：字是画在我们自己的位图上的，之后整张图带透明度交给系统合成，普通抗锯齿才对
+		f, _, _ := pCreateFontW.Call(uintptr(-px(12, b.scale))&0xFFFFFFFF, 0, 0, 0, weight, 0, 0, 0, 1 /* 默认字符集 */, 0, 0, 4 /* 抗锯齿 */, 0, uintptr(unsafe.Pointer(face)))
 		return f
 	}
 	b.font, b.fontB, b.fontSc = mk(400), mk(600), b.scale
 }
 
-func (b *bar) paint() {
-	var ps paintStruct
-	dc, _, _ := pBeginPaint.Call(b.hwnd, uintptr(unsafe.Pointer(&ps)))
-	defer pEndPaint.Call(b.hwnd, uintptr(unsafe.Pointer(&ps)))
+// render 画出整条栏交给系统：形状用我们自己的位图（抗锯齿），字由系统画在上面，最后把上面两个角变成透明的圆角。
+func (b *bar) render() {
 	w, hgt := b.rect.W(), b.rect.H()
 	if w <= 0 || hgt <= 0 {
 		return
 	}
-	lk := LookFor(b.st.Dark)
+	lk := LookOn(b.bg)
 	paints := make([]TabPaint, len(b.tabs))
 	for i, t := range b.tabs {
 		paints[i] = TabPaint{Color: t.Color, Active: t.ID == b.active, Hover: b.hover == i, HoverX: b.hover == i && b.hoverKind == HitClose}
 	}
 	c := Draw(w, b.lay, paints, lk, b.scale, b.hoverKind == HitPlus)
-	mem, _, _ := pCreateCompatibleDC.Call(dc)
-	bmp, _, _ := pCreateCompatibleBitmap.Call(dc, uintptr(w), uintptr(hgt))
-	old, _, _ := pSelectObject.Call(mem, bmp)
-	bi := bitmapInfoHeader{Width: int32(c.W), Height: -int32(c.H), Planes: 1, Bits: 32}
+	screen, _, _ := pGetDC.Call(0)
+	mem, _, _ := pCreateCompatibleDC.Call(screen)
+	defer func() {
+		_, _, _ = pDeleteDC.Call(mem)
+		_, _, _ = pReleaseDC.Call(0, screen)
+	}()
+	bi := bitmapInfoHeader{Width: int32(w), Height: -int32(hgt), Planes: 1, Bits: 32}
 	bi.Size = uint32(unsafe.Sizeof(bi))
-	_, _, _ = pSetDIBitsToDevice.Call(mem, 0, 0, uintptr(c.W), uintptr(c.H), 0, 0, 0, uintptr(c.H), uintptr(unsafe.Pointer(&c.Pix[0])), uintptr(unsafe.Pointer(&bi)), 0)
+	var bits unsafe.Pointer
+	dib, _, _ := pCreateDIBSection.Call(mem, uintptr(unsafe.Pointer(&bi)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
+	if dib == 0 || bits == nil {
+		return
+	}
+	defer pDeleteObject.Call(dib)
+	old, _, _ := pSelectObject.Call(mem, dib)
+	defer pSelectObject.Call(mem, old)
+	pix := unsafe.Slice((*byte)(bits), w*hgt*4)
+	copy(pix, c.Pix)
 	b.fonts()
 	_, _, _ = pSetBkMode.Call(mem, 1 /* 透明 */)
 	for i, s := range b.lay.Slots {
@@ -811,7 +839,7 @@ func (b *bar) paint() {
 		}
 		_, _, _ = pSelectObject.Call(mem, f)
 		_, _, _ = pSetTextColor.Call(mem, rgb(paints[i].Ink(lk)))
-		tr := rect32{int32(s.Tab.L + px(10, b.scale)), int32(s.Tab.T), int32(s.Tab.R - px(8, b.scale)), int32(s.Tab.B)}
+		tr := rect32{int32(s.Tab.L + px(11, b.scale)), int32(s.Tab.T), int32(s.Tab.R - px(8, b.scale)), int32(s.Tab.B)}
 		if s.Close.W() > 0 && (paints[i].Active || paints[i].Hover) {
 			tr.R = int32(s.Close.L - px(2, b.scale))
 		}
@@ -822,10 +850,11 @@ func (b *bar) paint() {
 		// 单行、竖直居中、放不下用省略号、“&”不当快捷键
 		_, _, _ = pDrawTextW.Call(mem, uintptr(unsafe.Pointer(&txt[0])), uintptr(len(txt)-1), uintptr(unsafe.Pointer(&tr)), 0x20|0x4|0x8000|0x800)
 	}
-	_, _, _ = pBitBlt.Call(dc, 0, 0, uintptr(w), uintptr(hgt), mem, 0, 0, 0x00CC0020 /* SRCCOPY */)
-	_, _, _ = pSelectObject.Call(mem, old)
-	_, _, _ = pDeleteObject.Call(bmp)
-	_, _, _ = pDeleteDC.Call(mem)
+	_, _, _ = pGdiFlush.Call()
+	RoundTop(pix, w, hgt, 8*b.scale) // 系统画字时不写透明度那一位，这里统一补上
+	size, src := point32{int32(w), int32(hgt)}, point32{}
+	blend := [4]byte{0, 0, 255, 1} // 按位图自带的透明度合成
+	_, _, _ = pUpdateLayeredWindow.Call(b.hwnd, screen, 0, uintptr(unsafe.Pointer(&size)), mem, uintptr(unsafe.Pointer(&src)), 0, uintptr(unsafe.Pointer(&blend)), 2)
 }
 
 // ---------- 鼠标 ----------
@@ -976,11 +1005,6 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			_, _, _ = pSetForegroundWindow.Call(h)
 		}
 		return 0
-	case wmPaint:
-		b.paint()
-		return 0
-	case wmEraseBkgnd:
-		return 1
 	case wmMouseActivate:
 		return 3 // 不激活：焦点留在浏览器窗口里
 	case wmMouseMove:

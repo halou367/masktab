@@ -62,7 +62,9 @@ func main() {
 		}
 	}
 	if lf, err := os.OpenFile(filepath.Join(dir, "state", "masktab.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
-		log.SetOutput(io.MultiWriter(os.Stderr, lf))
+		// 先写文件，再顺手写标准错误、写不进去不算错：Windows 上双击启动的窗口程序没有标准错误，
+		// 以前用 io.MultiWriter(os.Stderr, lf)，第一个写失败就不往下写了，结果真机上的日志文件一直是空的（2026-11-17 实机发现）。
+		log.SetOutput(logTo{lf})
 	}
 	log.Printf("MaskTab %s，数据目录 %s", version, dir)
 	var hostOpts []core.HostOpts
@@ -153,4 +155,12 @@ func quitRunning(lock string) {
 			return
 		}
 	}
+}
+
+// logTo 把日志写进文件，同时尽量写一份到标准错误。
+type logTo struct{ f *os.File }
+
+func (l logTo) Write(p []byte) (int, error) {
+	_, _ = os.Stderr.Write(p)
+	return l.f.Write(p)
 }

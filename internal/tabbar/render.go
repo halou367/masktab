@@ -71,17 +71,55 @@ func (c *Canvas) Line(x0, y0, x1, y1, w float64, col [3]int, alpha float64) {
 
 // Look 是一套配色。
 type Look struct {
-	Bg   [3]int // 栏的底色：尽量和浏览器窗口顶上那一条的颜色一样
-	Text [3]int // 没选中的标签上的字
-	Dim  [3]int // ＋、× 这些小记号
+	Bg  [3]int // 栏的底色 = 浏览器窗口顶上那一条（标题栏）的颜色，两者接在一起看不出缝
+	Dim [3]int // ＋ 这样的小记号
 }
 
-// LookFor 返回深色 / 浅色两套配色之一。底色取的是内核窗口标题栏的颜色。
-func LookFor(dark bool) Look {
-	if dark {
-		return Look{Bg: [3]int{31, 31, 31}, Text: [3]int{227, 227, 227}, Dim: [3]int{168, 171, 176}}
+// LookOn 按底色配出一套：深底上用浅色记号，浅底上用深色。
+func LookOn(bg [3]int) Look {
+	if OnDark(bg) {
+		return Look{Bg: bg, Dim: Tint([3]int{255, 255, 255}, bg, 0.8)}
 	}
-	return Look{Bg: [3]int{222, 225, 230}, Text: [3]int{31, 31, 31}, Dim: [3]int{95, 99, 104}}
+	return Look{Bg: bg, Dim: Tint([3]int{0, 0, 0}, bg, 0.65)}
+}
+
+// FrameGuess 在还没从屏幕上量到标题栏颜色时先估一个：内核按实例颜色生成主题，标题栏大约是实例颜色压暗一半。
+func FrameGuess(c [3]int) [3]int { return Tint(c, [3]int{0, 0, 0}, 0.48) }
+
+// Vote 从屏幕上量到的几个点里取出现两次以上的颜色（鼠标正停在某个按钮上时那一个点会不一样）。
+func Vote(samples [][3]int) ([3]int, bool) {
+	for i, a := range samples {
+		for _, b := range samples[i+1:] {
+			if a == b {
+				return a, true
+			}
+		}
+	}
+	return [3]int{}, false
+}
+
+// RoundTop 把位图上面两个角变成圆角（预乘透明度：分层窗口要的格式），其余的点设成不透明。
+// 上面圆、下面直：上面和 Windows 11 的窗口一样是圆角，下面要和浏览器窗口接上。
+func RoundTop(pix []byte, w, h int, rad float64) {
+	for i := 3; i < len(pix); i += 4 {
+		pix[i] = 255
+	}
+	n := int(rad + 1)
+	for y := 0; y < n && y < h; y++ {
+		for x := 0; x < n && x < w; x++ {
+			a := rad + 0.5 - math.Hypot(rad-(float64(x)+0.5), rad-(float64(y)+0.5))
+			if a >= 1 {
+				continue
+			}
+			if a < 0 {
+				a = 0
+			}
+			for _, xx := range []int{x, w - 1 - x} {
+				p := pix[(y*w+xx)*4:]
+				p[0], p[1], p[2], p[3] = byte(float64(p[0])*a), byte(float64(p[1])*a), byte(float64(p[2])*a), byte(255*a)
+			}
+		}
+	}
 }
 
 // TabPaint 是画一个标签要知道的。
@@ -92,24 +130,24 @@ type TabPaint struct {
 	HoverX bool // 鼠标在 × 上
 }
 
-// Fill 返回这个标签的底色：选中的是实例自己的颜色，没选中的是淡淡的一层。
+// Fill 返回这个标签的底色：选中的是实例自己的颜色，没选中的压进底色里一些。
 func (p TabPaint) Fill(lk Look) [3]int {
 	switch {
 	case p.Active:
 		return p.Color
 	case p.Hover:
-		return Tint(p.Color, lk.Bg, 0.5)
+		return Tint(p.Color, lk.Bg, 0.8)
 	}
-	return Tint(p.Color, lk.Bg, 0.3)
+	return Tint(p.Color, lk.Bg, 0.58)
 }
 
-// Ink 返回这个标签上字的颜色。
+// Ink 返回这个标签上字的颜色：按标签的底色深浅，白字或黑字。
 func (p TabPaint) Ink(lk Look) [3]int {
-	if !p.Active {
-		return lk.Text
-	}
-	if OnDark(p.Color) {
-		return [3]int{255, 255, 255}
+	if OnDark(p.Fill(lk)) {
+		if p.Active {
+			return [3]int{255, 255, 255}
+		}
+		return [3]int{236, 236, 236}
 	}
 	return [3]int{32, 33, 36}
 }
@@ -135,7 +173,7 @@ func Draw(w int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bo
 		}
 	}
 	if hoverPlus {
-		c.RoundRect(l.Plus, rad, Tint(lk.Text, lk.Bg, 0.12))
+		c.RoundRect(l.Plus, rad, Tint(lk.Dim, lk.Bg, 0.22))
 	}
 	cx, cy, d := float64(l.Plus.L+l.Plus.R)/2, float64(l.Plus.T+l.Plus.B)/2, 5*scale
 	c.Line(cx-d, cy, cx+d, cy, 1.5*scale, lk.Dim, 1)
