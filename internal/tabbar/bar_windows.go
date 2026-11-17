@@ -3,6 +3,7 @@
 package tabbar
 
 import (
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -63,9 +64,11 @@ type mgr struct {
 	cur    *group // 最近用过的那一组：新开的实例进这一组
 	want   *group // 刚在这一组的 ＋ 菜单里点了“打开 / 新建”：接下来新出现的实例进这一组
 	wantAt time.Time
-	off    bool // 已经放手（开关关了、没有实例）
-	busy   bool
-	noEdge bool // 这台机器上染不了边线（Windows 10）：不再试
+	off    bool     // 已经放手（开关关了、没有实例）
+	busy   bool     // 正在处理一件事。处理当中系统还会插进别的通知来（真机上遇到过：正把一个实例拖出去，换前台窗口的通知插进来又对了一遍账，
+	again  bool     // 看到的是做到一半的状态）：插进来的一律不处理，记下 again，等手上这件做完再对一遍
+	trace  []string // 最近发生的事（诊断用）
+	noEdge bool     // 这台机器上染不了边线（Windows 10）：不再试
 
 	bgBy   map[string][3]int // 各实例窗口标题栏的颜色（从屏幕上量到的）
 	font   uintptr
@@ -74,6 +77,7 @@ type mgr struct {
 
 	drag struct {
 		on     bool
+		test   bool   // 这次拖动是测试脚本发消息模拟的（不是真鼠标）
 		tab    bool   // 抓的是标签（可以拖出去、并进别的组）；不是的话抓的是栏的空白处（只是挪窗口）
 		out    bool   // 窗口已经跟着鼠标在动了
 		g      *group // 跟着鼠标动的是哪一组
@@ -178,6 +182,31 @@ func Debug() map[string]any {
 	return snap
 }
 
+// enter / leave 包住每一件事（一条鼠标消息、一次定时对账、一条系统通知）。enter 返回 false 表示手上有事，这一件先不做。
+func (m *mgr) enter() bool {
+	if m.busy {
+		m.again = true
+		return false
+	}
+	m.busy = true
+	return true
+}
+
+func (m *mgr) leave() {
+	m.busy = false
+	if m.again {
+		m.again = false
+		_, _, _ = pPostMessageW.Call(m.ctl, wmApp, 0, 0)
+	}
+}
+
+func (m *mgr) note(format string, args ...any) {
+	if len(m.trace) >= 60 {
+		m.trace = m.trace[20:]
+	}
+	m.trace = append(m.trace, time.Now().Format("15:04:05.000 ")+fmt.Sprintf(format, args...))
+}
+
 // ---------- 组 ----------
 
 func (m *mgr) alive(g *group) bool {
@@ -264,11 +293,6 @@ func (g *group) fill() {
 // ---------- 对一遍：实例、窗口、组、实例栏 ----------
 
 func (m *mgr) sync() {
-	if m.busy {
-		return
-	}
-	m.busy = true
-	defer func() { m.busy = false }()
 	mu.Lock()
 	stop := stopped
 	mu.Unlock()
@@ -720,6 +744,7 @@ func (m *mgr) snapshot() {
 		s[k] = v
 	}
 	s["enabled"], s["groups"], s["windows"], s["dragging"] = m.st.Enabled, groups, wins, m.drag.on
+	s["trace"] = append([]string(nil), m.trace...)
 	mu.Lock()
 	snap = s
 	mu.Unlock()
@@ -775,6 +800,7 @@ func (m *mgr) detach(g *group, id string, x, y, gx, gy int) *group {
 	ng.paintEdge()
 	ng.repaintIfChanged()
 	m.cur = ng
+	m.note("detach at %d,%d grab %d,%d -> win %v bar %v", x, y, gx, gy, r, ng.rect)
 	m.host.Logf("合并窗口：实例 %s 被拖出来单独成一组（现在 %d 组）", id, len(m.groups))
 	return ng
 }
@@ -811,6 +837,7 @@ func (m *mgr) startDrag(g *group, tab bool, id string, x, y, gx, gy int) {
 	d.sx, d.sy, d.gx, d.gy = x, y, gx, gy
 	d.win = winRect(h)
 	g.lastWin = d.win
+	m.note("drag start tab=%v at %d,%d win %v", tab, x, y, d.win)
 	_, _, _ = pSetCapture.Call(g.hwnd)
 }
 
@@ -894,7 +921,13 @@ func (m *mgr) endDrag(commit bool) {
 		return
 	}
 	g, t, id, merge := d.g, d.target, d.id, commit && d.tab && d.out
-	d.on, d.g, d.target = false, nil, nil
+	m.note("drag end commit=%v out=%v target=%v last %v", commit, d.out, t != nil, func() Rect {
+		if m.alive(g) {
+			return g.lastWin
+		}
+		return Rect{}
+	}())
+	d.on, d.g, d.target, d.test = false, nil, nil, false
 	_, _, _ = pReleaseCapture.Call()
 	if m.alive(t) {
 		t.drop = false
@@ -1036,21 +1069,31 @@ func (m *mgr) focus() {
 
 func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 	m := theMgr
-	if m == nil {
+	def := func() uintptr {
 		r, _, _ := pDefWindowProcW.Call(hwnd, ms, wp, lp)
 		return r
+	}
+	if m == nil {
+		return def()
 	}
 	if hwnd == m.ctl {
 		switch ms {
 		case wmTimer, wmApp:
-			m.sync()
+			if m.enter() {
+				m.sync()
+				m.leave()
+			}
 			return 0
 		case wmAppFocus:
-			m.focus()
+			if m.enter() {
+				m.focus()
+				m.leave()
+			} else { // 手上有事：等会儿再来
+				_, _, _ = pPostMessageW.Call(m.ctl, wmAppFocus, 0, 0)
+			}
 			return 0
 		}
-		r, _, _ := pDefWindowProcW.Call(hwnd, ms, wp, lp)
-		return r
+		return def()
 	}
 	var g *group
 	for _, x := range m.groups {
@@ -1059,32 +1102,47 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		}
 	}
 	if g == nil {
-		r, _, _ := pDefWindowProcW.Call(hwnd, ms, wp, lp)
-		return r
+		return def()
 	}
 	switch ms {
 	case wmMouseActivate:
 		return 3 // 不激活：焦点留在浏览器窗口里
+	case wmMouseLeave:
+		g.tracking = false
+		g.setHover(HitNone, -1)
+		return 0
+	case wmCaptureChange:
+		// 拖到一半鼠标被别的窗口抢走了。模拟的拖动不看这个：没有真的按着鼠标，换前台窗口时系统就会把“抓着鼠标”收回去
+		if m.drag.on && !m.drag.test && lp != hwnd && m.enter() {
+			m.endDrag(false)
+			m.leave()
+		}
+		return 0
+	case wmMouseMove, wmLButtonDown, wmLButtonDbl, wmLButtonUp, wmMButtonUp:
+	default:
+		return def()
+	}
+	if !m.enter() {
+		return 0
+	}
+	defer m.leave()
+	x, y, sx, sy := g.where(wp, lp)
+	switch ms {
 	case wmMouseMove:
-		x, y, sx, sy := g.where(wp, lp)
 		if m.drag.on {
+			if m.drag.test && wp&mkTest == 0 { // 模拟拖动的时候真鼠标正好路过：不理
+				return 0
+			}
 			m.dragMove(sx, sy)
 			m.snapshot()
 		} else {
 			g.mouseMove(x, y)
 		}
-		return 0
-	case wmMouseLeave:
-		g.tracking = false
-		g.setHover(HitNone, -1)
-		return 0
 	case wmLButtonDown:
-		x, y, sx, sy := g.where(wp, lp)
 		g.click(x, y, sx, sy)
+		m.drag.test = m.drag.on && wp&mkTest != 0
 		m.snapshot()
-		return 0
 	case wmLButtonDbl:
-		x, y, sx, sy := g.where(wp, lp)
 		if kind, _ := g.lay.Hit(x, y); kind == HitNone {
 			m.endDrag(false)
 			g.toggleFill()
@@ -1092,30 +1150,23 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 			g.place()
 		} else {
 			g.click(x, y, sx, sy)
+			m.drag.test = m.drag.on && wp&mkTest != 0
 		}
 		m.snapshot()
-		return 0
 	case wmLButtonUp:
+		if m.drag.on && m.drag.test && wp&mkTest == 0 {
+			return 0
+		}
 		if m.drag.on {
-			_, _, sx, sy := g.where(wp, lp)
 			m.dragMove(sx, sy)
 		}
 		m.endDrag(true)
-		return 0
-	case wmCaptureChange:
-		if m.drag.on && lp != hwnd {
-			m.endDrag(false)
-		}
-		return 0
 	case wmMButtonUp:
-		x, y, _, _ := g.where(wp, lp)
 		if kind, i := g.lay.Hit(x, y); (kind == HitTab || kind == HitClose) && i < len(g.tabs) {
 			go m.host.Close(g.tabs[i].ID)
 		}
-		return 0
 	}
-	r, _, _ := pDefWindowProcW.Call(hwnd, ms, wp, lp)
-	return r
+	return 0
 }
 
 // winEvent：系统通知窗口动了、换了前台。
@@ -1130,6 +1181,10 @@ func winEvent(_, event, hwnd, idObject, _, _, _ uintptr) uintptr {
 			g = x
 		}
 	}
+	if !m.enter() {
+		return 0
+	}
+	defer m.leave()
 	switch event {
 	case evLocation:
 		if g != nil && int32(idObject) == 0 && !(m.drag.on && m.drag.g == g) {
