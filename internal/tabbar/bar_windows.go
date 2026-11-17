@@ -85,6 +85,7 @@ type mgr struct {
 	drag struct {
 		on     bool
 		test   bool   // 这次拖动是测试脚本发消息模拟的（不是真鼠标）
+		lx, ly int    // 上一次按哪个鼠标位置挪过窗口（dragWatch 用：鼠标没动就不重复挪）
 		tab    bool   // 抓的是标签（可以拖出去、并进别的组）；不是的话抓的是栏的空白处（只是挪窗口）
 		out    bool   // 窗口已经跟着鼠标在动了
 		g      *group // 跟着鼠标动的是哪一组
@@ -880,6 +881,7 @@ func (m *mgr) startDrag(g *group, tab bool, id string, x, y, gx, gy int) {
 	d := &m.drag
 	d.on, d.tab, d.out, d.g, d.id, d.target = true, tab, false, g, id, nil
 	d.sx, d.sy, d.gx, d.gy = x, y, gx, gy
+	d.lx, d.ly = x, y
 	d.win = winRect(h)
 	g.lastWin = d.win
 	m.note("drag start tab=%v at %d,%d win %v", tab, x, y, d.win)
@@ -890,6 +892,7 @@ func (m *mgr) startDrag(g *group, tab bool, id string, x, y, gx, gy int) {
 func (m *mgr) dragMove(x, y int) {
 	d := &m.drag
 	g := d.g
+	d.lx, d.ly = x, y
 	if !m.alive(g) {
 		m.endDrag(false)
 		return
@@ -987,22 +990,42 @@ func (m *mgr) endDrag(commit bool) {
 	m.sync()
 }
 
-// dragWatch 是拖动的兜底：记着“正拖着”，可鼠标主键其实已经没按着了，就当场收尾。
-// 点完标签马上看一次，之后每 10 毫秒看一次。
-// 为什么要有（需求方 2026-11-18：“点击后鼠标移开，就会把实例拽出来……我只是单击”，CI 上用真鼠标点也点出来过）：
-// 点标签这一下先换实例（换窗口 + 淡出，0.2～0.3 秒，这期间不处理别的消息），换完才记“开始拖”——普通的一下单击，这时手早松了。
-// 而松手是在换窗口的半路上发生的：那一刻鼠标底下最上面的不一定是实例栏（新窗口正盖上来），我们也还没“抓着鼠标”，
-// 系统就可能把松手送给别的窗口。于是程序一直以为还按着，鼠标一离开栏就把这个实例“拖”出去单独成一组。
-// 测试脚本模拟的拖动不看（它本来就没有真的按着鼠标）。
+// dragWatch 是拖动的兜底，点完标签马上看一次，之后每 10 毫秒看一次。只管真鼠标（测试脚本模拟的拖动本来就没有真的按着键），做两件事：
+//
+// 一、记着“正拖着”，可鼠标主键其实已经没按着了：当场收尾。
+// 为什么（需求方 2026-11-18：“点击后鼠标移开，就会把实例拽出来……我只是单击”，CI 和需求方机器上用真鼠标都点出来过）：
+// 点标签这一下先换实例（换窗口 + 淡出，0.2～0.3 秒，这期间不处理别的消息），换完才记“开始拖”——普通的一下单击，这时手早松了，
+// 排在后面的“鼠标移动”却可能比“松手”先到；有时松手干脆送给了别的窗口（见下面第二条）。于是程序以为还按着，
+// 鼠标一离开栏就把这个实例“拖”出去单独成一组。
+// 收尾的规矩：还没拖出栏 → 就当只是点了一下；窗口已经跟着鼠标在走 → 按“在鼠标现在的位置松手”算。
+//
+// 二、键还按着：鼠标到哪儿，窗口就跟到哪儿，不等系统发“鼠标移动”。
+// 为什么：拖出栏以后前台窗口是浏览器，不是我们；系统只在鼠标压在实例栏上时才把移动、松手发给我们。手稍微快一点，鼠标跑到栏外面，
+// 消息就断了：窗口停在半路，松手也收不到（需求方机器上实测：拖 400 像素，窗口只跟了 50 就停了，松手后程序还以为在拖）。
+//
 // 只认“键是不是真的按着”，不认系统发来的“鼠标被收走了”：把实例拖出栏的那一下，我们自己会把“抓着鼠标”从旧栏换到新栏，
-// 旧栏照样收到这条通知——拿它当“拖完了”，窗口刚出栏就不跟手了（2026-11-18 在需求方机器上用真鼠标试出来的，改掉了）。
+// 旧栏照样收到这条通知——拿它当“拖完了”，窗口刚出栏就不跟手了（试过，改掉了）。
 func (m *mgr) dragWatch() {
 	d := &m.drag
-	if !d.on || d.test || primaryDown() {
+	if !d.on || d.test {
+		return
+	}
+	x, y := cursor()
+	if primaryDown() {
+		if x != d.lx || y != d.ly {
+			was := d.out
+			m.dragMove(x, y)
+			if d.out != was || !d.on {
+				m.snapshot()
+			}
+		}
 		return
 	}
 	m.note("drag watchdog: button up without WM_LBUTTONUP (out=%v)", d.out)
-	m.endDrag(d.out) // 窗口已经跟着鼠标在走了：按“在这儿松手”算；还没拖出去：就当只是点了一下
+	if d.out {
+		m.dragMove(x, y)
+	}
+	m.endDrag(d.out)
 	m.snapshot()
 }
 
@@ -1327,6 +1350,9 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		if m.drag.on && !m.drag.test && wp&mkTest == 0 && wp&1 /* MK_LBUTTON */ == 0 {
 			// 记着“正拖着”，这条移动消息却说主键没按着：松手的消息丢了。收尾，这一下按普通的移动算
 			m.note("drag: move without button (out=%v)", m.drag.out)
+			if m.drag.out {
+				m.dragMove(sx, sy)
+			}
 			m.endDrag(m.drag.out)
 			m.snapshot()
 			return 0
