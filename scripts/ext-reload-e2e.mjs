@@ -130,6 +130,30 @@ try {
   const m5 = await until(async () => { const m = await pageMarks(a.id).catch(() => ''); return /"d":"v4"/.test(m) ? m : ''; }, 20000);
   st = await api('GET', '/api/state'); const ia = st.instances.find((i) => i.id === a.id);
   check(!!m5 && !(ia.rt.needRestart || []).includes('extensions') && ia.rt.pid !== pids[0], '重启实例一之后：manifest 里新加的那一段也生效了，“需重启”消失', JSON.stringify({ m: await pageMarks(a.id).catch(() => ''), need: ia.rt.needRestart }));
+
+  // 在 chrome://extensions 里打开“在无痕模式下启用”：扩展会重新加载一次，不该因为“没开开发者模式”被停用（需求方 2026-11-18 遇到：
+  // 伴随扩展被停用，还要自己开开发者模式、再把扩展打开）。伴随扩展和从文件夹加的扩展都查；重启实例以后也要还开着、还记着。
+  const extState = async (id, turnOn) => {
+    const c = await cdp(prof(id));
+    try {
+      const { targetId } = await c.send('Target.createTarget', { url: 'chrome://extensions' }); const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true }); await sleep(1500);
+      const ev = async (expression) => val(await c.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId));
+      for (const e of turnOn || []) { await ev(`new Promise(r => chrome.developerPrivate.updateExtensionConfiguration({ extensionId: ${JSON.stringify(e)}, incognitoAccess: true }, () => r(1)))`); await sleep(2500); }
+      const out = JSON.parse(await ev(`new Promise(r => chrome.developerPrivate.getExtensionsInfo({}, xs => chrome.developerPrivate.getProfileConfiguration(c => r(JSON.stringify({ dev: c.inDeveloperMode, exts: Object.fromEntries(xs.map(x => [x.id, x.name + ' ' + x.state + (x.incognitoAccess.isActive ? ' 无痕开' : ' 无痕关') + ' ' + Object.keys(x.disableReasons).filter(k => x.disableReasons[k]).join('/')])) })))))`) || '{}');
+      await c.send('Target.closeTarget', { targetId }); return out;
+    } finally { c.close(); }
+  };
+  const COMPANION = (await api('GET', '/api/state')).companionId || 'doepfdknoapkdegjpopaicigcdnhlifp';
+  const fine = (s, e) => / ENABLED 无痕开 $/.test((s.exts || {})[e] || '');
+  const s1 = await extState(a.id, [COMPANION, x.extId]);
+  check(s1.dev === false && fine(s1, COMPANION) && fine(s1, x.extId), '没开开发者模式，打开“在无痕模式下启用”：伴随扩展和本地扩展都还开着', JSON.stringify(s1));
+  const seen0 = (await inst(a.id)).rt.companionSeen;
+  const alive = await until(async () => { const i = await inst(a.id); return i.rt.companionSeen && i.rt.companionSeen !== seen0 ? i.rt.companionSeen : ''; }, 40000);
+  check(!!alive, '打开以后伴随扩展还在向核心服务报到', JSON.stringify({ before: seen0, after: (await inst(a.id)).rt.companionSeen }));
+  await api('POST', `/api/instances/${a.id}/restart`);
+  await sleep(3000); await waitRunning(a.id);
+  const s2 = (await until(async () => { try { const v = await extState(a.id); return fine(v, COMPANION) ? v : null; } catch { return null; } }, 25000)) || (await extState(a.id).catch((e) => ({ err: e.message })));
+  check(fine(s2, COMPANION) && fine(s2, x.extId), '重启实例以后：两个扩展还开着，“在无痕模式下启用”还记着', JSON.stringify(s2));
 } catch (e) { check(false, '跑到一半出错', e.stack || e.message); }
 finally {
   try { if (extRow) await api('DELETE', `/api/extensions/${extRow}`); } catch {}
