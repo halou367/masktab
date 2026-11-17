@@ -47,6 +47,7 @@ type group struct {
 	normal  Rect // 没铺满时的外框
 	filled  bool // 铺满屏幕（代替最大化）
 	fillTo  Rect
+	settle  time.Time // 这之前先不显示栏：窗口正在放最大化 / 还原的动画（见 toggleFill）
 	inset   [4]int // 窗口外面那圈看不见的边：左、上、右、下各多宽（见 noteInset）
 	insetOK bool
 
@@ -645,6 +646,9 @@ func (g *group) toggleFill() {
 		return
 	}
 	work, _ := screenOf(h) // 先记下在哪块屏幕上：还原以后窗口可能回到别处
+	// 系统放动画的这一小会儿（约四分之一秒）先不显示实例栏：栏是另一个窗口，进不了系统的动画，
+	// 不藏的话它一下子就到了新位置，窗口还在半路上，看着是一条色条悬在空中等窗口（连拍屏幕看到的）。
+	g.settle = time.Now().Add(280 * time.Millisecond)
 	if g.filled {
 		if !isZoomed(h) {
 			setCalm(h, true)
@@ -691,6 +695,20 @@ func (g *group) toggleFill() {
 	g.filled, g.fillTo = true, winRect(h)
 }
 
+// settleTick：最大化 / 还原的动画放完了，把先藏起来的栏摆回去。
+func (m *mgr) settleTick() {
+	now := time.Now()
+	for _, g := range m.groups {
+		if !g.settle.IsZero() && !now.Before(g.settle) {
+			g.settle = time.Time{}
+			g.rect = Rect{}
+			g.place()
+			g.pickBg()
+			g.repaintIfChanged()
+		}
+	}
+}
+
 // noteInset 记下窗口外面那圈看不见的边（拖着改大小用的）各有多宽。只在窗口是普通状态时量：最大化以后不一样。
 func (g *group) noteInset(h uintptr) {
 	if isZoomed(h) || isIconic(h) {
@@ -727,6 +745,10 @@ func (g *group) place() {
 		g.normal = win
 	}
 	g.noteInset(h)
+	if time.Now().Before(g.settle) { // 窗口正在放最大化 / 还原的动画（见 toggleFill）
+		g.hideBar()
+		return
+	}
 	sc := scaleOf(h)
 	r := BarRect(vis, sc)
 	if g.m.st.Compact {
@@ -1294,6 +1316,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		case wmTimer, wmApp:
 			if ms == wmTimer && wp == 2 {
 				if !m.off && m.enter() {
+					m.settleTick()
 					m.dragWatch()
 					if m.st.Compact {
 						m.hoverTick()
