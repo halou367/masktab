@@ -10,7 +10,14 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const [dir, out, desk] = process.argv.slice(2);
+const [dir, out, desk] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+// 分段跑（--only=段名,段名）：整套要两分多钟，改哪一块就只跑哪一段；scripts/check.sh pages 会把各段分给几个进程同时跑。
+// 段名见下面每一段开头的 want('…')；不带 --only 就全跑。新加的检查放进合适的段，或者新开一段（记得写进 scripts/check.sh 的 PAGE_SECTIONS）。
+const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean);
+const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'update', 'safe', 'import', 'a11y', 'heal', 'fp'];
+for (const s of ONLY) if (!SECTIONS.includes(s)) { console.error(`没有这一段：${s}（有：${SECTIONS.join(' ')}）`); process.exit(2); }
+const took = []; let cur = null;
+const want = (name) => { const t = Date.now(); if (cur) took.push(`${cur.name} ${((t - cur.t) / 1000).toFixed(0)}s`); cur = null; const ok = !ONLY.length || ONLY.includes(name); if (ok) cur = { name, t }; return ok; };
 fs.mkdirSync(out, { recursive: true });
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json' };
 const srv = http.createServer((q, r) => {
@@ -106,6 +113,10 @@ const mkctx = async (state) => { const c = await br.newContext({ viewport: { wid
 const ctx = await mkctx(fixture);
 const errors = [];
 const watch = (pg, name) => { pg.on('pageerror', (e) => errors.push(`${name}: ${e.message}`)); pg.on('console', (m) => { if (m.type() === 'error') errors.push(`${name}: ${m.text()}`); }); };
+const flow = [];
+const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${name}${ok ? '' : ' ' + JSON.stringify(got)}`); if (!ok) errors.push(`flow: ${name}`); };
+// 检查脚本自己中断（多半是要点的东西不在页面上，等到超时）：把已经跑完的结果和断在哪里打出来，不要只剩一句超时。
+process.on('uncaughtException', (e) => { console.log(flow.join('\n')); console.log(`失败：检查中断在“${cur?.name || '?'}”段：${String(e?.message || e).split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 3).join(' | ')}`); process.exit(1); });
 // 截图：[名字, 地址, 上下文]
 const shots = [['settings', 'app.html#settings'], ['node', 'app.html#node'], ['fp', 'app.html#fp'],
   ['instances', 'app.html#instances'], ['drawer', 'app.html#instances/p2'], ['import', 'app.html#instances/import'],
@@ -120,7 +131,7 @@ const roundScroll = (pg) => pg.evaluate(() => [...document.querySelectorAll('*')
   return [s.borderTopLeftRadius, s.borderTopRightRadius, s.borderBottomLeftRadius, s.borderBottomRightRadius].some((r) => parseFloat(r) > 0);
 }).map((e) => e.tagName.toLowerCase() + (e.className ? '.' + String(e.className).trim().replace(/\s+/g, '.') : '')));
 const rsBad = [];
-for (const [name, url] of shots) {
+if (want('shots')) for (const [name, url] of shots) {
   const pg = await ctx.newPage();
   watch(pg, name);
   await pg.goto(base + url);
@@ -132,7 +143,7 @@ for (const [name, url] of shots) {
 // 左右不能被裁（2026-11-16 用户截图：vivo 把“显示大小”调大后启动页左右被截）：窄屏（320 / 360 宽）上每一页不能横向溢出，
 // 也不能有元素伸出屏幕左右边（横向滚动条 .chips 之类自己会滚的容器里面的不算）。
 const edgeBad = [];
-for (const w of [320, 360]) {
+if (want('narrow')) for (const w of [320, 360]) {
   const c = await br.newContext({ viewport: { width: w, height: 760 }, deviceScaleFactor: 1, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, fixture);
   for (const [name, url] of shots) {
     const pg = await c.newPage(); watch(pg, `${name}@${w}`);
@@ -154,7 +165,7 @@ for (const w of [320, 360]) {
   }
   await c.close();
 }
-for (const [name, st, url] of [['light-newtab', light, 'newtab.html#inst=p2'], ['light-node', light, 'app.html#node'], ['light-settings', light, 'app.html#settings'], ['split-node', split, 'app.html#node'], ['split-newtab', split, 'newtab.html#inst=p2']]) {
+if (want('light')) for (const [name, st, url] of [['light-newtab', light, 'newtab.html#inst=p2'], ['light-node', light, 'app.html#node'], ['light-settings', light, 'app.html#settings'], ['split-node', split, 'app.html#node'], ['split-newtab', split, 'newtab.html#inst=p2']]) {
   const c = await mkctx(st); const pg = await c.newPage(); watch(pg, name);
   await pg.goto(base + url); await pg.waitForTimeout(700);
   await pg.screenshot({ path: path.join(out, name + '.png'), fullPage: true });
@@ -162,9 +173,7 @@ for (const [name, st, url] of [['light-newtab', light, 'newtab.html#inst=p2'], [
 }
 
 // 常驻页面的走法（与 app 里一样）：一个页面先停在 #idle，之后只改 # 后面的路由；系统返回键 = 把路由改成 __back。
-const flow = [];
-const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${name}${ok ? '' : ' ' + JSON.stringify(got)}`); if (!ok) errors.push(`flow: ${name}`); };
-{
+if (want('flow')) {
   const pg = await ctx.newPage();
   watch(pg, 'flow');
   await pg.goto(base + 'app.html#idle');
@@ -379,7 +388,7 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
   await pg.close();
 }
 // 新标签页：搜索框、伪装概况卡（三个小圆环）、书签、最近访问、已存账号；点卡片 = 去节点与出口
-{
+if (want('newtab')) {
   const pg = await ctx.newPage(); watch(pg, 'newtab');
   await pg.goto(base + 'newtab.html#inst=p2'); await pg.waitForTimeout(800);
   const nt = await pg.evaluate(() => ({ q: !!document.querySelector('.nq input'), rings: document.querySelectorAll('.nstat .ring').length, cf: !!document.querySelector('.nstat .cfbig.good'),
@@ -396,7 +405,7 @@ const check = (name, ok, got) => { flow.push(`${ok ? '通过' : '失败'}：${na
 }
 // 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点页比内容。
 // 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹页里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
-if (desk) {
+if (desk && want('desk')) {
   let deskTheme = fixture.settings?.theme, deskMany = false, deskUpd = null;
   const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
@@ -596,10 +605,10 @@ if (desk) {
   }
   await mp.close(); await dctx.close(); dsrv.close();
 }
-check('没有“圆角 + 可滚动”的元素（各页面、对话框）', rsBad.length === 0, rsBad);
-check('窄屏（320 / 360 宽）左右不被裁：没有横向溢出、没有元素伸出屏幕', edgeBad.length === 0, edgeBad);
+if (!ONLY.length || ONLY.includes('shots') || ONLY.includes('flow')) check('没有“圆角 + 可滚动”的元素（各页面、对话框）', rsBad.length === 0, rsBad);
+if (!ONLY.length || ONLY.includes('narrow')) check('窄屏（320 / 360 宽）左右不被裁：没有横向溢出、没有元素伸出屏幕', edgeBad.length === 0, edgeBad);
 // IPv6 地址（决定 N-2）：入口、出口列表和地址库里都要写全，不能出现省略号，也不能把行撑出屏幕
-for (const w of [412, 320]) {
+if (want('v6')) for (const w of [412, 320]) {
   const c = await br.newContext({ viewport: { width: w, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, v6st);
   const pg = await c.newPage(); watch(pg, 'v6-' + w);
   const rows = (sel) => pg.evaluate(([sel, A, B]) => { const W = innerWidth, out = { n: 0, cut: [], wide: [], has: [] };
@@ -630,7 +639,7 @@ for (const w of [412, 320]) {
   await c.close();
 }
 // 在线更新（决策 N-3）：“组件与更新”页按 st.update 的各个阶段画；新标签页和设置首页有提示
-{
+if (want('update')) {
   const mk = (u, set = {}) => { const x = JSON.parse(JSON.stringify(fixture)); x.update = { current: '0.1.72', page: 'https://github.com/halou367/masktab/releases/tag/v0.1.80', phase: '', install: 'host', checkedAt: Date.now() - 3600e3, ...u }; Object.assign(x.settings, set); return x; };
   const avail = { latest: '0.1.80', available: true, size: 131796979, notes: '这一版的改动\n- 任务栏上每个实例是自己颜色的图标\n- 可以在线更新\n\n手机（安卓，arm64）\n- 覆盖安装，数据不会动' };
   const open = async (st, url, w = 412) => { const c = await br.newContext({ viewport: { width: w, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, st); const pg = await c.newPage(); watch(pg, 'upd'); await pg.goto(base + url); await pg.waitForTimeout(700); return { c, pg }; };
@@ -700,7 +709,7 @@ for (const w of [412, 320]) {
   }
 }
 // 左右安全区（viewport-fit=cover + env(safe-area-inset-*)）：模拟横屏左右各 40px 的安全区，页面内容要让开
-{
+if (want('safe')) {
   const c = await mkctx(fixture); const pg = await c.newPage(); watch(pg, 'safe-area');
   const cdp = await c.newCDPSession(pg);
   let ok = true;
@@ -716,7 +725,7 @@ for (const w of [412, 320]) {
   await c.close();
 }
 // 矮屏上的“导入邮箱”弹框：弹框自己不滚、不被截断，滚的是外面的遮罩
-{
+if (want('import')) {
   const c = await br.newContext({ viewport: { width: 412, height: 420 }, deviceScaleFactor: 1, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, fixture);
   const pg = await c.newPage(); watch(pg, 'import-short');
   await pg.goto(base + 'app.html#instances/import'); await pg.waitForTimeout(700);
@@ -733,7 +742,7 @@ for (const w of [412, 320]) {
   await c.close();
 }
 // 新标签页的无障碍标签不能和原生头像菜单 / 三点菜单的项重名：模拟器冒烟按无障碍标签找控件，会点到网页里的那个（run 43622971231）
-{
+if (want('a11y')) {
   const pg = await ctx.newPage(); watch(pg, 'ntp-labels');
   await pg.goto(base + 'newtab.html#inst=p2'); await pg.waitForTimeout(700);
   const names = ['节点与出口', '指纹与伪装', '账号管理', '录入登录', '新建实例', '导入邮箱', '管理实例', '更多选项', '设置', '实例 #'];
@@ -743,7 +752,7 @@ for (const w of [412, 320]) {
 }
 // ---------- 订阅 / 节点没了也改得了（决策 F-HEAL，2026-11-17 用户反馈的死循环）----------
 // 以前：订阅删了 → 实例打不开 → 节点面板只在实例自己的窗口里 → 改不了。现在实例管理的抽屉里就能进这个实例的“节点与出口”，它不用开着。
-{
+if (want('heal')) {
   const NOSUB = '还没有订阅，添加订阅后才能上网';
   const broken = (meId, withSub) => {
     const s = JSON.parse(JSON.stringify(fixture));
@@ -894,34 +903,38 @@ for (const w of [412, 320]) {
 console.log(flow.join('\n'));
 
 // fp.js：在普通页面环境里直接改 window，检查各项是否生效、同种子稳定、不同种子不同
-const pg = await ctx.newPage();
-await pg.goto(base + 'newtab.html#inst=p2&go=about:blank');
-await pg.addScriptTag({ path: path.join(dir, 'fp.js') });
-const fp = await pg.evaluate(() => {
-  const draw = () => { const c = document.createElement('canvas'); c.width = 120; c.height = 40; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 120, 40); x.fillStyle = '#069'; x.font = '16px sans-serif'; x.fillText('MaskTab 指纹', 4, 26); return c.toDataURL(); };
-  const before = draw();
-  const prof1 = window.MTFP.profile(111), prof2 = window.MTFP.profile(222);
-  const ok = window.MTFP.run(window, { seed: 111, tz: 'Asia/Tokyo', lang: 'ja-JP' });
-  const after1 = draw(), after2 = draw();
-  const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
-  return { ok, changed: before !== after1, stable: after1 === after2, cores: navigator.hardwareConcurrency, prof1, prof2, lang: navigator.language, langs: [...navigator.languages],
-    tzo: d.getTimezoneOffset(), hours: d.getHours(), str: d.toString(), loc: d.toLocaleString('en-US'), intl: new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false }).format(d), ro: Intl.DateTimeFormat().resolvedOptions().timeZone };
-});
-console.log(JSON.stringify(fp, null, 1));
-// 人机验证诊断关掉某几项时，fp.js 对应的部分保持内核原样，其余照改
-const pg2 = await ctx.newPage();
-await pg2.goto(base + 'newtab.html#inst=p2&go=about:blank');
-await pg2.addScriptTag({ path: path.join(dir, 'fp.js') });
-const b0lang = await pg2.evaluate(() => navigator.language);
-const fp2 = await pg2.evaluate(() => {
-  const draw = () => { const c = document.createElement('canvas'); c.width = 60; c.height = 20; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 60, 20); x.fillStyle = '#069'; x.fillText('MaskTab', 4, 14); return c.toDataURL(); };
-  const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
-  const b = { cv: draw(), tzo: d.getTimezoneOffset(), lang: navigator.language, cores: navigator.hardwareConcurrency, nat: Date.prototype.getTimezoneOffset };
-  window.MTFP.run(window, { seed: 111, tz: 'Pacific/Kiritimati', lang: 'ja-JP', off: ['canvas', 'tz', 'hw'] });
-  return { cv: draw() === b.cv, tz: d.getTimezoneOffset() === b.tzo && Date.prototype.getTimezoneOffset === b.nat, cores: navigator.hardwareConcurrency === b.cores, lang: navigator.language };
-});
-check('诊断关掉画布 / 时区 / 核心数：这三样保持原样；语言默认不在页面里改（A-10，改由内核原生设置）', fp2.cv && fp2.tz && fp2.cores && fp2.lang === b0lang, fp2);
-console.log(flow[flow.length - 1]);
+if (want('fp')) {
+  const pg = await ctx.newPage();
+  await pg.goto(base + 'newtab.html#inst=p2&go=about:blank');
+  await pg.addScriptTag({ path: path.join(dir, 'fp.js') });
+  const fp = await pg.evaluate(() => {
+    const draw = () => { const c = document.createElement('canvas'); c.width = 120; c.height = 40; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 120, 40); x.fillStyle = '#069'; x.font = '16px sans-serif'; x.fillText('MaskTab 指纹', 4, 26); return c.toDataURL(); };
+    const before = draw();
+    const prof1 = window.MTFP.profile(111), prof2 = window.MTFP.profile(222);
+    const ok = window.MTFP.run(window, { seed: 111, tz: 'Asia/Tokyo', lang: 'ja-JP' });
+    const after1 = draw(), after2 = draw();
+    const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+    return { ok, changed: before !== after1, stable: after1 === after2, cores: navigator.hardwareConcurrency, prof1, prof2, lang: navigator.language, langs: [...navigator.languages],
+      tzo: d.getTimezoneOffset(), hours: d.getHours(), str: d.toString(), loc: d.toLocaleString('en-US'), intl: new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false }).format(d), ro: Intl.DateTimeFormat().resolvedOptions().timeZone };
+  });
+  console.log(JSON.stringify(fp, null, 1));
+  // 人机验证诊断关掉某几项时，fp.js 对应的部分保持内核原样，其余照改
+  const pg2 = await ctx.newPage();
+  await pg2.goto(base + 'newtab.html#inst=p2&go=about:blank');
+  await pg2.addScriptTag({ path: path.join(dir, 'fp.js') });
+  const b0lang = await pg2.evaluate(() => navigator.language);
+  const fp2 = await pg2.evaluate(() => {
+    const draw = () => { const c = document.createElement('canvas'); c.width = 60; c.height = 20; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 60, 20); x.fillStyle = '#069'; x.fillText('MaskTab', 4, 14); return c.toDataURL(); };
+    const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+    const b = { cv: draw(), tzo: d.getTimezoneOffset(), lang: navigator.language, cores: navigator.hardwareConcurrency, nat: Date.prototype.getTimezoneOffset };
+    window.MTFP.run(window, { seed: 111, tz: 'Pacific/Kiritimati', lang: 'ja-JP', off: ['canvas', 'tz', 'hw'] });
+    return { cv: draw() === b.cv, tz: d.getTimezoneOffset() === b.tzo && Date.prototype.getTimezoneOffset === b.nat, cores: navigator.hardwareConcurrency === b.cores, lang: navigator.language };
+  });
+  check('诊断关掉画布 / 时区 / 核心数：这三样保持原样；语言默认不在页面里改（A-10，改由内核原生设置）', fp2.cv && fp2.tz && fp2.cores && fp2.lang === b0lang, fp2);
+  console.log(flow[flow.length - 1]);
+}
+want('');
+if (took.length) console.log('用时：' + took.join('，'));
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');
 await br.close();
 srv.close();

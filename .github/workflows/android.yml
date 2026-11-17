@@ -1,37 +1,15 @@
 # 安卓版（GeckoView 内核）的构建与模拟器冒烟测试，见 docs/android.md。
-# 两种触发：
-#   - main 分支：由 ci.yml 调用（workflow_call），每次推送都跑；通过后 ci.yml 把 APK 和电脑安装程序放进同一个 Release（decisions D-3）。
+# 两种触发（2026-11-17 起，decisions P-1：不再每次推送都跑，构建 + 模拟器要二十分钟）：
+#   - 由 ci.yml 调用（workflow_call）：手动触发 CI（要发版、或者只跑全套检查）时跑；通过后 ci.yml 把 APK 和电脑安装程序放进同一个 Release（decisions D-3）。
 #     版本号 = 0.1.<ci.yml 的运行序号>，与电脑版相同（被调用时 GITHUB_RUN_NUMBER 是调用方的）。
-#   - 其它分支：安卓相关文件有变化时自己运行，只出产物，不发布。
+#   - 单独手动触发（workflow_dispatch）：只想出一个 APK、跑一遍模拟器时用，只出产物，不发布。
+# 内置扩展的语法检查、两端页面检查不在这里了：每次推送由 ci.yml 的“快检查”“页面检查”跑（scripts/check.sh）。
 # 产物（Actions → 本次运行 → Artifacts）：
 #   MaskTab-android-arm64-v8a：调试签名的 APK，装到手机上用
 #   MaskTab-android-x86_64：同上，x86_64 架构（模拟器用）
 #   android-smoke：模拟器截图（启动进度、新标签页、头像菜单、实例管理、节点、网页）与 logcat
 name: Android
 on:
-  push:
-    branches-ignore: [main]
-    paths:
-      - 'android/**'
-      - 'companion/ext/ui.js'
-      - 'companion/ext/ui.css'
-      - 'companion/ext/sites.js'
-      - 'companion/ext/menu.js'
-      - 'companion/ext/instances.js'
-      - 'companion/ext/autofill.js'
-      - 'companion/ext/common.js'
-      - 'companion/ext/panel.js'
-      - 'companion/ext/panel.css'
-      - 'companion/ext/pages.js'
-      - 'companion/ext/ntp.js'
-      - 'companion/ext/vaultmsg.js'
-      - 'companion/ext/assets/flags/**'
-      # 核心服务（和电脑版同一份 Go 代码）也打进 APK，决策 D-4
-      - 'cmd/masktab/**'
-      - 'internal/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/android.yml'
   workflow_dispatch:
   workflow_call:
 
@@ -65,28 +43,6 @@ jobs:
           go-version-file: go.mod
       - name: 编译核心服务（和电脑版同一份代码，NDK 链接）
         run: bash android/scripts/build-core.sh "0.1.${GITHUB_RUN_NUMBER}"
-      - name: 检查内置扩展脚本语法
-        run: |
-          for f in android/ext/*.js companion/ext/menu.js companion/ext/instances.js companion/ext/autofill.js companion/ext/ui.js companion/ext/sites.js companion/ext/common.js companion/ext/panel.js companion/ext/pages.js companion/ext/ntp.js companion/ext/vaultmsg.js; do
-            node --check "$f" 2>/dev/null || node --input-type=module --check < "$f" || { echo "语法错误：$f"; exit 1; }
-          done
-      # 两端一致性检查：同一份核心服务状态，分别画电脑版的工具栏弹窗和手机的页面，节点面板的内容必须一样；
-      # 顺带把手机的每一页点一遍（菜单、面板、三个列表、四个标签）。
-      - name: 两端界面一致性检查
-        run: |
-          mkdir -p /tmp/ext /tmp/pw
-          cp -r companion/ext/{ui.js,ui.css,sites.js,menu.js,instances.js,autofill.js,common.js,panel.js,panel.css,pages.js,ntp.js,vaultmsg.js,assets} /tmp/ext/
-          cp -r android/ext/* /tmp/ext/
-          cp android/scripts/preview-pages.mjs android/scripts/fixture-state.json /tmp/pw/
-          cd /tmp/pw && npm init -y > /dev/null && npm i playwright@1.65.1 > /dev/null && npx playwright install --with-deps chromium > /dev/null
-          node preview-pages.mjs /tmp/ext /tmp/ppout "$GITHUB_WORKSPACE/companion/ext" | grep -v '^[ {}]'
-          test "${PIPESTATUS[0]}" = 0
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: preview-pages
-          path: /tmp/ppout
-          if-no-files-found: ignore
       - name: 构建
         working-directory: android
         run: gradle assembleDebug --stacktrace --no-daemon

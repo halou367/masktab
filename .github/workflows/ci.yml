@@ -1,38 +1,84 @@
-# 每次推送：
-#   1. 单元测试（Linux）。
-#   2. 在真实的 Windows 机器上构建两个安装程序，把完整包静默安装后对"装好的那一份"跑冒烟测试，
-#      再验证覆盖升级（数据与内核不动）与卸载（数据保留）。
-#   3. Linux 无头冒烟测试。
-#   4. 只在 main 分支：构建安卓版并跑模拟器冒烟测试（调用 android.yml），然后电脑版和安卓版一起发布。
-# 两端同步发布（decisions D-3）：一次推送 = 一个版本号 0.1.<本工作流的运行序号> = 一个 Release，
-#   里面同时有电脑安装程序和手机 APK；上面四项有一项不过就整个不发，不会出现只发了一端的版本。
+# 两种运行（2026-11-17 起，decisions P-1）：
+#   A. 每次推送（任何分支；只改文档的不跑）—— 只跑快的三样，几分钟出结果：
+#        1. 快检查：格式、go vet（Linux + Windows）、go test、界面脚本语法（scripts/check.sh fast）
+#        2. 页面检查：两端页面的点按流程（scripts/check.sh pages）
+#        3. Linux 无头冒烟（真内核 + 真核心服务）和扩展整机测试（scripts/check.sh smoke / ext）
+#      这三样本地都能跑、跑的是同一个脚本：推送之前先在本地跑过，CI 只是复核。
+#   B. 手动触发（Actions → CI → Run workflow，或 scripts/release.sh）—— 全套 + 发布：
+#        上面三样，加上
+#        4. 在真实的 Windows 机器上构建两个安装程序，把完整包静默安装后对"装好的那一份"跑冒烟测试，
+#           再验证覆盖升级（数据与内核不动）、在线更新与卸载（数据保留）。
+#        5. 构建安卓版并跑模拟器冒烟测试（调用 android.yml）。
+#        6. 在 main 上、且勾了“发布”：电脑版和安卓版一起发布。
+#      不勾“发布”（或者不在 main 上）= 只跑全套检查不发版：动了 Windows 专有的代码（安装程序、任务栏、在线更新）
+#      或安卓外壳（android/ 下的 Kotlin）时，合并之前用它验一遍。
+# 以前是“每次推到 main 就发一版”：改一行文档也要等十五分钟、多一个版本号。现在小改动攒着，要发的时候发一次。
+# 两端同步发布（decisions D-3）不变：一次发布 = 一个版本号 0.1.<本工作流的运行序号> = 一个 Release，
+#   里面同时有电脑安装程序和手机 APK；前面有一项不过就整个不发，不会出现只发了一端的版本。
+#   （运行序号每跑一次加一，所以版本号会跳号，只保证越来越大。）
 # 产物：
 #   Releases 页面：MaskTab-Setup-Full.exe（首次安装用，自带浏览器内核与代理内核）、MaskTab-Setup.exe（升级用，几 MB）、
 #                  MaskTab-android-arm64-v8a.apk（手机，覆盖安装）。
-#   Actions → 本次运行 → Artifacts：同样的安装程序，以及 smoke-windows / smoke-linux / android-smoke（测试结果、日志、截图）。
+#   Actions → 本次运行 → Artifacts：pages / smoke-linux（每次都有）；安装程序、smoke-windows、android-smoke（手动触发时）。
 name: CI
 on:
   push:
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: '跑完全套后发布到 Releases（只在 main 上有效）。不勾 = 只跑全套检查'
+        type: boolean
+        default: true
 
 permissions:
   contents: write # 发布安装程序到 Releases
 
+env:
+  MT_DEV: ${{ github.workspace }}/.dev # scripts/env.sh：开发工具、冒烟数据、日志截图都放这里
+
 jobs:
   test:
-    name: 单元测试
+    name: 快检查
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./...
-      - run: GOOS=windows go vet ./...
-      - run: go test ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: scripts/check.sh fast
+
+  pages:
+    name: 页面检查（两端界面的点按流程）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: scripts/dev-setup.sh
+      - run: scripts/check.sh pages
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pages
+          path: |
+            .dev/out/pages/
+            .dev/out/pages.log
+          if-no-files-found: ignore
 
   windows:
     name: 安装程序与冒烟测试（Windows，有界面）
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -210,45 +256,39 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: go build -o masktab ./cmd/masktab
       - name: 缓存内核与 mihomo
         uses: actions/cache@v4
         with:
           path: |
-            smoke-data/kernel
-            smoke-data/core/mihomo
+            .dev/smoke/kernel
+            .dev/smoke/core/mihomo
           key: tools-linux-${{ hashFiles('internal/kernel/fetch.go') }}
-      - name: 冒烟测试
-        run: node scripts/smoke.mjs --bin ./masktab --data smoke-data --shots shots
-      - name: 录入登录与自动填写（真浏览器 + 真核心服务；最后一项把伴随扩展真的装进 Chromium 走一遍）
-        run: |
-          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y > /dev/null && npm i playwright@1.65.1 > /dev/null && npx playwright install --with-deps chromium firefox > /dev/null
-          node "$GITHUB_WORKSPACE/scripts/rec-test.mjs" "$GITHUB_WORKSPACE/masktab" chromium "$GITHUB_WORKSPACE/shots/rec"
-          node "$GITHUB_WORKSPACE/scripts/rec-test.mjs" "$GITHUB_WORKSPACE/masktab" firefox
-          # 两遍：有代理内核（实例正常开着，工具栏是“直连”）、没有代理内核（实例不让开，工具栏上写着原因）
-          MASKTAB_MIHOMO="$GITHUB_WORKSPACE/smoke-data/core/mihomo" node "$GITHUB_WORKSPACE/scripts/ext-e2e.mjs" "$GITHUB_WORKSPACE/masktab" "$GITHUB_WORKSPACE/shots/ext"
-          node "$GITHUB_WORKSPACE/scripts/ext-e2e.mjs" "$GITHUB_WORKSPACE/masktab"
+      - run: scripts/dev-setup.sh --firefox
+      - name: 冒烟测试（真内核 + 真核心服务）
+        run: scripts/check.sh smoke
+      - name: 录入登录与自动填写（真浏览器 + 真核心服务；把伴随扩展真的装进 Chromium 走一遍，有 / 没有代理内核各一遍）
+        run: scripts/check.sh ext
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: smoke-linux
           path: |
-            shots/
-            smoke-data/smoke-result.md
-            smoke-data/smoke-core.log
-            smoke-data/state/masktab.log
+            .dev/out/
+            .dev/smoke/smoke-result.md
+            .dev/smoke/smoke-core.log
+            .dev/smoke/state/masktab.log
 
-  # 安卓版：只在 main 上由这里调用（版本号与电脑版相同）；其它分支由 android.yml 自己按文件变化触发。
+  # 安卓版：手动触发（要发版、或者要验安卓外壳）时由这里调用，版本号与电脑版相同。
   android:
     name: 安卓版
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/android.yml
 
   # 两端一起发布：前面全部通过才发，一个 Release 里同时放电脑安装程序和手机 APK。
   release:
     name: 发布（电脑 + 手机）
-    if: github.ref == 'refs/heads/main'
-    needs: [test, windows, smoke-linux, android]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: [test, pages, windows, smoke-linux, android]
     runs-on: ubuntu-latest
     env:
       VER: 0.1.${{ github.run_number }}
@@ -284,8 +324,8 @@ jobs:
           PREV=$(git tag --list 'v0.1.*' --sort=-v:refname | head -1)
           {
             echo "这一版的改动"
-            # 只列用户看得见的改动：标题以“CI：”“文档：”“测试：”开头的提交不列；一条都不剩时写一句
-            if [ -n "$PREV" ]; then git log --no-merges --format='- %s' "$PREV..$GITHUB_SHA"; else git log --no-merges --format='- %s' -5 "$GITHUB_SHA"; fi | grep -v -E '^- (CI|文档|测试)：' | head -15 > changes.txt || true
+            # 只列用户看得见的改动：标题以“CI：”“文档：”“测试：”“内部：”开头的提交不列；一条都不剩时写一句
+            if [ -n "$PREV" ]; then git log --no-merges --format='- %s' "$PREV..$GITHUB_SHA"; else git log --no-merges --format='- %s' -5 "$GITHUB_SHA"; fi | grep -v -E '^- (CI|文档|测试|内部)：' | head -15 > changes.txt || true
             if [ -s changes.txt ]; then cat changes.txt; else echo "- 内部调整，没有用户看得见的改动"; fi
             echo
             echo "---"

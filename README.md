@@ -47,6 +47,13 @@
 
 日志在 `data\state\masktab.log`（核心服务）和 `data\core\mihomo.log`（代理内核）。
 
+## 开发
+
+- 东西在哪、改什么去哪：`docs/MAP.md`（一页）。规矩和改动分级：`AGENTS.md`。
+- 环境：`scripts/dev-setup.sh`（装 Go、Node、Playwright，装在 `~/.cache/masktab-dev`）。
+- 检查：`scripts/check.sh fast | pages [段] | ext | smoke | all`，从秒级到三分钟。
+- 发版：`scripts/release.sh`（手动触发 CI：Windows 安装包、安卓模拟器、Linux 全过了，电脑和手机一起发）。推送本身不发版。
+
 ## 从源码构建
 
 需要 Go 1.24 及以上。

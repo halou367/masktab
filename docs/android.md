@@ -40,7 +40,7 @@ android/
     fetch-mihomo.sh       下载 mihomo v1.19.34 安卓 arm64 / amd64 并校验 SHA-256
     build-core.sh         用 NDK 把核心服务（cmd/masktab）编成 jniLibs/<abi>/libmasktab.so
     emulator-smoke.sh     CI 模拟器冒烟：装、启动、截图、查崩溃；第二轮放进旧版数据，验证迁移、经测试节点的代理分流与坏节点断流
-    preview-pages.mjs     用 Playwright 预览扩展页面并检查 fp.js；同一份状态再画电脑版弹窗，比对两端面板内容（CI 里每次都跑）
+    preview-pages.mjs     用 Playwright 预览扩展页面并检查 fp.js；同一份状态再画电脑版弹窗，比对两端面板内容（`scripts/check.sh pages`，CI 里每次都跑）
     fixture-state.json    上面用的状态：从真的核心服务（宿主模式）抓的，只改了数值
 ```
 
@@ -161,7 +161,7 @@ android/
 | APK 构建、模拟器里启动不崩、各页面截图 | CI（`.github/workflows/android.yml`），结果见 `docs/PROGRESS.md` |
 | 扩展页面（菜单、管理、节点、指纹、设置、扩展、新标签页）布局 | 沙箱 Chromium 预览（假数据），`android/scripts/preview-pages.mjs` |
 | 核心服务的宿主模式（决策 D-4）：旧数据迁移、edgetunnel 订阅、通用订阅、选线、坏节点 / 订阅拉不下来时断流不直连、换订阅后自己恢复、改时区免重启 | 沙箱 Linux amd64 上真的跑核心服务 + mihomo + 假 edgetunnel / 测试节点，从实例端口发请求核对；`go test`（`internal/core/host_test.go`）；CI 模拟器第二轮在安卓上再跑一遍（见下） |
-| 两端节点面板内容一致 | `preview-pages.mjs`：同一份状态画电脑版弹窗和手机页面，逐块比文字（CI 每次都跑） |
+| 两端节点面板内容一致 | `preview-pages.mjs`：同一份状态画电脑版弹窗和手机页面，逐块比文字（`scripts/check.sh pages`，CI 每次都跑） |
 | fp.js 逻辑 | 沙箱里真火狐 160 以内容脚本方式加载，开 `android/scripts/fpcheck.html` 逐项检查；CI 模拟器里实例 #3 打开同一页（日志 `MTFPCHECK pass`） |
 | 从菜单真点进“节点与出口 / 指纹与时区 / 管理实例”、整页之间换路由、点“测延迟” | CI 模拟器（`adb shell input tap`） |
 | 订阅 404、151 个节点（150 个不通）、接口卡 10 秒、接口报错时页面的表现 | 沙箱真火狐 160 + 假 app（原生消息）+ 真 mihomo；没有在模拟器 / 真机上做 |
