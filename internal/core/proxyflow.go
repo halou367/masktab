@@ -65,6 +65,16 @@ func exitValue(e *model.ExitEntry, item string) string {
 	return pipAddr(host, port)
 }
 
+// chainKey 是 edgetunnel /video/ 链式代理写法的密钥：服务端的 UUID，也就是节点的 uuid（trojan 节点是 password）。
+func chainKey(t model.Template) string {
+	for _, k := range []string{"uuid", "password"} {
+		if v, _ := t.Base[k].(string); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // pipAddr 把地址和端口拼成 proxyip 参数的写法；端口为 0 表示不写端口（服务端默认 443）。
 func pipAddr(host string, port int) string {
 	host = strings.Trim(host, "[]")
@@ -150,7 +160,7 @@ func (a *App) resolveLocked(in *model.Instance) resolved {
 		}
 	}
 	name := "n-" + short(in.ID)
-	path := exits.Rewrite(prof.Template.BasePath, typ, val, a.Settings.PathTemplate)
+	path := exits.RewriteChain(prof.Template.BasePath, typ, val, a.Settings.PathTemplate, chainKey(prof.Template), a.Settings.ChainPath)
 	ob := subscription.BuildOutbound(name, prof.Template, server, port, host, path)
 	return resolved{members: []string{name}, proxies: []map[string]any{ob}, want: name}
 }
@@ -270,7 +280,7 @@ func (a *App) applyConfig() error {
 				if p.Type == "proxyip" {
 					continue
 				}
-				path := exits.Rewrite(sub.Template.BasePath, p.Type, p.Value, a.Settings.PathTemplate)
+				path := exits.RewriteChain(sub.Template.BasePath, p.Type, p.Value, a.Settings.PathTemplate, chainKey(*sub.Template), a.Settings.ChainPath)
 				in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(p.Name, *sub.Template, via.Server, via.Port, host, path))...)
 				in.ScanMembers = append(in.ScanMembers, p.Name)
 			}

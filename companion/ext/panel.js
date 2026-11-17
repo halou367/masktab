@@ -73,6 +73,9 @@ const ecc = (n) => cc(n.exit);                 // 入口：普通网站的出口
 const pcc = (p) => cc(p.cf) || cc(p.exit);     // 出口（反代）：Cloudflare 站点的出口国家
 const kindTag = (x) => (x.kind === 'cf' ? h('span', { class: 'cfm cf', title: '优选：Cloudflare 官方 IP，只能当入口' }, '优选')
   : x.kind === 'proxy' ? h('span', { class: 'cfm cf', title: '反代：入口和出口都能当' }, '反代') : null);
+// 延迟那一格：点一下只重测这一个地址（不跑整轮）；pingKey 是 地址:端口，全局出口是 类型|值。
+const ping = (sub, key) => run(async () => { await api('POST', `/api/subscriptions/${sub.id}/ping`, { keys: [key] }); await load(); });
+const dlyBtn = (sub, x, key) => (isET(sub) && key ? h('button', { class: 'd pg ' + delayCls(x.delay), title: (x.delay > 0 ? `延迟 ${x.delay} ms${x.tcp ? `；TCP 握手 ${x.tcp} ms` : ''}` : x.err || '还没测') + '。点击重测延迟', onclick: stop(() => ping(sub, key)) }, delayText(x.delay)) : dly(x));
 const dly = (x) => h('span', { class: 'd ' + delayCls(x.delay), title: x.delay > 0 ? `延迟${x.tcp ? `；TCP 握手 ${x.tcp} ms` : ''}` : x.err || null }, delayText(x.delay));
 
 // IP 的类型和纯净度（核心服务查好放在 st.ipq 里，按 IP 取；查不到就不画，不编数字）。
@@ -196,7 +199,7 @@ async function customAddr(me, sub, what) {
 // 出口列表（反代）。点一行 = 就用这个 IP（手动）。
 function exitView(me, sub) {
   const all = sub.pips || [], curId = pipIdOf(me.proxy);
-  const ipOf = (p) => p.cf?.ip, rows = filtered(all, pcc, ipOf);
+  const ipOf = (p) => p.cf?.ip || p.exit?.ip, rows = filtered(all, pcc, ipOf);
   sortsNow = ['delay', 'score', 'speed'];
   const tipOf = (p) => [`${p.type === 'proxyip' ? p.value : p.type + '://' + p.value.replace(/^.*@/, '')}${p.label ? '   ' + p.label : ''}`,
     p.type !== 'proxyip' ? '全局出口：所有网站都从它出去' : null,
@@ -213,11 +216,11 @@ function exitView(me, sub) {
         flagOf(pcc(p), guessCC(p.label)),
         // 两行（演示定稿）：上面是写全的地址；下面是类型图标、纯净度（短条 + 分数）、城市 · 运营商。不通的下面写原因。
         h('span', { class: 'grow' },
-          isV6(pipName(p)) ? ipSpan(pipName(p), 'ip mono') : h('span', { class: 'ip mono' }, ipText(pipName(p)), p.type !== 'proxyip' && h('small', { title: '全局出口：所有网站都从它出去' }, ' · 全局')),
+          isV6(pipName(p)) ? ipSpan(pipName(p), 'ip mono') : h('span', { class: 'ip mono' }, ipText(pipName(p))),
           h('span', { class: 'l2' }, p.delay < 0 ? h('span', { class: 'bad el' }, p.err || '不通')
-            : [tyIcon(ipOf(p), 15), pbar(scoreOf(ipOf(p))), scoreOf(ipOf(p)) >= 0 && h('b', { class: scoreCls(scoreOf(ipOf(p))) }, scoreOf(ipOf(p))), h('span', { class: 'el' }, where(p.cf) || p.label || '')])),
-        p.type === 'proxyip' ? speedCell(sub, p, p.key) : null,
-        dly(p)); }),
+            : [p.type === 'proxyip' ? h('span', { class: 'cfm cf', title: '反代：只有 Cloudflare 的网站从它出去' }, '反代') : h('span', { class: 'cfm cf', title: '全局出口：所有网站都从它出去' }, p.type), tyIcon(ipOf(p), 15), pbar(scoreOf(ipOf(p))), scoreOf(ipOf(p)) >= 0 && h('b', { class: scoreCls(scoreOf(ipOf(p))) }, scoreOf(ipOf(p))), h('span', { class: 'el' }, where(p.cf) || p.label || '')])),
+        p.type === 'proxyip' ? speedCell(sub, p, p.key) : h('span', { class: 'sp' }),
+        dlyBtn(sub, p, p.type === 'proxyip' ? p.key : p.type + '|' + p.value)); }),
       !flt && !resOnly && h('button', { class: 'iprow r t' + (!curId ? ' on' : ''), role: 'option', title: '不指定出口：CF 网站从哪里出去由服务端决定', onclick: () => pickIt('') },
         h('span', { class: 'flag q' }, icon('none', 16)), h('span', { class: 'grow' }, h('span', { class: 'ip' }, '不指定'), h('span', { class: 'l2' }, '由服务端决定'))),
       !rows.length && (flt || resOnly) && h('div', { class: 'empty' }, '没有')),
@@ -245,9 +248,9 @@ function entryView(me, sub) {
           et && isV6(addrText(n)) ? ipSpan(addrText(n), 'ip mono', n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧'))
             : h('span', { class: 'ip' + (et ? ' mono' : '') }, et ? ipText(addrText(n)) : n.label || addrText(n), n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧')),
           h('span', { class: 'l2' }, n.delay < 0 ? h('span', { class: 'bad el' }, n.err || '不通')
-            : et ? [kindTag(n), n.colo && h('span', { class: 'cnt2 colo', title: '机房' }, icon('dc', 14), n.colo), h('span', { class: 'el' }, n.label || '')] : h('span', { class: 'el mono' }, addrText(n)))),
+            : et ? [kindTag(n), tyIcon(n.exit?.ip, 15), pbar(scoreOf(n.exit?.ip)), scoreOf(n.exit?.ip) >= 0 && h('b', { class: scoreCls(scoreOf(n.exit?.ip)) }, scoreOf(n.exit?.ip)), n.colo && h('span', { class: 'cnt2 colo', title: 'Cloudflare 机房' }, n.colo), h('span', { class: 'el' }, where(n.exit) || n.label || '')] : h('span', { class: 'el mono' }, addrText(n)))),
         speedCell(sub, n, keyOf(n)),
-        dly(n)); }),
+        dlyBtn(sub, n, et ? keyOf(n) : '')); }),
       !rows.length && h('div', { class: 'empty' }, sub.scanning ? '正在探测…' : '没有')),
     et && [h('div', { class: 'pad-fab' }), h('button', { class: 'fab', title: '添加地址', 'aria-label': '添加地址', onclick: addAddr }, icon('add', 26))]];
 }

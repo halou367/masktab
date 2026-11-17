@@ -46,7 +46,7 @@ func (n nodeRef) key() string { return hostPort(n.Server, n.Port) }
 type pipRef struct {
 	ID      string // 出口条目的 id（展开的域名是 "id|IP"）；来自入口地址的是 "a:地址:端口"
 	Name    string
-	Type    string // proxyip | socks5 | http
+	Type    string // proxyip | socks5 | http | https | turn | sstp
 	Value   string
 	Label   string
 	Derived bool // 来自入口地址

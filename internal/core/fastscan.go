@@ -276,6 +276,20 @@ func (a *App) enrich(subID string) {
 				all = append(all, s.CF.IP)
 			}
 		}
+		// 入口也一样补上（列表里入口和出口显示同样的信息：地区、住宅 / 机房、纯净度）
+		for _, n := range a.nodesLocked(sub) {
+			s := a.scan[n.Name]
+			if s == nil || s.Exit == nil || s.Exit.IP == "" {
+				continue
+			}
+			if s.Exit.City == "" && s.Exit.Org == "" {
+				want[s.Exit.IP] = append(want[s.Exit.IP], s.Exit)
+			}
+			if s.Delay > 0 && !seen[s.Exit.IP] {
+				seen[s.Exit.IP] = true
+				all = append(all, s.Exit.IP)
+			}
+		}
 	}
 	a.mu.Unlock()
 	defer a.ipqEnsure(all...)
@@ -548,4 +562,67 @@ func (a *App) speedOfLocked(subID, key string) (state string, mbps float64) {
 		}
 	}
 	return "", 0
+}
+
+// Ping 只测指定的几个地址（界面上点一下延迟）：keys 是 地址:端口（入口和 proxyip 反代），全局出口是 类型|值。
+// 和整轮测速互不影响；测完补城市、运营商和纯净度。
+func (a *App) Ping(subID string, keys []string) {
+	want := map[string]bool{}
+	for _, k := range keys {
+		want[k] = true
+	}
+	a.mu.Lock()
+	sub := a.subLocked(subID)
+	host, useTLS := directOf(sub)
+	var ts []target
+	var g []pipRef
+	if sub != nil {
+		for _, t := range a.targetsLocked(sub) {
+			if want[t.key] {
+				ts = append(ts, t)
+			}
+		}
+		for _, p := range a.pipsLocked(sub) {
+			if p.Type != "proxyip" && want[p.key()] {
+				g = append(g, p)
+			}
+		}
+		if len(g) > 0 {
+			a.viaLocked(sub, a.nodesLocked(sub))
+		}
+	}
+	for _, t := range ts { // 先把这几行标成"正在测"：延迟清零，界面显示 —
+		if t.entry != "" {
+			a.slotLocked(t.entry).Delay = 0
+		}
+		if t.pip != "" {
+			a.slotLocked(t.pip).Delay = 0
+		}
+	}
+	a.bumpLocked("state", "")
+	a.mu.Unlock()
+	if host != "" && len(ts) > 0 {
+		hosts := probeHosts(host)
+		var wg sync.WaitGroup
+		for _, t := range ts {
+			wg.Add(1)
+			go func(t target) {
+				defer wg.Done()
+				r, err := traceAny(t.server, t.port, hosts, useTLS)
+				a.mu.Lock()
+				a.applyDirectLocked(t, r, err, "")
+				a.bumpLocked("state", "")
+				a.mu.Unlock()
+			}(t)
+		}
+		wg.Wait()
+	}
+	if len(g) > 0 && a.coreOK && a.applyConfig() == nil {
+		a.testPips(g)
+	}
+	a.mu.Lock()
+	a.saveScanLocked()
+	a.bumpLocked("state", "")
+	a.mu.Unlock()
+	a.enrich(subID)
 }

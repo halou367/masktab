@@ -565,3 +565,17 @@ html.pc .ct > .ib { width: 34px; height: 34px; }
 .dh > .grow { min-width: 0; }
 .frow .btn { margin-left: auto; }
 @media (max-width: 380px) { .drawer .acc { padding-left: 10px; } .drawer .acc .ib { width: 30px; height: 30px; } .drawer .acc > .grow { margin-left: 6px; } }
+
+/* 设置 → 订阅与地址库：每行带探测结果（国旗、住宅 / 机房、纯净度、地区、下载、延迟） */
+.librow .lic .flag { width: 24px; height: 18px; border-radius: 3px; }
+.librow .lty { display: inline-flex; align-items: center; gap: 2px; color: var(--on2); }
+.librow .s b { font-weight: 600; font-size: 12.5px; }
+.librow .trail .ld { min-width: 52px; text-align: right; font-size: 13px; }
+.librow .trail .lsp { font-size: 12px; }
+.librow.dead .t, .librow.dead .lic { opacity: .5; }
+.iprow button.d.pg, .librow button.ld { background: none; border: 0; padding: 2px 4px; margin: -2px -4px; border-radius: 6px; cursor: pointer; font: inherit; color: inherit; }
+.iprow button.d.pg { font-family: var(--mono); font-size: 13px; }
+.iprow button.d.pg.good, .librow button.ld.good { color: var(--good); } .iprow button.d.pg.mid, .librow button.ld.mid { color: var(--mid); } .iprow button.d.pg.bad, .librow button.ld.bad { color: var(--bad); } .iprow button.d.pg.na, .librow button.ld.na { color: var(--on3); }
+:is(.iprow button.d.pg, .librow button.ld, .librow button.lsp):hover { background: var(--st2); }
+.librow button.lsp { background: none; border: 0; padding: 2px 4px; border-radius: 6px; cursor: pointer; font: inherit; color: var(--acc); display: inline-flex; align-items: center; }
+.librow button.lsp.good { color: var(--good); } .librow button.lsp.mid { color: var(--mid); } .librow button.lsp.bad { color: var(--bad); }

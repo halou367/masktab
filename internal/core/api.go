@@ -668,6 +668,14 @@ func (a *App) routes(mux *http.ServeMux) {
 		case "test":
 			go a.Scan(id)
 			reply(w, nil, nil)
+		case "ping": // 只测这几个地址的延迟：{keys: ["地址:端口" 或 "类型|值", …]}（界面上点延迟）
+			var b struct{ Keys []string }
+			if err := body(r, &b); err != nil {
+				reply(w, nil, err)
+				return
+			}
+			go a.Ping(id, b.Keys)
+			reply(w, nil, nil)
 		case "speed": // 测下载峰值：{keys: ["地址:端口", …]}；?stop=1 停止
 			if r.URL.Query().Get("stop") == "1" {
 				a.SpeedStop(id)
@@ -844,6 +852,8 @@ func (a *App) routes(mux *http.ServeMux) {
 		}
 		a.mu.Lock()
 		bindChanged := a.Settings.BindIface != s.BindIface
+		// 节点 path 的写法变了：已经在用的实例要换成新写法，重载 mihomo 配置
+		pathChanged := a.Settings.PathTemplate != s.PathTemplate || a.Settings.ChainPath != s.ChainPath
 		a.Settings = s
 		a.saveLocked("settings")
 		a.bumpLocked("state", "")
@@ -851,6 +861,10 @@ func (a *App) routes(mux *http.ServeMux) {
 		tabbar.Poke()
 		if bindChanged { // 换了绑定网卡：重新识别并重载 mihomo 配置
 			a.refreshBind()
+			reply(w, nil, a.applyConfig())
+			return
+		}
+		if pathChanged {
 			reply(w, nil, a.applyConfig())
 			return
 		}

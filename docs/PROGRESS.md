@@ -544,3 +544,11 @@ v0.1.55 只套了 UI-9 的四条规则，页面还是旧样子，需求方不认
   - 页面检查 144 项通过（新增 21 项）。
 - 未验证：真 Windows、真手机；有可用订阅时“选好线路后放行 / 提示重启”那一段。
 
+
+## 2026-11-17 SSTP 等全局出口；IP 列表统一显示、点延迟单测（分支 feat/sstp）
+
+- 需求方：DNS 泄露追问之后，要求“订阅地址库支持 sstp，edgetunnel 的 path 是 /video/…”，以及“订阅与地址库里每个 IP 都是空的，入口出口统一，点延迟单测，点下载测峰值，小窗和设置里都要”。
+- 先在需求方电脑上的 MaskTab #1 实测：没有 DNS 泄露，32 个解析器全是 Cloudflare 日本，WebRTC 也没漏。但用 ProxyIP 时，普通网站看到的是 Cloudflare 的 IP 和 DNS，时区却按 ProxyIP 的国家设，前后对不上。要让所有网站都从一个出口出去，得配全局代理，见 decisions N-4。
+- 改动：见 decisions N-4、UI-22。`internal/exits`（新类型、`RewriteChain`、`/video/` 加密）、`proxyflow.go`（`chainKey`）、`api.go`（`ping`，以及改 path 写法时重载配置）、`fastscan.go`（`Ping`，入口补纯净度）、`pages.js`（地址库行、高级设置）、`panel.js`（点延迟、入口和出口第二行统一）、`ui.css`。
+- 检查：`go test ./...` 通过，Windows 交叉编译通过；`/video/` 串用 edgetunnel 源码解回来是一致的。页面以 CI 为准。
+- 未验证：真服务端加 VPN Gate SSTP 能不能连上；真机上的界面。

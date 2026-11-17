@@ -1,5 +1,5 @@
 import { api, shownExit } from './api.js';
-import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, ask, confirmDlg, isV6, ipSpan } from './ui.js';
+import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, ask, confirmDlg, isV6, ipSpan, delayText, delayCls, pbar, scoreCls } from './ui.js';
 import { disguise } from './common.js';
 import { face } from './menu.js';
 
@@ -52,6 +52,7 @@ export function settingsHome(c) {
 }
 
 // ---------- 高级 ----------
+const isGlobalT = (t) => ['socks5', 'http', 'https', 'turn', 'sstp'].includes(t);
 export function settingsAdv(c) {
   const { st } = c, s = st.settings, host = hosted(st);
   const pick = async (title, opts, cur, k) => { const v = await choose(title, opts, cur); if (v != null && v !== cur) set(c, k, v); };
@@ -60,6 +61,7 @@ export function settingsAdv(c) {
     exitPick: [['unused', '自动挑未占用的'], ['none', '不指定']],
     tz: [['exit-cf', 'CF 网站的出口'], ['exit-direct', '普网的出口']],
     path: [['query', '/?proxyip=值&其余参数（默认）'], ['segment', '/proxyip=值?其余参数（备选）']],
+    chain: [['', '/video/加密串（默认）'], ['plain', '/sstp://账号@主机 明文（旧版服务端）']],
     ext: [['shared', '共享'], ['isolated', '独立']],
   };
   const text = (title, k, note, placeholder) => async () => { const v = await ask(title, { value: s[k] ?? '', note, placeholder }); if (v != null) set(c, k, k === 'subRefreshHours' ? (+v || 6) : v.trim()); };
@@ -68,6 +70,7 @@ export function settingsAdv(c) {
     row({ ic: 'swap', t: '手动模式下新实例的反代', s: name(O.exitPick, s.exitPick), drop: true, onclick: () => pick('手动模式下新实例的反代', O.exitPick, s.exitPick, 'exitPick') }),
     row({ ic: 'clock', t: '时区默认跟随', s: name(O.tz, s.tzSourceDefault), drop: true, onclick: () => pick('时区默认跟随', O.tz, s.tzSourceDefault, 'tzSourceDefault') }),
     row({ ic: 'code', t: 'ProxyIP 的 path 写法', s: name(O.path, s.pathTemplate), drop: true, onclick: () => pick('ProxyIP 的 path 写法', O.path, s.pathTemplate, 'pathTemplate') }),
+    row({ ic: 'code', t: '全局代理的 path 写法', s: name(O.chain, s.chainPath || ''), drop: true, title: 'SOCKS5 / HTTP / HTTPS / TURN / SSTP 出口写进节点 path 的方式。/video/ 是 edgetunnel 新版的链式代理写法，账号不以明文出现；服务端是旧版、不认时改成明文', onclick: () => pick('全局代理的 path 写法', O.chain, s.chainPath || '', 'chainPath') }),
     row({ ic: 'home', t: '查出口 IP 的类型和纯净度', s: '把出口 IP 发给 ip.net.coffee 查询住宅 / 机房和纯净度，结果存 7 天', trail: sw(!s.ipqOff, '查纯净度', (v) => set(c, 'ipqOff', !v)) }),
     sec('订阅与测速'),
     row({ ic: 'refresh', t: '订阅过期时间', s: `${s.subRefreshHours} 小时`, chev: true, onclick: text('订阅过期时间（小时）', 'subRefreshHours') }),
@@ -220,9 +223,49 @@ export function exitsView(c) {
   const seen = new Set(), custom = st.subscriptions.flatMap((x) => x.nodes).filter((n) => n.from === 'custom' && !seen.has(n.id) && seen.add(n.id));
   // 解析结果里的 IPv6：单个 IPv6 至少有两个冒号；带端口的写成 [IPv6]:端口。
   const v6Count = (e) => e.resolved.filter((x) => x.startsWith('[') || x.split(':').length > 2).length;
-  const exitRow = (e) => row({ ic: e.type === 'proxyip' ? 'swap' : 'globe', t: ipSpan(e.value, isV6(e.value) ? 'mono' : 'mono el'),
-    s: [h('span', { class: 'tag g' }, e.type), e.label && ' ' + e.label, e.type === 'proxyip' && e.expand && ` · 展开 ${e.resolved.length} 个地址${v6Count(e) ? `（IPv6 ${v6Count(e)} 个）` : ''}${e.refreshHours ? ` · 每 ${e.refreshHours} 小时` : ''}`,
-      e.resolveError && h('span', { class: 'bad' }, ` · 解析失败：${e.resolveError}`)], chev: true,
+  // 地址库的每一行带上探测结果（和面板里的出口列表同一份数据）：国旗、住宅 / 机房、纯净度、城市 · 运营商、下载、延迟。
+  // 一个条目可能出现在几个订阅里（反代：sub.pips；Cloudflare 官方 IP：当入口用，sub.nodes 里 from=pip），也可能展开成多个 IP：
+  // 都收进来，取延迟最低的那条当代表；展开的写“通了几个 / 共几个”。
+  const k443 = (v) => (/^\[.*\]$|^[^:]+$/.test(v) ? v + ':443' : v);
+  const probes = (e) => {
+    const out = [], keys = new Set([k443(e.value), ...(e.resolved || []).map(k443)]);
+    for (const sub of st.subscriptions) {
+      for (const p of sub.pips || []) if (p.id === e.id || p.id.startsWith(e.id + '|')) out.push({ delay: p.delay, info: p.cf || p.exit, speed: p.speed, speedState: p.speedState, err: p.err, key: p.id, sub, pkey: p.type === 'proxyip' ? p.key : p.type + '|' + p.value, g: p.type !== 'proxyip' });
+      for (const n of sub.nodes || []) { const k = `${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port || 443}`; if (n.from !== 'sub' && keys.has(k)) out.push({ delay: n.delay, info: n.exit, speed: n.speed, speedState: n.speedState, err: n.err, colo: n.colo, kind: n.kind, key: k, sub, pkey: k }); }
+    }
+    const seen = new Map();
+    for (const x of out) { const o = seen.get(x.key); if (!o || (x.delay > 0 && (o.delay <= 0 || x.delay < o.delay))) seen.set(x.key, x); }
+    return [...seen.values()];
+  };
+  const best = (xs) => xs.filter((x) => x.delay > 0).sort((a, b) => a.delay - b.delay)[0] || null;
+  const TY = { res: ['home', '住宅'], dc: ['dc', '机房'], mobile: ['phone', '手机流量'] };
+  const orgOf = (i) => (i?.org || '').replace(/^AS\d+\s*/, '').replace(/,?\s+(Inc|LLC|Ltd|Co|Corp|Limited|Corporation|Company)\b\.?.*$/i, '');
+  const fmtM = (v) => (v >= 100 ? String(Math.round(v)) : v.toFixed(1));
+  const exitRow = (e) => {
+    const xs = probes(e), b = best(xs), alive = xs.filter((x) => x.delay > 0).length, dead = xs.length > 0 && !alive;
+    const info = b?.info, ccode = (info?.country || '').toUpperCase(), q = info?.ip && st.ipq?.[info.ip], ty = TY[q?.type];
+    const lead = ccode ? (() => { const f = flag(ccode); f.title = cname(ccode); return f; })() : icon(isGlobalT(e.type) ? 'globe' : 'swap', 24);
+    const kindT = isGlobalT(e.type) ? e.type + ' · 全局' : b?.kind === 'cf' ? '优选' : b?.kind === 'proxy' || (b && !b.colo) ? '反代' : 'proxyip';
+    const sub2 = [h('span', { class: 'tag g' }, kindT),
+      ty && h('span', { class: 'lty', title: ty[1] }, icon(ty[0], 15), ty[1]),
+      q && q.score >= 0 && [pbar(q.score), h('b', { class: scoreCls(q.score) }, q.score)],
+      info ? h('span', { class: 'el' }, [ccode && cname(ccode), info.city, orgOf(info)].filter(Boolean).join(' · ')) : b?.colo ? h('span', {}, '机房 ' + b.colo) : null,
+      dead && h('span', { class: 'bad el' }, xs[0].err || '不通'),
+      !xs.length && h('span', { class: 'na' }, '还没探测（订阅页点“测延迟”）'),
+      e.label && h('span', { class: 'el' }, e.label),
+      e.type === 'proxyip' && e.expand && ` · ${alive}/${e.resolved.length} 个地址通${v6Count(e) ? `（IPv6 ${v6Count(e)} 个）` : ''}${e.refreshHours ? ` · 每 ${e.refreshHours} 小时解析` : ''}`,
+      e.resolveError && h('span', { class: 'bad' }, ` · 解析失败：${e.resolveError}`)];
+    // 右边两格和面板里的列表一样：下载（点击测峰值）、延迟（点击只重测这一个）。展开的域名测它全部的 IP。
+    const one = b || xs[0], subOf = one?.sub, keysOf = () => (xs.length > 1 ? xs.map((x) => x.pkey) : one ? [one.pkey] : []);
+    const stopEv = (fn) => (ev) => { ev.stopPropagation(); fn(); };
+    const pingIt = () => act(() => api('POST', `/api/subscriptions/${subOf.id}/ping`, { keys: keysOf() }));
+    const speedIt = () => act(() => api('POST', `/api/subscriptions/${subOf.id}/speed`, { keys: (b ? [b] : xs).filter((x) => !x.g).map((x) => x.pkey) }));
+    const trail = subOf && [
+      !one.g && (one.speedState === 'run' || one.speedState === 'wait' ? h('span', { class: 'lsp mono' }, one.speedState === 'run' ? (one.speed ? fmtM(one.speed) + 'M' : '…') : '···')
+        : b?.speed > 0 ? h('button', { class: 'lsp mono ' + (b.speed >= 30 ? 'good' : b.speed >= 8 ? 'mid' : 'bad'), title: `下载峰值 ${b.speed} Mbps。点击重测`, onclick: stopEv(speedIt) }, fmtM(b.speed) + 'M')
+          : b && h('button', { class: 'lsp', title: '测下载峰值', 'aria-label': '测下载峰值', onclick: stopEv(speedIt) }, icon('dl', 16))),
+      h('button', { class: 'ld mono ' + delayCls(b ? b.delay : one.delay), title: (b ? `延迟 ${b.delay} ms` : one.err || '还没测') + '。点击重测延迟', onclick: stopEv(pingIt) }, delayText(b ? b.delay : one.delay))];
+    return row({ ic: lead, t: ipSpan(e.type === 'proxyip' ? e.value : e.value.replace(/^.*@/, ''), isV6(e.value) ? 'mono' : 'mono el'), s: sub2, trail, chev: true, cls: 'librow' + (dead ? ' dead' : ''),
     onclick: async () => {
       const opts = [['label', '修改备注'], e.type === 'proxyip' && ['expand', e.expand ? '不展开（原样交给服务端）' : '展开为 IP 列表'], e.type === 'proxyip' && e.expand && ['hours', '重新解析的间隔'], e.type === 'proxyip' && e.expand && ['resolve', '立即解析'], ['del', '删除']].filter(Boolean);
       const v = await choose(e.value, opts, null);
@@ -232,9 +275,10 @@ export function exitsView(c) {
       else if (v === 'resolve') act(async () => { const r = await api('POST', `/api/exits/${e.id}/resolve`); toast(r?.error ? `解析失败：${r.error}` : `解析出 ${r?.count ?? 0} 个地址`); });
       else if (v === 'del') act(async () => { const r = await api('DELETE', `/api/exits/${e.id}`); if (r?.changed) toast(`有 ${r.changed} 个实例在用它，已换成别的，详情见各实例的提示`); });
     } });
+  };
   const importAddr = async () => {
     const v = await ask('导入地址', { multiline: true, ok: '导入', note: '是优选还是反代不用区分，探测后自动识别；域名默认展开为 IP（IPv4、IPv6、TXT 记录里的都算），每 3 小时重新解析。',
-      placeholder: '每行一条，可多行粘贴（CSV 也行）：\n104.16.1.1:443 #备注\n7.cf.3666888.xyz\nhttps://example.com/ip.txt\nsocks5://user:pass@1.2.3.4:1080' });
+      placeholder: '每行一条，可多行粘贴（CSV 也行）：\n104.16.1.1:443 #备注\n7.cf.3666888.xyz\nhttps://example.com/ip.txt\nsocks5://user:pass@1.2.3.4:1080\nsstp://vpn:vpn@xxx.opengw.net:443（全局出口：所有网站都从它出去）' });
     if (v && v.trim()) act(async () => { const r = await api('POST', '/api/exits', { text: v }); toast(r.added ? `新增 ${r.added} 条，正在探测…` : '没有新地址'); });
   };
   return [appBar('订阅与地址库', c.back),
@@ -242,9 +286,9 @@ export function exitsView(c) {
     st.subscriptions.map(subRow),
     row({ ic: 'add', t: '添加订阅', onclick: addSub }),
     custom.length > 0 && [sec('自定义地址', String(custom.length)), custom.map((n) => row({ ic: 'bolt', t: ipSpan(`${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port}`), s: n.label || null, trail: ibtn('del', '删除', () => act(async () => { const r = await api('DELETE', `/api/addresses/${n.id}`); if (r?.changed) toast(`有 ${r.changed} 个实例把它当入口，已换成延迟最低的`); })) }))],
-    sec('地址库（优选 IP / 反代 / SOCKS5 / HTTP）', String(st.exits.length)),
+    sec('地址库（优选 IP / 反代 / 全局代理）', String(st.exits.length)),
     st.exits.map(exitRow),
-    row({ ic: 'add', t: '导入地址', s: 'IP、域名、列表网址、socks5:// http://', onclick: importAddr })];
+    row({ ic: 'add', t: '导入地址', s: 'IP、域名、列表网址、socks5:// http:// https:// sstp://', onclick: importAddr })];
 }
 
 // ---------- 诊断 ----------

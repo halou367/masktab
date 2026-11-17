@@ -1161,3 +1161,19 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
       扩展还是原来那一个（沿用它的密钥；不靠名字猜）。那个文件夹里其实是另一个带着自己密钥的扩展时，原来的不动，报错说明。商店来的 = 重新下载商店里现在的版本。
     - **“重载”是强制的**：文件一个字没变也让开着的实例把它重新加载一次（结果是 hot，不会是 same）。same 只在“同一个路径再添加一次且没变化”时出现。
   - **没验证**：需求方自己的扩展（“鹈鹕鉴定”）；带界面窗口时扩展的弹窗 / 侧边栏开着被重载的样子；数据“共享”模式和重载之间有没有相互影响（按代码没有：重载不碰数据目录）。
+
+### N-4 全局出口加 HTTPS / TURN / SSTP；节点 path 默认用 edgetunnel 的 /video/ 写法（2026-11-17，需求方：“订阅地址库好像不支持 sstp，帮我加上并且优化支持 sstp”）
+- 背景：用 ProxyIP 的 edgetunnel 节点，只有 Cloudflare 的网站从 ProxyIP 出去（edgetunnel 的 forwardataTCP 先直连，失败了才走 proxyip），其他网站看到的都是 Cloudflare 的 IP 和 Cloudflare 的 DNS。想让所有网站（包括 DNS 检测）都从同一个住宅出口出去，只能给节点配一个“全局”的链式代理。edgetunnel 支持的类型有 socks5、http、https、turn、sstp，例如 VPN Gate 的 SSTP（账号 vpn / vpn）。
+- 做法：
+  - `internal/exits`：认出 `https://`、`turn://`、`sstp://` 以及 `sstp=` 这样的写法。https、turn、sstp 可以不写端口，按 edgetunnel 的默认端口 443、3478、443；`https://用户:密码@主机` 算 HTTPS 代理，不算列表网址。
+  - `RewriteChain`：全局出口默认写成 `/video/<加密串>`。加密串就是 edgetunnel 的 `base64SecretEncode`：把链式代理的 JSON 按节点的 uuid 逐字节异或（trojan 节点用 password），再做 Base64，这样 path 里不会出现明文的账号和地址。没有 uuid，或在“高级 → 全局代理的 path 写法”里选了“明文”时，写成 `/sstp://账号@主机:端口`，旧版服务端也认。
+  - 改 path 写法以后会马上重载 mihomo 配置。
+- 证据：`TestRewriteChain` 测了生成的串，又拿 edgetunnel 源码（2026-11-10 的 main）里的 `base64SecretDecode` 和 `/video/` 正则解回去，得到 `{"hostname":"public-vpn-1.opengw.net","password":"vpn","port":443,"type":"sstp","username":"vpn"}`，和原来一致。
+- 未验证：没有经真服务端跑过 SSTP 上游，Worker 能不能连上 VPN Gate 也还不知道；旧版 edgetunnel 不认 `/video/`，要手动切到明文。
+
+### UI-22 IP 列表统一：入口、出口、地址库同一种行，点延迟单测，点下载测峰值（2026-11-17，需求方：“订阅与地址库里面每一个 IP 都是空的……IP 类不论入口和出口都尽可能注释统一，可以测速测延迟，比如点击延迟可以单测延迟，点击测下载速度按钮可以测峰值，无论小窗还是设置内”）
+- 每一行：国旗；地址；第二行依次是类型（优选 / 反代 / 全局代理的类型）、住宅或机房图标、纯净度（短条加分数）、城市和运营商；右边是下载、延迟。
+- 设置 → 订阅与地址库：数据和面板用同一份（各订阅的 pips，以及当入口时的 nodes）。一个条目在几个订阅里都有时，取延迟最低的那条；展开成多个 IP 的域名显示“通了几个 / 共几个”。
+- 点延迟：调新接口 `POST /api/subscriptions/{id}/ping {keys}`，只测这几个地址（入口和反代是“地址:端口”，全局出口是“类型|值”），不跑整轮，测完补上城市、运营商和纯净度。点下载：沿用 `/speed`。
+- 入口也补上城市、运营商、住宅或机房和纯净度（`enrich` 把入口的出口 IP 也查一遍）。
+- 未验证：真 Windows 和真手机上的效果，以 CI 截图为准。

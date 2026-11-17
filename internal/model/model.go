@@ -119,7 +119,7 @@ type ExitEntry struct {
 	ID           string   `json:"id"`
 	UpdatedAt    int64    `json:"updatedAt"`
 	Deleted      bool     `json:"deleted,omitempty"`
-	Type         string   `json:"type"` // proxyip | socks5 | http
+	Type         string   `json:"type"` // proxyip | socks5 | http | https | turn | sstp
 	Value        string   `json:"value"`
 	Label        string   `json:"label,omitempty"`
 	Expand       bool     `json:"expand"`
@@ -195,25 +195,28 @@ type GlobalExtension struct {
 }
 
 type Settings struct {
-	SchemaVersion         int      `json:"schemaVersion"`
-	DefaultSubscriptionID string   `json:"defaultSubscriptionId,omitempty"`
-	NewExtData            string   `json:"newExtData"`         // shared（已确认的默认）| isolated
-	AddressModeDefault    string   `json:"addressModeDefault"` // custom | same-as-exit
-	ExitPick              string   `json:"exitPick"`           // unused | none
-	RestoreOnStart        bool     `json:"restoreOnStart"`
-	SearchURL             string   `json:"searchUrl"`
-	KernelPath            string   `json:"kernelPath,omitempty"` // 手动指定内核可执行文件
-	Kernel                string   `json:"kernel"`               // fingerprint-chromium | ungoogled
-	Mirror                string   `json:"mirror,omitempty"`     // GitHub 下载镜像前缀，如 https://ghfast.top/
-	DelayURL              string   `json:"delayUrl"`
-	PathTemplate          string   `json:"pathTemplate"` // query | segment（8.4）
-	SubRefreshHours       int      `json:"subRefreshHours"`
-	IPInfoEndpoints       []string `json:"ipInfoEndpoints"`
-	TZSourceDefault       string   `json:"tzSourceDefault"`      // exit-cf | exit-direct
-	IPQOff                bool     `json:"ipqOff,omitempty"`     // 不向第三方查询出口 IP 的类型和纯净度
-	UpdateSkip            string   `json:"updateSkip,omitempty"` // 这一版先不更新：新标签页上不提示这个版本
-	UpdateOff             bool     `json:"updateOff,omitempty"`  // 不自动检查更新（默认每 6 小时查一次 GitHub）
-	BindIface             string   `json:"bindIface,omitempty"`  // 出站绑定的网卡：空 = 自动识别物理网卡（绕过 TUN）；off = 不绑定；其它 = 网卡名
+	SchemaVersion         int    `json:"schemaVersion"`
+	DefaultSubscriptionID string `json:"defaultSubscriptionId,omitempty"`
+	NewExtData            string `json:"newExtData"`         // shared（已确认的默认）| isolated
+	AddressModeDefault    string `json:"addressModeDefault"` // custom | same-as-exit
+	ExitPick              string `json:"exitPick"`           // unused | none
+	RestoreOnStart        bool   `json:"restoreOnStart"`
+	SearchURL             string `json:"searchUrl"`
+	KernelPath            string `json:"kernelPath,omitempty"` // 手动指定内核可执行文件
+	Kernel                string `json:"kernel"`               // fingerprint-chromium | ungoogled
+	Mirror                string `json:"mirror,omitempty"`     // GitHub 下载镜像前缀，如 https://ghfast.top/
+	DelayURL              string `json:"delayUrl"`
+	PathTemplate          string `json:"pathTemplate"` // query | segment（8.4）
+	// 全局出口（socks5 / http / https / turn / sstp）的 path 写法：空 / video = edgetunnel 的 /video/加密串（默认，账号不以明文出现）；
+	// plain = /sstp://用户:密码@主机:端口 明文（旧版 edgetunnel 不认 /video/ 时用）。
+	ChainPath       string   `json:"chainPath,omitempty"`
+	SubRefreshHours int      `json:"subRefreshHours"`
+	IPInfoEndpoints []string `json:"ipInfoEndpoints"`
+	TZSourceDefault string   `json:"tzSourceDefault"`      // exit-cf | exit-direct
+	IPQOff          bool     `json:"ipqOff,omitempty"`     // 不向第三方查询出口 IP 的类型和纯净度
+	UpdateSkip      string   `json:"updateSkip,omitempty"` // 这一版先不更新：新标签页上不提示这个版本
+	UpdateOff       bool     `json:"updateOff,omitempty"`  // 不自动检查更新（默认每 6 小时查一次 GitHub）
+	BindIface       string   `json:"bindIface,omitempty"`  // 出站绑定的网卡：空 = 自动识别物理网卡（绕过 TUN）；off = 不绑定；其它 = 网卡名
 	// 界面（2026-11-15，Chrome 风格界面，decisions UI-1）：两端共用
 	Theme     string     `json:"theme,omitempty"`     // 外观：空 / system = 跟随浏览器或系统的深浅色（默认）| dark 深色 | light 浅色
 	Bookmarks []Bookmark `json:"bookmarks,omitempty"` // 新标签页上的书签（全部实例共用）

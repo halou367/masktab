@@ -1,6 +1,10 @@
 package exits
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestRewrite(t *testing.T) {
 	cases := []struct{ base, typ, val, tpl, want string }{
@@ -66,5 +70,60 @@ func TestParseLoose(t *testing.T) {
 	}
 	if u := ListURLs(in); len(u) != 2 || u[0] != "https://example.com/ip.txt" || u[1] != "http://example.com/list/ip.txt" {
 		t.Errorf("ListURLs = %v", u)
+	}
+}
+
+// 全局出口：/video/ 写法要能被 edgetunnel 的 base64SecretDecode 解回同一个链式代理 JSON；没有密钥或选了明文时用 /类型:// 写法。
+func TestRewriteChain(t *testing.T) {
+	const uuid = "8f8e3c1a-1111-4222-8333-944455556666"
+	got := RewriteChain("/?ed=2560", "sstp", "vpn:vpn@public-vpn-1.opengw.net", "query", uuid, "")
+	if !strings.HasPrefix(got, "/video/") || !strings.HasSuffix(got, "?ed=2560") {
+		t.Fatalf("写法不对：%s", got)
+	}
+	enc := strings.TrimSuffix(strings.TrimPrefix(got, "/video/"), "?ed=2560")
+	plain, err := DecodeChain(enc, uuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(plain), &m); err != nil {
+		t.Fatalf("解出来不是 JSON：%q", plain)
+	}
+	if m["type"] != "sstp" || m["hostname"] != "public-vpn-1.opengw.net" || m["port"] != float64(443) || m["username"] != "vpn" || m["password"] != "vpn" {
+		t.Errorf("链式代理 JSON 不对：%v", m)
+	}
+	if got := RewriteChain("/?ed=2560", "sstp", "vpn:vpn@h.example.com:992", "query", uuid, "plain"); got != "/sstp://vpn:vpn@h.example.com:992?ed=2560" {
+		t.Errorf("明文写法：%s", got)
+	}
+	if got := RewriteChain("/?ed=2560", "socks5", "1.2.3.4:1080", "query", "", ""); got != "/socks5://1.2.3.4:1080?ed=2560" {
+		t.Errorf("没有密钥时退回明文：%s", got)
+	}
+	// 已经带 /video/ 的 path 换成 proxyip 时要去掉
+	if got := RewriteChain("/video/abc=?ed=2560", "proxyip", "1.1.1.1", "query", uuid, ""); got != "/?proxyip=1.1.1.1&ed=2560" {
+		t.Errorf("去掉旧的 /video/：%s", got)
+	}
+	// IPv6 带方括号
+	enc6 := strings.TrimPrefix(RewriteChain("/", "socks5", "[2001:db8::1]:1080", "query", uuid, ""), "/video/")
+	if p, _ := DecodeChain(enc6, uuid); !strings.Contains(p, `"hostname":"[2001:db8::1]"`) {
+		t.Errorf("IPv6：%s", p)
+	}
+}
+
+func TestParseGlobalTypes(t *testing.T) {
+	got := ParseLines("sstp://vpn:vpn@public-vpn-1.opengw.net\nhttps://u:p@proxy.example.com:8443\nturn=u:p@1.2.3.4:3478\nsstp=vpn:vpn@5.6.7.8:992\nhttps://example.com/ip.txt\nsocks5://1.2.3.4")
+	want := []Parsed{
+		{"sstp", "vpn:vpn@public-vpn-1.opengw.net", "", false}, {"https", "u:p@proxy.example.com:8443", "", false},
+		{"turn", "u:p@1.2.3.4:3478", "", false}, {"sstp", "vpn:vpn@5.6.7.8:992", "", false},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("条数 %d，期望 %d：%+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("第 %d 条 %+v，期望 %+v", i, got[i], want[i])
+		}
+	}
+	if !IsListURL("https://example.com/ip.txt") || IsListURL("https://u:p@proxy.example.com:8443") {
+		t.Error("IsListURL 分不清列表网址和 HTTPS 代理")
 	}
 }
