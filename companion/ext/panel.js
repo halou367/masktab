@@ -1,6 +1,6 @@
-import { api, fmtBytes, RESTART_WHY, noticeText } from './api.js';
+import { api, fmtBytes, noticeText } from './api.js';
 import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, cfDot, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan, avatar } from './ui.js';
-import { disguise, cfRep } from './common.js';
+import { disguise, cfRep, restartText, restartPath } from './common.js';
 
 // 节点面板（电脑和手机共用，决策 D-4）：节点与出口、指纹与伪装，以及几个占满页面的列表（订阅线路、出口国家、出口、入口）。
 // 电脑版由 popup.js 放进工具栏弹窗、由 app.js 放进设置页；安卓版由 main.js 放进“节点与出口”“指纹与伪装”两页。
@@ -334,8 +334,7 @@ function mainView(me, sub) {
   if (on) { const c = exitCard(me, sub && (!(exitAuto && entryAuto) || px.entryRegion) ? allAuto : null); if (c) kids.push(c); }
   if (st.core.error) kids.push(banner(true, st.core.error, lk('重试', () => run(() => api('POST', '/api/setup/retry'), '正在重试…'))));
   const noexit = on && rt.notice?.startsWith('noexit:'), pipGone = on && sub && et && !exitAuto && p && p.direct && !p.cf;
-  // 手机：重启实例换不掉内核里的会话状态，出口时区变了要重启整个 app 才算数（decisions A-11）
-  const restartNow = st.host === 'android' && rt.needRestart?.includes('timezone') ? () => api('POST', '/ui/restart') : () => api('POST', `/api/instances/${me.id}/restart`);
+  const restartNow = () => api('POST', restartPath(st, me));
   // 断着网的时候，提示旁边直接给“怎么修”（决策 F-HEAL）：缺什么就去选什么，不让用户自己找。
   const curNode = sub ? sub.nodes.find((n) => n.id === (et ? px.addressId : px.nodeKey)) || null : null;
   const fixes = () => {
@@ -347,7 +346,7 @@ function mainView(me, sub) {
       !(exitAuto && entryAuto) && lk('改自动', allAuto),
       linesOf().length > 1 && lk('换线路', go('sub'))];
   };
-  if (rt.needRestart?.length) kids.push(banner(false, '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、'), lk('立即重启', () => run(restartNow))));
+  if (rt.needRestart?.length) kids.push(banner(false, restartText(rt), lk('立即重启', () => run(restartNow))));
   else if (noexit) kids.push(banner(true, noticeText(rt.notice, cname), lk('换国家', (ev) => pickRegion(ev.currentTarget, me, sub))));
   else if (pipGone) kids.push(banner(true, '出口不通：CF 网站连不上', lk('选别的', go('exit')), lk('改自动', allAuto)));
   else if (rt.cut || rt.error) kids.push(banner(true, [live && h('b', {}, '断网中（没有直连）：'), rt.error || rt.cut], fixes()));

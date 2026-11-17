@@ -16,6 +16,10 @@ export function mismatch(inst) {
   return !!(p && p.cf && p.direct && p.cf.country && p.direct.country && p.cf.country !== p.direct.country);
 }
 export const RESTART_WHY = { timezone: '出口时区已变化', extensions: '扩展有增删', fingerprint: '指纹 / 语言设置已改', appearance: '颜色 / 编号已改' };
+// “需重启：…”那一句，和点“立即重启”该调哪个接口。头像菜单、新标签页、节点与出口、扩展页都用这两个（决策 UI-19：提示要在第一眼看得到的地方，不只在节点页里）。
+// 手机上出口时区变了，重启实例换不掉内核里的会话状态，要重启整个 app 才算数（decisions A-11）；其余都是重启这个实例。
+export const restartText = (rt) => (rt?.needRestart?.length ? '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、') : '');
+export const restartPath = (st, inst) => (st?.host === 'android' && inst.rt?.needRestart?.includes('timezone') ? '/ui/restart' : `/api/instances/${inst.id}/restart`);
 // 核心服务给的提示有两种是代号（界面上各自有专门的展示），其余是直接能读的句子。
 export function noticeText(n, cname = (c) => c) {
   if (!n) return '';

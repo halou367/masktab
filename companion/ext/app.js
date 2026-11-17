@@ -37,7 +37,7 @@ panel.init(main, shell);
 function extensions() {
   const masked = st.instances;
   const addExt = async () => {
-    const v = await ask('添加扩展', { placeholder: 'Chrome 应用商店网址 / 扩展 ID，或 .crx、.zip、解包目录的完整路径', note: '只需在这里加一次；“范围”决定哪些实例有它。增删扩展后，运行中的实例需要重启才生效。', ok: '加入' });
+    const v = await ask('添加扩展', { placeholder: 'Chrome 应用商店网址 / 扩展 ID，或 .crx、.zip、解包目录的完整路径', note: '只需在这里加一次；“范围”决定哪些实例有它。扩展是实例启动时交给浏览器的：开着的实例要重启一次才用得上，这一页上面会提示并给“重启”。', ok: '加入' });
     if (!v || !v.trim()) return;
     const t = v.trim(), isPath = /^([a-zA-Z]:\\|\/|\\\\)/.test(t);
     toast('正在获取扩展…');
@@ -52,7 +52,13 @@ function extensions() {
     else if (v === 'rollback' && await confirmDlg('把共享数据回滚到上一份？', '重启实例后生效。', '回滚')) act(() => api('POST', `/api/extensions/${x.id}/rollback`, { backup: x.backups[0] }), '已回滚，重启实例后生效');
     else if (v === 'del' && await confirmDlg(`移除“${x.name}”？`, '', '移除', true)) act(() => api('DELETE', `/api/extensions/${x.id}`));
   };
+  // 开着的实例里，哪些还没用上现在这份扩展（扩展是启动时交给浏览器的）：写在这一页最上面，就地重启（决策 UI-19）。
+  // 以前改完这里什么都不说，要到各个实例的“节点与出口”里才看得到“需重启”。先重启别的，自己所在的这个放最后（它一重启这一页就没了）。
+  const stale = st.instances.filter((i) => i.rt.running && i.rt.needRestart?.includes('extensions'));
+  const restartStale = () => act(async () => { for (const i of [...stale].sort((a, b) => (a.id === st.me?.id) - (b.id === st.me?.id))) await api('POST', `/api/instances/${i.id}/restart`); }, '正在重启…');
   return [appBar(['扩展', h('span', { class: 'cnt' }, String(st.extensions.length))], null, h('button', { class: 'btn tonal', onclick: addExt }, icon('add', 18), '添加')),
+    stale.length > 0 && h('div', { class: 'warn need' }, icon('refresh', 20), h('span', { class: 'tx' }, `${stale.map((i) => '#' + i.no).join('、')} 开着，重启后才会用上这里的改动`),
+      h('button', { class: 'lk', onclick: restartStale }, stale.length > 1 ? '全部重启' : '立即重启')),
     st.extensions.map((x) => row({ ic: 'ext', t: [x.name, h('span', { class: 'sub' }, x.version)], s: [`${x.scope === 'all' ? '全部实例' : `${x.instanceIds.length} 个实例`} · 数据${x.data === 'shared' ? '共享' : '独立'}`, x.warn && h('span', { class: 'mid' }, ' · ' + x.warn)],
       trail: [sw(x.enabled, x.enabled ? '停用' : '启用', (v) => act(() => api('PATCH', `/api/extensions/${x.id}`, { enabled: v }))), ibtn('more', '更多', more(x))] })),
     !st.extensions.length && h('div', { class: 'empty' }, '全局库里还没有扩展。'),
