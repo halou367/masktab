@@ -79,6 +79,7 @@ var (
 
 	pDwmGetWindowAttribute = dwmapi.NewProc("DwmGetWindowAttribute")
 	pDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
+	pDwmFlush              = dwmapi.NewProc("DwmFlush")
 	pGetModuleHandleW      = kern32.NewProc("GetModuleHandleW")
 )
 

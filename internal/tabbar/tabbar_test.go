@@ -243,31 +243,65 @@ func TestCompact(t *testing.T) {
 	}
 }
 
-func TestStrip(t *testing.T) {
+func TestMorph(t *testing.T) {
 	red, blue, yellow := [3]int{217, 48, 37}, [3]int{26, 115, 232}, [3]int{249, 171, 0}
 	lk := LookOn([3]int{249, 171, 0}) // 标题栏是黄的
 	l := LayCompact(800, 3, 1)
-	c := Strip(800, l, []TabPaint{{Color: red}, {Color: blue}, {Color: yellow, Active: true}}, lk, 1)
-	if c.H != 5 {
+	tabs := []TabPaint{{Color: red}, {Color: blue}, {Color: yellow, Active: true}}
+	mid := func(i int) int { return (l.Slots[i].Tab.L + l.Slots[i].Tab.R) / 2 }
+
+	// 收着：只有色条
+	c := Morph(800, l, tabs, lk, 1, 0, false)
+	if c.H != 40 {
 		t.Fatalf("高 %d", c.H)
 	}
 	alpha := func(x, y int) int { return int(c.Pix[(y*c.W+x)*4+3]) }
-	mid := func(i int) int { return (l.Slots[i].Tab.L + l.Slots[i].Tab.R) / 2 }
 	if c.At(mid(0), 1) != red || c.At(mid(1), 1) != blue {
 		t.Fatalf("没选中的两段该是实例自己的颜色：%v %v", c.At(mid(0), 1), c.At(mid(1), 1))
 	}
-	if alpha(mid(0), 3) != 0 || alpha(mid(2), 3) != 255 {
-		t.Fatalf("没选中的只有 3 像素高，选中的 5 像素：%d %d", alpha(mid(0), 3), alpha(mid(2), 3))
+	if alpha(mid(0), 3) != 0 || alpha(mid(2), 3) != 255 || alpha(mid(2), 5) != 0 {
+		t.Fatalf("没选中的 3 像素高，选中的 5 像素：%d %d %d", alpha(mid(0), 3), alpha(mid(2), 3), alpha(mid(2), 5))
 	}
 	if got := c.At(mid(2), 1); got == yellow {
 		t.Fatalf("和标题栏同色的那一段该用浅一档：%v", got)
 	}
 	for _, x := range []int{2, l.Slots[0].Tab.R + 2, l.Plus.L + 5, 780} { // 段与段之间、＋ 的位置、右边：全透明
-		if alpha(x, 1) != 0 {
+		if alpha(x, 1) != 0 || alpha(x, 20) != 0 {
 			t.Fatalf("x=%d 该是透明的", x)
 		}
 	}
 	if a := alpha(l.Slots[2].Tab.L, 4); a >= 255 {
-		t.Fatalf("下面的角该是圆的：%d", a)
+		t.Fatalf("角该是圆的：%d", a)
+	}
+
+	// 完全展开：和平时的栏一样的东西，整张不透明
+	c = Morph(800, l, tabs, lk, 1, 1, false)
+	want := draw(800, 40, l, tabs, lk, 1, false)
+	for _, pt := range [][2]int{{mid(0), 20}, {mid(2), 20}, {700, 20}, {3, 38}, {l.Slots[0].Tab.L, l.Slots[0].Tab.T}, {(l.Plus.L + l.Plus.R) / 2, 19}} {
+		if c.At(pt[0], pt[1]) != want.At(pt[0], pt[1]) || alpha(pt[0], pt[1]) != 255 {
+			t.Fatalf("展开后 %v 处是 %v（透明度 %d），该是 %v", pt, c.At(pt[0], pt[1]), alpha(pt[0], pt[1]), want.At(pt[0], pt[1]))
+		}
+	}
+
+	// 中间：标签长了一半，底色半透明、只铺到一半，字还没出来
+	c = Morph(800, l, tabs, lk, 1, 0.5, false)
+	r := MorphRect(l.Slots[0].Tab, false, 1, 0.5)
+	if r.T != 3 || r.B != 18 || r.L != l.Slots[0].Tab.L {
+		t.Fatalf("一半的时候标签在 %v", r)
+	}
+	if alpha(mid(0), 10) != 255 || alpha(mid(0), 19) == 255 {
+		t.Fatalf("标签是实的，标签下面不是：%d %d", alpha(mid(0), 10), alpha(mid(0), 19))
+	}
+	if a := alpha(700, 10); a < 120 || a > 135 {
+		t.Fatalf("底色该是半透明：%d", a)
+	}
+	if alpha(700, 30) != 0 {
+		t.Fatalf("底色还没铺到下面：%d", alpha(700, 30))
+	}
+	if InkAlpha(0.5) != 0 || InkAlpha(1) != 1 || InkAlpha(0.75) != 0.5 {
+		t.Fatal("字在后一半才淡入")
+	}
+	if EaseOut(0) != 0 || EaseOut(1) != 1 || EaseOut(0.5) < 0.9 || EaseIn(0.5) > 0.2 || EaseIn(1) != 1 {
+		t.Fatal("节奏不对")
 	}
 }

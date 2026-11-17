@@ -39,7 +39,6 @@ type group struct {
 
 	// 自动收起（decisions UI-17）
 	open   bool      // 现在是展开的
-	clip   int       // 展开 / 收起的过程中只露出最上面这么多行（0 = 全部）
 	nearAt time.Time // 鼠标从什么时候起一直在色条附近
 	awayAt time.Time // 鼠标从什么时候起离开了展开的栏
 	pin    time.Time // 测试脚本刚发过鼠标消息：这之前不收起（真鼠标不在这儿）
@@ -134,7 +133,7 @@ func Run(h Host) {
 	}
 	ctlHwnd.Store(m.ctl)
 	_, _, _ = pSetTimer.Call(m.ctl, 1, 250, 0)
-	_, _, _ = pSetTimer.Call(m.ctl, 2, 50, 0) // 看鼠标是不是靠近了收起的色条
+	_, _, _ = pSetTimer.Call(m.ctl, 2, 30, 0) // 看鼠标是不是靠近了收起的色条
 	m.evCB = syscall.NewCallback(winEvent)
 	_, _, _ = pSetWinEventHook.Call(evForeground, evMinimizeEnd, 0, m.evCB, 0, 0, 0x2 /* 跳过自己进程 */)
 	var ms msg
@@ -458,7 +457,7 @@ func (g *group) sync(before []string, fresh string, fg uintptr) {
 	}
 	g.hookLoc(pidOf(h))
 	if !m.st.Compact {
-		g.open, g.clip = false, 0
+		g.open = false
 	}
 	g.place()
 	if !switched && g.shown && !g.moving && !dragging && !g.open { // 展开的栏盖着标题栏：量不到
@@ -671,7 +670,11 @@ func (g *group) place() {
 	if !g.shown {
 		flags |= swpShow
 	}
-	_, _, _ = pSetWindowPos.Call(g.hwnd, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()+ear(sc)), flags)
+	wh := r.H() + ear(sc)
+	if g.m.st.Compact { // 自动收起：窗口一直是展开那么大（收着时除了色条都是透明的，点得穿），展开、收起都不用动窗口
+		wh = px(OpenH, sc)
+	}
+	_, _, _ = pSetWindowPos.Call(g.hwnd, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(wh), flags)
 	g.shown = true
 	if resized {
 		g.sig = ""
@@ -988,7 +991,7 @@ func (g *group) mine(h uintptr, vis Rect, x, y int) bool {
 	return false
 }
 
-// hoverTick 每 50 毫秒看一次鼠标：在收起的色条附近停了 0.1 秒就展开，离开展开的栏 0.35 秒就收起。
+// hoverTick 每 30 毫秒看一次鼠标：在收起的色条附近停了 0.08 秒就展开，离开展开的栏 0.35 秒就收起。
 // 正拖着、正有实例要并进来的时候不收。
 func (m *mgr) hoverTick() {
 	x, y := cursor()
@@ -1009,7 +1012,7 @@ func (m *mgr) hoverTick() {
 			if g.nearAt.IsZero() {
 				g.nearAt = now
 			}
-			if keep || now.Sub(g.nearAt) >= 100*time.Millisecond {
+			if keep || now.Sub(g.nearAt) >= 80*time.Millisecond {
 				g.setOpen(true)
 				changed = true
 			}
@@ -1032,37 +1035,20 @@ func (m *mgr) hoverTick() {
 	}
 }
 
-// setOpen 展开 / 收起，中间过几帧：画的一直是展开的那一条，只是露出来的高度在变。
+// setOpen 展开 / 收起，带过渡（animate）。窗口本身不动、不变大小，变的只是画在上面的东西。
 func (g *group) setOpen(v bool) {
 	if g.open == v {
 		return
 	}
 	g.nearAt, g.awayAt = time.Time{}, time.Time{}
-	lo, hi := px(StripH, g.scale), px(OpenH, g.scale)
-	steps := []int{35, 65, 88}
-	frame := func(pct int) {
-		g.clip = lo + (hi-lo)*pct/100
-		g.render()
-		time.Sleep(13 * time.Millisecond)
+	if !v {
+		g.hover, g.hoverKind = -1, HitNone
 	}
-	if v {
-		g.open, g.clip = true, lo+(hi-lo)*steps[0]/100
-		g.rect = Rect{}
-		g.place() // 挪到展开的位置，画第一帧
-		time.Sleep(13 * time.Millisecond)
-		for _, p := range steps[1:] {
-			frame(p)
-		}
-		g.clip = 0
-		g.render()
-		return
+	if g.shown && g.rect.W() > 0 {
+		g.animate(v)
 	}
-	g.hover, g.hoverKind = -1, HitNone
-	for i := len(steps) - 1; i >= 0; i-- {
-		frame(steps[i])
-	}
-	g.open, g.clip = false, 0
-	g.rect = Rect{}
+	g.open = v
+	g.rect = Rect{} // 让 place 按新的状态记下栏的范围（收着：只有色条那么高）
 	g.place()
 }
 

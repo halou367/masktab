@@ -8,6 +8,8 @@ import "math"
 type Canvas struct {
 	W, H int
 	Pix  []byte
+	// Premul：每个点带自己的透明度（预乘），画上去的东西按“盖在上面”合成。不设的话透明度那一位不动（整张图之后统一设）。
+	Premul bool
 }
 
 func NewCanvas(w, h int, bg [3]int) *Canvas {
@@ -29,6 +31,9 @@ func (c *Canvas) blend(x, y int, col [3]int, a float64) {
 	p[0] = byte(float64(col[2])*a + float64(p[0])*(1-a) + 0.5)
 	p[1] = byte(float64(col[1])*a + float64(p[1])*(1-a) + 0.5)
 	p[2] = byte(float64(col[0])*a + float64(p[2])*(1-a) + 0.5)
+	if c.Premul {
+		p[3] = byte(255*a + float64(p[3])*(1-a) + 0.5)
+	}
 }
 
 // At 返回 (x, y) 处的颜色（测试用）。
@@ -110,6 +115,11 @@ func RoundTop(pix []byte, w, h int, rad float64) {
 	for i := 3; i < len(pix); i += 4 {
 		pix[i] = 255
 	}
+	Corners(pix, w, h, rad, true, true)
+}
+
+// Corners 把上面的角削成圆的：角上的点按露出多少乘下去（位图是预乘透明度的），别的点不动。
+func Corners(pix []byte, w, h int, rad float64, left, right bool) {
 	n := int(rad + 1)
 	for y := 0; y < n && y < h; y++ {
 		for x := 0; x < n && x < w; x++ {
@@ -120,9 +130,12 @@ func RoundTop(pix []byte, w, h int, rad float64) {
 			if a < 0 {
 				a = 0
 			}
-			for _, xx := range []int{x, w - 1 - x} {
+			for k, xx := range []int{x, w - 1 - x} {
+				if (k == 0 && !left) || (k == 1 && !right) {
+					continue
+				}
 				p := pix[(y*w+xx)*4:]
-				p[0], p[1], p[2], p[3] = byte(float64(p[0])*a), byte(float64(p[1])*a), byte(float64(p[2])*a), byte(255*a)
+				p[0], p[1], p[2], p[3] = byte(float64(p[0])*a), byte(float64(p[1])*a), byte(float64(p[2])*a), byte(float64(p[3])*a)
 			}
 		}
 	}
@@ -191,11 +204,6 @@ func Draw(w int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bo
 	return draw(w, px(BarH, scale), l, tabs, lk, scale, hoverPlus)
 }
 
-// DrawOpen 画自动收起的栏展开时的样子：一样的内容，高是 OpenH。
-func DrawOpen(w int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bool) *Canvas {
-	return draw(w, px(OpenH, scale), l, tabs, lk, scale, hoverPlus)
-}
-
 func draw(w, h int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bool) *Canvas {
 	c := NewCanvas(w, h, lk.Bg)
 	rad := 7 * scale
@@ -232,36 +240,79 @@ func (p TabPaint) StripColor(lk Look) [3]int {
 	return p.Color
 }
 
-// Strip 画收起时的色条（decisions UI-17）：每个实例一段，左右位置和展开后它的标签一样，当前的那个高一些。
-// 别处全透明（透明的地方鼠标点得穿，窗口上沿照常能拖、能改大小）。位图是预乘透明度的，直接交给分层窗口。
-func Strip(w int, l Layout, tabs []TabPaint, lk Look, scale float64) *Canvas {
-	h := px(StripH, scale)
-	c := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4)}
+// ---------- 自动收起：从色条到整条栏之间的每一刻（decisions UI-17） ----------
+
+func lerp(a, b, t float64) float64 { return a + (b-a)*t }
+
+func mix(a, b [3]int, t float64) [3]int {
+	return [3]int{int(lerp(float64(a[0]), float64(b[0]), t) + 0.5), int(lerp(float64(a[1]), float64(b[1]), t) + 0.5), int(lerp(float64(a[2]), float64(b[2]), t) + 0.5)}
+}
+
+// MorphRect 是一个标签在 e 这一刻占的位置：e = 0 是色条里的一小段（当前的 5 像素高，别的 3 像素），e = 1 是展开后的标签。左右不变。
+func MorphRect(tab Rect, active bool, scale, e float64) Rect {
+	sh := px(3, scale)
+	if active {
+		sh = px(StripH, scale)
+	}
+	return Rect{tab.L, int(lerp(0, float64(tab.T), e) + 0.5), tab.R, int(lerp(float64(sh), float64(tab.B), e) + 0.5)}
+}
+
+// InkAlpha 是 e 这一刻字、×、＋ 有多实：前一半不出现（标签还太扁），后一半渐渐出来。
+func InkAlpha(e float64) float64 {
+	return math.Max(0, math.Min(1, (e-0.5)/0.5))
+}
+
+// Morph 画自动收起的栏在 e 这一刻的样子（不含字）：e = 0 收着，只有色条；e = 1 完全展开。
+// 中间：每一段色条往下长成标签（颜色、圆角一起过渡），底色从透明变实并从上往下铺开，×、＋ 最后淡入。
+// 位图高 OpenH、预乘透明度，直接交给分层窗口；透明的地方鼠标点得穿。
+func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlus bool) *Canvas {
+	e = math.Max(0, math.Min(1, e))
+	h := px(OpenH, scale)
+	c := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4), Premul: true}
+	if e > 0 { // 底
+		edge := lerp(float64(px(StripH, scale)), float64(h), e)
+		for y := 0; y < h; y++ {
+			a := e * math.Max(0, math.Min(1, edge-float64(y))) // 最下面一行按露出多少算：往下铺的时候边缘不跳
+			if a <= 0 {
+				break
+			}
+			b, g, r, al := byte(float64(lk.Bg[2])*a+0.5), byte(float64(lk.Bg[1])*a+0.5), byte(float64(lk.Bg[0])*a+0.5), byte(255*a+0.5)
+			row := c.Pix[y*w*4 : (y+1)*w*4]
+			for x := 0; x < w; x++ {
+				row[x*4], row[x*4+1], row[x*4+2], row[x*4+3] = b, g, r, al
+			}
+		}
+	}
+	ink := InkAlpha(e)
 	for i, s := range l.Slots {
 		if i >= len(tabs) {
 			break
 		}
-		col := tabs[i].StripColor(lk)
-		sh := h
-		if !tabs[i].Active {
-			sh = px(3, scale)
-		}
-		rad := math.Min(2.5*scale, float64(sh)/2) // 只有下面两个角是圆的：上面贴着窗口的上沿
-		for y := 0; y < sh; y++ {
-			for x := s.Tab.L; x < s.Tab.R; x++ {
-				if x < 0 || x >= w {
-					continue
-				}
-				a := 1.0
-				if dy := float64(y) + 0.5 - (float64(sh) - rad); dy > 0 {
-					fx := float64(x) + 0.5
-					dx := math.Max(math.Max(float64(s.Tab.L)+rad-fx, fx-(float64(s.Tab.R)-rad)), 0)
-					a = math.Max(0, math.Min(1, rad+0.5-math.Hypot(dx, dy)))
-				}
-				p := c.Pix[(y*w+x)*4:]
-				p[0], p[1], p[2], p[3] = byte(float64(col[2])*a+0.5), byte(float64(col[1])*a+0.5), byte(float64(col[0])*a+0.5), byte(255*a+0.5)
+		t := tabs[i]
+		r := MorphRect(s.Tab, t.Active, scale, e)
+		rad := math.Min(lerp(2.5, 7, e)*scale, float64(r.H())/2)
+		c.RoundRect(r, rad, mix(t.StripColor(lk), t.Fill(lk), e))
+		if ink > 0 && s.Close.W() > 0 && (t.Active || t.Hover) {
+			col := t.Ink(lk)
+			if t.HoverX {
+				c.RoundRect(s.Close, float64(s.Close.W())/2, Tint(col, t.Fill(lk), 0.22*ink))
 			}
+			cx, cy, d := float64(s.Close.L+s.Close.R)/2, float64(r.T+r.B)/2, 3.6*scale
+			c.Line(cx-d, cy-d, cx+d, cy+d, 1.3*scale, col, 0.9*ink)
+			c.Line(cx-d, cy+d, cx+d, cy-d, 1.3*scale, col, 0.9*ink)
 		}
+	}
+	if ink > 0 {
+		if hoverPlus {
+			c.RoundRect(l.Plus, 7*scale, Tint(lk.Dim, lk.Bg, 0.22*ink))
+		}
+		cx, cy, d := float64(l.Plus.L+l.Plus.R)/2, float64(l.Plus.T+l.Plus.B)/2, 5*scale
+		c.Line(cx-d, cy, cx+d, cy, 1.5*scale, lk.Dim, ink)
+		c.Line(cx, cy-d, cx, cy+d, 1.5*scale, lk.Dim, ink)
 	}
 	return c
 }
+
+// EaseOut 是展开用的节奏：一开始快，越到后面越慢（进场）。EaseIn 是收起用的：先慢后快（退场）。x 是 0…1 的时间进度。
+func EaseOut(x float64) float64 { return 1 - math.Pow(1-math.Max(0, math.Min(1, x)), 4) }
+func EaseIn(x float64) float64  { x = math.Max(0, math.Min(1, x)); return x * x * x }
