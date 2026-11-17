@@ -474,17 +474,25 @@ if (desk && want('desk')) {
     const a5 = await c5.newPage(); a5.on('pageerror', (e) => errors.push(`电脑扩展页 重载: ${e.message}`));
     await a5.goto(dbase + 'app.html#extensions'); await a5.waitForTimeout(600);
     const rows = await a5.evaluate(() => [...document.querySelectorAll('#main .row')].map((r) => ({ t: r.querySelector('.t')?.textContent || '', src: r.querySelector('.src')?.textContent || '', btn: !!r.querySelector('.trail button[title^="重载"]'), fits: r.scrollWidth <= r.clientWidth + 1 })));
-    check('电脑扩展页：从文件夹加的那一行写着“来自 <路径>”并有“重载”按钮；以前加的（没记路径）写着怎么办、没有按钮；商店的没有按钮', rows.length === 3 && /来自 D:\\dev\\pelican-ext/.test(rows[0].src) && rows[0].btn && /再“添加”一次/.test(rows[1].src) && !rows[1].btn && !rows[2].src && !rows[2].btn && rows.every((r) => r.fits), { rows });
+    check('电脑扩展页：每一行都有“重载”按钮；从文件夹加的写着“来自 <路径>”，以前加的（没记路径）写着“点重载填一次路径”', rows.length === 3 && /来自 D:\\dev\\pelican-ext/.test(rows[0].src) && /点“重载”填一次路径/.test(rows[1].src) && !rows[2].src && rows.every((r) => r.btn && r.fits), { rows });
     await a5.screenshot({ path: path.join(out, 'desk-ext-reload.png') });
-    for (const [o, re] of [['hot', /已更新：开着的实例里马上生效，已经打开的网页刷新一下/], ['restart', /版本号或 manifest 变了，开着的实例要重启才生效/], ['same', /和上次一样，没有变化/]]) {
+    for (const [o, re] of [['hot', /已重载：开着的实例里马上生效，已经打开的网页刷新一下/], ['restart', /版本号或 manifest 变了，开着的实例要重启才生效/], ['same', /和上次一样，没有变化/]]) {
       deskOutcome = o;
       const [rq5] = await Promise.all([a5.waitForRequest((r) => r.method() === 'POST' && /\/api\/extensions\/ab\/reload$/.test(r.url()), { timeout: 3000 }).catch(() => null), a5.evaluate(() => document.querySelector('#main .row .trail button[title^="重载"]').click())]);
       await a5.waitForTimeout(500);
       const tt = await a5.evaluate(() => { const t = document.getElementById('toast'); return t && /show/.test(t.className) && !/bad/.test(t.className) ? t.textContent : ''; });
       check(`电脑扩展页：点“重载”发的是那个扩展的重载请求，结果是“${o}”时说的话对`, !!rq5 && re.test(tt), { tt });
     }
-    const menu = await a5.evaluate(async () => { const b = [...document.querySelectorAll('#main .row')][2].querySelector('.trail button[title="更多"]'); b.click(); await new Promise((r) => setTimeout(r, 300)); return document.body.textContent.includes('更新到商店里现在的版本'); });
-    check('电脑扩展页：商店来的扩展，“更多”里有“更新到商店里现在的版本”', menu, {});
+    // 以前加的（没记路径）：点“重载”先问一次文件夹，填了才发请求，请求里带着路径
+    deskOutcome = 'hot';
+    await a5.evaluate(() => [...document.querySelectorAll('#main .row')][1].querySelector('.trail button[title^="重载"]').click()); await a5.waitForTimeout(400);
+    const dlg = await a5.evaluate(() => { const i = document.querySelector('dialog input, .dlg input, .sheet input'); return { has: !!i, text: document.body.textContent.includes('没记下它在哪个文件夹') }; });
+    await a5.keyboard.type('D:\\dev\\old-ext');
+    const [rq6] = await Promise.all([a5.waitForRequest((r) => r.method() === 'POST' && /\/api\/extensions\/cd\/reload$/.test(r.url()), { timeout: 3000 }).catch(() => null), a5.keyboard.press('Enter')]);
+    check('电脑扩展页：没记路径的扩展点“重载”先问文件夹，填了以后发的重载请求里带着这个路径', dlg.has && dlg.text && !!rq6 && rq6.postDataJSON()?.path === 'D:\\dev\\old-ext', { dlg, body: rq6?.postData() });
+    await a5.waitForTimeout(400);
+    const menu = await a5.evaluate(async () => { const b = [...document.querySelectorAll('#main .row')][2].querySelector('.trail button[title="更多"]'); b.click(); await new Promise((r) => setTimeout(r, 300)); return document.body.textContent.includes('重载（更新到商店里现在的版本）'); });
+    check('电脑扩展页：商店来的扩展，“更多”里有“重载（更新到商店里现在的版本）”', menu, {});
     await c5.close(); deskExts = null;
   }
   // 没设“外观”时跟着浏览器的深浅色（需求方 2026-11-16：浅色的浏览器里弹窗还是深色的）

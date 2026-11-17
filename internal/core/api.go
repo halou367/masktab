@@ -866,7 +866,9 @@ func (a *App) routes(mux *http.ServeMux) {
 		reply(w, extResult{x, outcome}, err)
 	})
 	mux.HandleFunc("POST /api/extensions/{id}/reload", func(w http.ResponseWriter, r *http.Request) {
-		x, outcome, err := a.ReloadExtension(r.PathValue("id"), me(r))
+		var b struct{ Path string }
+		_ = body(r, &b)
+		x, outcome, err := a.ReloadExtension(r.PathValue("id"), strings.TrimSpace(b.Path), me(r))
 		reply(w, extResult{x, outcome}, err)
 	})
 	mux.HandleFunc("PATCH /api/extensions/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -958,6 +960,11 @@ func (a *App) extLocked(id string) *model.GlobalExtension {
 // 没带密钥的本地扩展，ID 是第一次加的时候生成的那把密钥定的，再加时沿用（以前每次都新生成一把，于是每次都是一个“新”扩展）。
 // 以前加的没记路径：名字一样的本地扩展认成同一个。
 func (a *App) AddExtension(store, path, fromInst string) (*model.GlobalExtension, string, error) {
+	return a.putExtension(store, path, fromInst, false)
+}
+
+// putExtension：force = 用户点的是“重载”——哪怕文件一个字没变，也让开着的实例把它重新加载一次（结果 same 变成 hot）。
+func (a *App) putExtension(store, path, fromInst string, force bool) (*model.GlobalExtension, string, error) {
 	var info *extlib.Info
 	var err error
 	source := "file"
@@ -1044,7 +1051,7 @@ func (a *App) AddExtension(store, path, fromInst string) (*model.GlobalExtension
 			_ = os.RemoveAll(a.p("extensions", x.ExtID, x.Version))
 		}
 		x.MRev = 0
-	case info.Replaced && !info.Changed:
+	case info.Replaced && !info.Changed && !force:
 		outcome = "same"
 	default: // 版本没变，文件原地换了
 		outcome = "hot"
@@ -1083,24 +1090,58 @@ func samePath(a, b string) bool {
 	return a == b
 }
 
-// ReloadExtension 从扩展的来源再取一次：本机路径加的重新读那个路径，商店加的重新下载商店里现在的版本。结果同 AddExtension。
-func (a *App) ReloadExtension(id, fromInst string) (*model.GlobalExtension, string, error) {
+// ReloadExtension 从扩展的来源再取一次：本机路径加的重新读那个路径，商店加的重新下载商店里现在的版本。结果同 AddExtension，
+// 只是不会有 same：文件没变也让开着的实例重新加载一次（“强制重载”，需求方 2026-11-18）。
+// path 非空 = 这个扩展以前没记路径（或者文件夹搬了），用户这次给的：按这个路径重载并记下来，ID 还用它原来的。
+func (a *App) ReloadExtension(id, path, fromInst string) (*model.GlobalExtension, string, error) {
 	a.mu.Lock()
 	x := a.extLocked(id)
-	var path, store, source string
+	var store, source, key string
 	if x != nil {
-		path, store, source = x.Path, x.ExtID, x.Source
+		store, source, key = x.ExtID, x.Source, x.ID
+		if path == "" {
+			path = x.Path
+		}
 	}
 	a.mu.Unlock()
 	switch {
 	case x == nil:
 		return nil, "", errors.New("扩展不存在")
 	case path != "":
-		return a.AddExtension("", path, fromInst)
+		got, outcome, err := a.putExtensionAs(key, path, fromInst)
+		return got, outcome, err
 	case source == "store":
-		return a.AddExtension(store, "", fromInst)
+		return a.putExtension(store, "", fromInst, true)
 	}
-	return nil, "", errors.New("这个扩展是以前加的，没记下它在哪个文件夹。点“添加”把那个文件夹的路径再填一次（会认成同一个扩展，不会多出一份），以后就能直接重载")
+	return nil, "", errors.New("这个扩展没记下它在哪个文件夹，请填一次文件夹的路径")
+}
+
+// putExtensionAs 按 path 重载指定的那一个扩展（库里的 ID = key）：没带密钥的本地扩展沿用它的密钥。
+// 那个文件夹里其实是另一个扩展（自己带了别的密钥）时不动原来的，报错。
+func (a *App) putExtensionAs(key, path, fromInst string) (*model.GlobalExtension, string, error) {
+	a.mu.Lock()
+	x := a.extLocked(key)
+	if x == nil {
+		a.mu.Unlock()
+		return nil, "", errors.New("扩展不存在")
+	}
+	old := x.Path
+	x.Path = filepath.Clean(path) // 先记上：putExtension 按路径找“以前是哪一个”
+	a.mu.Unlock()
+	got, outcome, err := a.putExtension("", path, fromInst, true)
+	if err != nil || got.ID != key {
+		a.mu.Lock()
+		if x := a.extLocked(key); x != nil {
+			x.Path = old
+			a.saveLocked("extensions")
+		}
+		a.mu.Unlock()
+		if err == nil {
+			err = errors.New("这个文件夹里是另一个扩展（“" + got.Name + "”，它自己带着密钥），已经按它自己加进库里了，原来的没动")
+		}
+		return nil, "", err
+	}
+	return got, outcome, nil
 }
 
 // PatchExtension 修改扩展的启用状态、范围、数据模式。

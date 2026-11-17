@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/halou367/masktab/internal/model"
 )
@@ -54,16 +55,23 @@ func TestExtensionReload(t *testing.T) {
 	}
 	// 只改代码，点“重载”：hot，不用重启，codeAt 在实例启动之后
 	put("bg.js", "2")
-	x3, out, err := a.ReloadExtension(x.ID, "")
+	x3, out, err := a.ReloadExtension(x.ID, "", "")
 	if err != nil || out != "hot" || x3.ExtID != id || len(a.Exts) != 1 || need() || x3.CodeAt <= a.rt[in.ID].Since {
 		t.Fatalf("改代码后重载：%+v %q %v（需重启 %v）", x3, out, err, need())
 	}
+	x3at := x3.CodeAt
 	if b, _ := os.ReadFile(a.p("extensions", id, "2.2.0", "bg.js")); string(b) != "2" {
 		t.Fatalf("库里的文件没换：%q", b)
 	}
+	// 什么都没改也点“重载”：强制重新加载一次（hot，codeAt 往后走），不是 same
+	time.Sleep(3 * time.Millisecond)
+	x4, out, err := a.ReloadExtension(x.ID, "", "")
+	if err != nil || out != "hot" || x4.CodeAt <= x3at || need() {
+		t.Fatalf("没改也重载：%+v %q %v", x4, out, err)
+	}
 	// 改 manifest（版本号没动）：要重启
 	manifest("2.2.0", `,"permissions":["storage"]`)
-	if _, out, err = a.ReloadExtension(x.ID, ""); err != nil || out != "restart" || !need() || len(a.Exts) != 1 {
+	if _, out, err = a.ReloadExtension(x.ID, "", ""); err != nil || out != "restart" || !need() || len(a.Exts) != 1 {
 		t.Fatalf("改 manifest 后重载：%q %v（需重启 %v）", out, err, need())
 	}
 	// 实例重启过了（装的是现在这一份）；再改版本号：还是要重启，ID 不变
@@ -72,7 +80,7 @@ func TestExtensionReload(t *testing.T) {
 	a.rt[in.ID].extSetHash, a.rt[in.ID].NeedRestart = h, nil
 	a.mu.Unlock()
 	manifest("2.3.0", `,"permissions":["storage"]`)
-	x5, out, err := a.ReloadExtension(x.ID, "")
+	x5, out, err := a.ReloadExtension(x.ID, "", "")
 	if err != nil || out != "restart" || x5.ExtID != id || x5.Version != "2.3.0" || !need() || len(a.Exts) != 1 {
 		t.Fatalf("改版本号后重载：%+v %q %v（需重启 %v）", x5, out, err, need())
 	}
@@ -81,13 +89,21 @@ func TestExtensionReload(t *testing.T) {
 	a.mu.Lock()
 	a.Exts[0].Path = ""
 	a.mu.Unlock()
-	if _, _, err := a.ReloadExtension(x.ID, ""); err == nil {
-		t.Fatal("没记路径的本地扩展不能直接重载，要提示再添加一次")
+	if _, _, err := a.ReloadExtension(x.ID, "", ""); err == nil {
+		t.Fatal("没记路径的本地扩展不能直接重载，要先给路径")
 	}
 	put("bg.js", "3")
 	x6, out, err := a.AddExtension("", src, "")
 	if err != nil || x6.ExtID != id || len(a.Exts) != 1 || x6.Path != src || out != "hot" {
 		t.Fatalf("以前加的再添加一次：%+v %q %v（共 %d 个）", x6, out, err, len(a.Exts))
+	}
+	// 以前加的、名字也改过了（按名字认不出来）：点“重载”时给一次路径，还是它，路径记下来
+	a.mu.Lock()
+	a.Exts[0].Path, a.Exts[0].Name = "", "改过名字"
+	a.mu.Unlock()
+	x6b, out, err := a.ReloadExtension(x.ID, src, "")
+	if err != nil || x6b.ExtID != id || len(a.Exts) != 1 || x6b.Path != src || out != "hot" || x6b.Name != "Dev Ext" {
+		t.Fatalf("重载时给路径：%+v %q %v（共 %d 个）", x6b, out, err, len(a.Exts))
 	}
 	// 另一个文件夹、另一个名字：是新的一个
 	src2 := t.TempDir()

@@ -180,6 +180,11 @@ try {
   }
   const stage = st.setup?.stage ?? st.setup?.Stage;
   check(stage === 'ready', '内核与 mihomo 就绪（找到或下载完成，mihomo 已启动）', stage === 'ready' ? `版本 ${st.version}` : JSON.stringify(st.setup));
+  // 合并窗口、实例栏自动收起默认是开的（需求方 2026-11-18）。下面的检查大多是按“每个实例一个自己的窗口”写的
+  // （任务栏上各有一个图标、各截各的图），所以先关掉；合并着的样子在下面“桌面截图”之前单独开一下查。
+  check(st.settings?.mergeWindows === true && st.settings?.mergeCompact === true, '合并窗口、实例栏自动收起默认是开的', JSON.stringify({ w: st.settings?.mergeWindows, c: st.settings?.mergeCompact }));
+  await api('PATCH', '/api/settings', { mergeWindows: false });
+  check((await api('GET', '/api/state')).settings.mergeWindows === false, '合并窗口关得掉（关了以后存得住）');
   if (stage !== 'ready') throw new Error('首次准备失败');
   const noTok = await fetch(`http://127.0.0.1:${PORT}/api/state`); check(noTok.status === 401, '本地接口无令牌被拒绝', 'HTTP ' + noTok.status);
   const badOrigin = await fetch(`http://127.0.0.1:${PORT}/api/state`, { headers: { 'X-MaskTab-Token': TOKEN, Origin: 'https://evil.example' } }); check(badOrigin.status === 403, '本地接口拒绝外部来源', 'HTTP ' + badOrigin.status);
@@ -262,6 +267,14 @@ try {
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#settings`, '5-settings.png');
 
   { const c0 = await cdp(prof(a.id)); await c0.send('Target.createTarget', { url: 'chrome://newtab/' }); c0.close(); await sleep(3000); }
+  if (VISIBLE && process.platform === 'win32') {
+    // 合并窗口（默认的样子）：开一下，两个实例的窗口应当并进同一组、顶上有实例栏；然后关掉，后面照旧按分开的窗口查
+    await api('PATCH', '/api/settings', { mergeWindows: true }); await sleep(4000);
+    const d = await api('GET', '/api/debug/tabbar').catch((e) => ({ err: e.message }));
+    await desktopShot('6a-merged.png');
+    rec(d.enabled === true && d.compact === true && (d.groups || []).length >= 1 ? 'ok' : 'fail', '合并窗口开着时：实例栏起来了，两个实例的窗口并在一组（自动收起也开着）', JSON.stringify({ enabled: d.enabled, compact: d.compact, groups: (d.groups || []).length, windows: (d.windows || []).length, err: d.err }));
+    await api('PATCH', '/api/settings', { mergeWindows: false }); await sleep(3000);
+  }
   await desktopShot('6-desktop.png');
   {
     // 任务栏图标：两个实例各是自己颜色的方块（决策 UI-14）。只有 Windows 有界面时能看。

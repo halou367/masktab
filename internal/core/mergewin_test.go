@@ -1,6 +1,9 @@
 package core
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/halou367/masktab/internal/model"
@@ -22,6 +25,13 @@ func TestMergeHostState(t *testing.T) {
 	a.rt["d"] = &Runtime{Starting: true}
 	a.mu.Unlock()
 
+	// 默认两项都开（需求方 2026-11-18）
+	if d := model.DefaultSettings(); !d.MergeWindows || !d.MergeCompact || !a.Settings.MergeWindows || !a.Settings.MergeCompact {
+		t.Fatalf("合并窗口、实例栏自动收起默认该是开的：%+v", d)
+	}
+	a.mu.Lock()
+	a.Settings.MergeWindows, a.Settings.MergeCompact = false, false
+	a.mu.Unlock()
 	if st := h.State(); st.Enabled || len(st.Tabs) != 0 {
 		t.Fatalf("开关没开：不该有标签，得到 %+v", st)
 	}
@@ -36,7 +46,7 @@ func TestMergeHostState(t *testing.T) {
 		t.Fatalf("进程号、颜色不对：%+v", st.Tabs)
 	}
 	if st.Compact {
-		t.Fatal("自动收起默认是关的")
+		t.Fatal("自动收起关着的时候不该传开")
 	}
 	a.mu.Lock()
 	a.Settings.MergeCompact = true
@@ -54,5 +64,44 @@ func TestMergeHostState(t *testing.T) {
 	a.mu.Unlock()
 	if h.State().Enabled {
 		t.Fatal("正在退出时不该再管窗口")
+	}
+}
+
+// 合并窗口、实例栏自动收起默认开；关掉以后重新打开程序还是关的。
+// （默认值是 true 的开关，false 必须真的写进文件：带 omitempty 的话关掉等于没存，下次又成了默认的 true。）
+func TestMergeDefaultsPersist(t *testing.T) {
+	data, prog := t.TempDir(), t.TempDir()
+	a, err := Open(data, prog, "0.1.72")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.Settings.MergeWindows || !a.Settings.MergeCompact {
+		t.Fatalf("新装的默认该是开的：%+v", a.Settings)
+	}
+	a.mu.Lock()
+	a.Settings.MergeCompact = false
+	a.saveLocked("settings")
+	a.mu.Unlock()
+	b, err := Open(data, prog, "0.1.72")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.Settings.MergeWindows || b.Settings.MergeCompact {
+		t.Fatalf("关掉的那一项重新打开后该还是关的，没动的那一项还是开的：窗口 %v 收起 %v", b.Settings.MergeWindows, b.Settings.MergeCompact)
+	}
+	// 老版本留下的设置文件里没有这两项：按默认的开
+	raw, _ := os.ReadFile(filepath.Join(data, "config", "settings.json"))
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	delete(m, "mergeWindows")
+	delete(m, "mergeCompact")
+	raw, _ = json.Marshal(m)
+	_ = os.WriteFile(filepath.Join(data, "config", "settings.json"), raw, 0o644)
+	c, err := Open(data, prog, "0.1.72")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Settings.MergeWindows || !c.Settings.MergeCompact {
+		t.Fatalf("老设置文件里没有这两项时该按默认的开：%+v", c.Settings)
 	}
 }
