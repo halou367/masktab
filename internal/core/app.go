@@ -46,7 +46,8 @@ type Runtime struct {
 	UpRate       int64            `json:"upRate"`
 	DownRate     int64            `json:"downRate"`
 	Seen         int64            `json:"companionSeen,omitempty"`
-	Step         int              `json:"step,omitempty"` // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
+	Since        int64            `json:"since,omitempty"` // 本次启动的时刻（毫秒）。伴随扩展拿它和扩展的 codeAt 比：之后才换过文件的扩展要关一下再开
+	Step         int              `json:"step,omitempty"`  // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
 
 	active      bool          // 是否已写入 mihomo 配置
 	refused     bool          // Error 是“组件没准备好，开不了”；组件好了以后清掉

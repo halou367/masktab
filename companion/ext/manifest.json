@@ -11,7 +11,8 @@
     "tabs",
     "cookies",
     "privacy",
-    "history"
+    "history",
+    "management"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",

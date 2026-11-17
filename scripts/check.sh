@@ -82,8 +82,11 @@ smoke() {
   for d in config profiles state runtime ext-master extensions; do rm -rf "$MT_SMOKE/$d"; done
   rm -rf "$MT_OUT/smoke"; mkdir -p "$MT_SMOKE"
   node scripts/smoke.mjs --bin "$MT_DEV/bin/masktab" --data "$MT_SMOKE" --shots "$MT_OUT/smoke" > "$log" 2>&1 || bad=1
-  grep "^失败\|^警告" "$log" | cut -c1-500 | head -20
-  note smoke "$([ $bad = 0 ] && echo 通过 || echo 失败)（$(grep -c '^通过 ' "$log") 项通过，$((SECONDS - t0)) 秒；截图 $MT_OUT/smoke）"
+  # 同一份内核和数据目录上接着跑两个专项：扩展“重载”不用重启（决策 EXT-1）、在线更新先走节点（N-3 补充）
+  node scripts/ext-reload-e2e.mjs --bin "$MT_DEV/bin/masktab" --data "$MT_SMOKE" >> "$log" 2>&1 || bad=1
+  node scripts/update-node-e2e.mjs --bin "$MT_DEV/bin/masktab" --data "$MT_SMOKE" >> "$log" 2>&1 || bad=1
+  grep "^失败\|^警告\|^✗" "$log" | cut -c1-500 | head -20
+  note smoke "$([ $bad = 0 ] && echo 通过 || echo 失败)（$(grep -c '^通过 \|^✓' "$log") 项通过，$((SECONDS - t0)) 秒；截图 $MT_OUT/smoke）"
   return $bad
 }
 

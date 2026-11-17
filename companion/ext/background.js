@@ -66,9 +66,34 @@ async function paint(st) {
   await chrome.action.setTitle({ title: lines.join('\n') });
 }
 
+// 扩展“重载”（决策 EXT-1）：库里某个扩展的文件原地换过了（版本没变），而本实例是在那之前启动的——
+// 把它关一下再开，浏览器就重新读它的后台脚本和内容脚本（实测：fingerprint-chromium 148；manifest 不会重读，那种情况核心服务会提示重启）。
+// 做过的记在 storage.session 里（后台脚本会被浏览器收走再拉起，不能记在变量里；浏览器一关就清，下次启动本来就是新文件）。
+let reloading = false;
+async function hotReload(st) {
+  const me = st.me, since = me?.rt?.since || 0;
+  if (reloading || !me || !since || !chrome.management?.setEnabled) return;
+  const due = (st.extensions || []).filter((x) => x.enabled && x.codeAt > since && (x.scope === 'all' || (x.instanceIds || []).includes(me.id)));
+  if (!due.length) return;
+  reloading = true;
+  try {
+    const { extDone = {} } = await chrome.storage.session.get('extDone');
+    for (const x of due) {
+      if (extDone[x.extId] === x.codeAt) continue;
+      extDone[x.extId] = x.codeAt;
+      await chrome.storage.session.set({ extDone }); // 先记再做：万一出错也不会每次刷新状态都再来一遍
+      const info = await chrome.management.get(x.extId).catch(() => null); // 本实例启动之后才加的：浏览器里还没有它
+      if (!info || !info.enabled) continue; // 用户自己在 chrome://extensions 里关掉的：不替他打开
+      await chrome.management.setEnabled(x.extId, false);
+      await chrome.management.setEnabled(x.extId, true);
+    }
+  } catch { /* 下次状态变化不再重试；用户可以再点一次“重载” */ } finally { reloading = false; }
+}
+
 async function refresh() {
   const st = await api('GET', '/api/state');
   await paint(st);
+  hotReload(st);
   return st;
 }
 

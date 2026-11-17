@@ -45,7 +45,7 @@
 | mihomo 配置和进程 | `internal/proxy` |
 | 出口探测、IP 成色、伪装度 | `internal/probe`、`internal/core/ipq.go`、`checks.go` |
 | 密码库 | `internal/vault` |
-| 扩展库 | `internal/extlib` |
+| 扩展库 | `internal/extlib`（入库、原地换文件）；添加 / 重载在 `internal/core/api.go` 的 `AddExtension`、`ReloadExtension`；开着的实例里把扩展关一下再开在 `companion/ext/background.js` 的 `hotReload`；实测 `scripts/ext-reload-e2e.mjs` |
 | 在线更新 | `internal/update`（查版本）、`internal/core/update*.go`（下载安装；先走节点见 `nodeSources`，实测 `scripts/update-node-e2e.mjs`）、`installer/masktab.nsi`、手机 `Updater.kt` |
 | Windows 任务栏图标 | `internal/tbicon`、`internal/core/taskbar_windows.go` |
 | 合并窗口（Windows，实例标签栏；拖出来 / 并进去分成几组） | `internal/tabbar`（排版和判断 `tabbar.go`、`render.go`；几组和拖动 `bar_windows.go`；画 `paint_windows.go`）、`internal/core/mergewin.go`；真机调试 `scripts/win-dev.ps1`（`drag` / `snap`）；decisions UI-15、UI-16 |

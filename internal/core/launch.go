@@ -344,6 +344,7 @@ func (a *App) Launch(id string) error {
 		return nil
 	}
 	r.Seen, r.startedAt = 0, now()
+	r.Since = r.startedAt
 	r.cmd, r.Running, r.Starting, r.Pid, r.LaunchedTZ, r.Cut, r.Step = cmd, true, false, cmd.Process.Pid, tz, "", 0
 	r.extSetHash, r.pulled, r.done = extHash, pulled, make(chan struct{})
 	if openErr != "" { // 代理没准备好也开了窗口：主通道接着断着，原因给用户看；下面的 refresh 会再确认一次
@@ -589,7 +590,11 @@ func (a *App) extsForLocked(in *model.Instance) (dirs []string, hash string, sha
 			continue
 		}
 		dirs = append(dirs, a.p("extensions", x.ExtID, x.Version))
-		ids = append(ids, x.ExtID+"@"+x.Version)
+		id := x.ExtID + "@" + x.Version
+		if x.MRev > 0 { // 版本号没动但 manifest 改过：也算“换了一份”，要重启
+			id += "#" + strconv.Itoa(x.MRev)
+		}
+		ids = append(ids, id)
 		if x.Data == "shared" {
 			shared = append(shared, x)
 		}

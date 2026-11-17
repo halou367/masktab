@@ -180,7 +180,10 @@ type GlobalExtension struct {
 	ExtID         string   `json:"extId"`
 	Name          string   `json:"name"`
 	Version       string   `json:"version"`
-	Source        string   `json:"source"` // store | file
+	Source        string   `json:"source"`           // store | file
+	Path          string   `json:"path,omitempty"`   // 从本机加的：那个文件夹 / 文件的路径。记下来才能“重载”，再加同一个路径时也才认得出是同一个
+	CodeAt        int64    `json:"codeAt,omitempty"` // 最近一次“版本没变、文件原地换了”的时刻：这之前启动的实例把它关一下再开，就用上新代码（伴随扩展做）
+	MRev          int      `json:"mrev,omitempty"`   // 版本没变但 manifest.json 变了的次数：变了就得重启实例（浏览器不会重读 manifest）
 	Enabled       bool     `json:"enabled"`
 	Scope         string   `json:"scope"` // all | selected
 	InstanceIDs   []string `json:"instanceIds"`

@@ -25,6 +25,30 @@ import (
 // Info 是入库结果。
 type Info struct {
 	ExtID, Name, Version, Warn string
+	Replaced                   bool // 库里原来就有这个扩展的这个版本：文件是原地换的（目录没变，开着的浏览器还指着它）
+	Changed                    bool // 原地换的时候，有文件和原来不一样（含 manifest.json）
+	ManifestChanged            bool // 原地换的时候，manifest.json 和原来不一样（浏览器要整个重新加载扩展才认，关一下再开不够）
+}
+
+// KeyFor 在扩展包自己没带密钥时被问一次：name 是 manifest 里的名字。返回以前给这个扩展用过的公钥（DER），
+// 让它的 ID 和上次一样；返回 nil = 没见过，新生成一把。
+type KeyFor func(name string) []byte
+
+// KeyOf 读库里某个扩展目录的 manifest.json 里的公钥（DER）；读不到返回 nil。
+func KeyOf(dir string) []byte {
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return nil
+	}
+	var m struct{ Key string }
+	if json.Unmarshal(raw, &m) != nil || m.Key == "" {
+		return nil
+	}
+	b, err := base64.StdEncoding.DecodeString(m.Key)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // IDFromKey 由公钥（DER）计算扩展 ID：SHA-256 前 16 字节，每个半字节映射到 a–p。
@@ -165,7 +189,7 @@ func ParseStoreID(s string) string {
 
 // Install 把 CRX / ZIP 数据入库到 libDir/<扩展id>/<版本>/：
 // 写入 key 使解包加载后的扩展 ID 与商店一致；删除 _metadata；只接受 Manifest V3。
-func Install(libDir string, data []byte) (*Info, error) {
+func Install(libDir string, data []byte, keyFor KeyFor) (*Info, error) {
 	pub, zdata, err := ParseCRX(data)
 	if err != nil {
 		return nil, err
@@ -189,11 +213,11 @@ func Install(libDir string, data []byte) (*Info, error) {
 	if err := kernel.UnzipFiles(files, tmp); err != nil {
 		return nil, err
 	}
-	return finalize(libDir, tmp, pub)
+	return finalize(libDir, tmp, pub, keyFor)
 }
 
-// InstallDir 把一个解包扩展目录入库（复制一份）。
-func InstallDir(libDir, src string) (*Info, error) {
+// InstallDir 把一个解包扩展目录入库（复制一份；.git 不要）。
+func InstallDir(libDir, src string, keyFor KeyFor) (*Info, error) {
 	tmp, err := os.MkdirTemp(libDir, "incoming-")
 	if err != nil {
 		return nil, err
@@ -203,10 +227,11 @@ func InstallDir(libDir, src string) (*Info, error) {
 		return nil, err
 	}
 	_ = os.RemoveAll(filepath.Join(tmp, "_metadata"))
-	return finalize(libDir, tmp, nil)
+	_ = os.RemoveAll(filepath.Join(tmp, ".git"))
+	return finalize(libDir, tmp, nil, keyFor)
 }
 
-func finalize(libDir, tmp string, pub []byte) (*Info, error) {
+func finalize(libDir, tmp string, pub []byte, keyFor KeyFor) (*Info, error) {
 	mpath := filepath.Join(tmp, "manifest.json")
 	raw, err := os.ReadFile(mpath)
 	if err != nil {
@@ -228,7 +253,14 @@ func finalize(libDir, tmp string, pub []byte) (*Info, error) {
 			pub, _ = base64.StdEncoding.DecodeString(k)
 		}
 	}
-	if pub == nil { // 没有密钥的本地包：生成一把，保证 ID 固定、与安装路径无关
+	name, _ := m["name"].(string)
+	if strings.HasPrefix(name, "__MSG_") {
+		name = localized(tmp, m, name)
+	}
+	if pub == nil && keyFor != nil { // 没有密钥的本地包：以前加过就用上次那一把（ID 不变，扩展自己存的数据还在）
+		pub = keyFor(name)
+	}
+	if pub == nil { // 第一次见：生成一把，保证 ID 固定、与安装路径无关
 		priv, err := rsa.GenerateKey(rand.Reader, 2048)
 		if err != nil {
 			return nil, err
@@ -245,10 +277,7 @@ func finalize(libDir, tmp string, pub []byte) (*Info, error) {
 	}
 	info := &Info{ExtID: IDFromKey(pub)}
 	info.Version, _ = m["version"].(string)
-	info.Name, _ = m["name"].(string)
-	if strings.HasPrefix(info.Name, "__MSG_") {
-		info.Name = localized(tmp, m, info.Name)
-	}
+	info.Name = name
 	if info.Version == "" {
 		return nil, errors.New("manifest.json 缺少 version")
 	}
@@ -266,6 +295,14 @@ func finalize(libDir, tmp string, pub []byte) (*Info, error) {
 		info.Warn = "该扩展申请了 " + strings.Join(perms, "、") + " 权限，可能带账号身份；数据设为\"共享\"会让服务商看到同一身份从多个出口出现，建议改为\"独立\""
 	}
 	dst := filepath.Join(libDir, info.ExtID, info.Version)
+	if old, err := os.ReadFile(filepath.Join(dst, "manifest.json")); err == nil {
+		// 库里已经有这个版本：原地换文件，目录不动。开着的浏览器是按这个目录加载的，
+		// 整个删掉再搬过来的话，中间有一下目录是空的；Windows 上有文件正被读着时还删不掉。
+		info.Replaced, info.ManifestChanged = true, !bytes.Equal(old, out)
+		n, err := syncInto(tmp, dst)
+		info.Changed = n > 0
+		return info, err
+	}
 	_ = os.RemoveAll(dst)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return nil, err
@@ -310,4 +347,65 @@ func stripComments(b []byte) []byte {
 		out = append(out, ln)
 	}
 	return bytes.Join(out, []byte("\n"))
+}
+
+// syncInto 把 dst 变成和 src 一样：内容不同的文件覆盖，src 里没有的删掉。返回动了几个文件。
+func syncInto(src, dst string) (int, error) {
+	n := 0
+	keep := map[string]bool{}
+	err := filepath.Walk(src, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if rel == "." {
+			return nil
+		}
+		keep[rel] = true
+		target := filepath.Join(dst, rel)
+		if fi.IsDir() {
+			if st, err := os.Stat(target); err == nil && !st.IsDir() {
+				_ = os.Remove(target)
+			}
+			return os.MkdirAll(target, 0o755)
+		}
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if old, err := os.ReadFile(target); err == nil && bytes.Equal(old, b) {
+			return nil
+		}
+		if st, err := os.Stat(target); err == nil && st.IsDir() {
+			_ = os.RemoveAll(target)
+		}
+		n++
+		return os.WriteFile(target, b, 0o644)
+	})
+	if err != nil {
+		return n, err
+	}
+	var extra []string
+	_ = filepath.Walk(dst, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if rel, _ := filepath.Rel(dst, p); rel != "." && !keep[rel] {
+			extra = append(extra, p)
+			if fi.IsDir() {
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+	for _, p := range extra {
+		n++
+		if err := os.RemoveAll(p); err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }

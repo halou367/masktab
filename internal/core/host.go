@@ -44,6 +44,7 @@ func (a *App) kernelVersion() string {
 // hostLaunched 宿主模式下 Launch 的收尾：代理、出口、时区都已就绪，标记为运行中。
 func (a *App) hostLaunched(id string, in *model.Instance, r *Runtime, tz, lang string) {
 	r.Seen, r.startedAt = now(), now()
+	r.Since = r.startedAt
 	r.cmd, r.Running, r.Starting, r.Pid, r.LaunchedTZ, r.Cut, r.Step = nil, true, false, 0, tz, "", 0
 	r.LaunchedLang = lang
 	r.done = make(chan struct{})

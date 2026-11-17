@@ -156,6 +156,8 @@ jobs:
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\MaskTab.lnk")) { throw "没有创建开始菜单快捷方式" }
       - name: 冒烟测试（对装好的那一份；内核与代理内核都来自安装包，不应再下载）
         run: node scripts/smoke.mjs --bin C:\mt\masktab.exe --data C:\mt\data --shots shots --visible
+      - name: 扩展“重载”不用重启（两个开着的实例，改了代码点重载就生效；决策 EXT-1）
+        run: node scripts/ext-reload-e2e.mjs --bin C:\mt\masktab.exe --data C:\mt\data --visible
       - name: 覆盖升级与卸载
         shell: pwsh
         run: |

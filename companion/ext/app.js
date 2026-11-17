@@ -37,16 +37,28 @@ panel.init(main, shell);
 function extensions() {
   const masked = st.instances;
   const addExt = async () => {
-    const v = await ask('添加扩展', { placeholder: 'Chrome 应用商店网址 / 扩展 ID，或 .crx、.zip、解包目录的完整路径', note: '只需在这里加一次；“范围”决定哪些实例有它。扩展是实例启动时交给浏览器的：开着的实例要重启一次才用得上，这一页上面会提示并给“重启”。', ok: '加入' });
+    const v = await ask('添加扩展', { placeholder: 'Chrome 应用商店网址 / 扩展 ID，或 .crx、.zip、解包目录的完整路径', note: '只需在这里加一次；“范围”决定哪些实例有它。新加的扩展是实例启动时交给浏览器的：开着的实例要重启一次才用得上，这一页上面会提示并给“重启”。从文件夹加的会记住路径：改完代码点那一行的“重载”就行，同一个路径再加一次也是更新那一个。', ok: '加入' });
     if (!v || !v.trim()) return;
     const t = v.trim(), isPath = /^([a-zA-Z]:\\|\/|\\\\)/.test(t);
     toast('正在获取扩展…');
-    act(() => api('POST', '/api/extensions', isPath ? { path: t } : { store: t }), '已加入全局库');
+    put(() => api('POST', '/api/extensions', isPath ? { path: t } : { store: t }));
   };
+  // 添加 / 重载之后说清楚结果（核心服务回的 outcome，见 AddExtension）：新加的、马上生效的、要重启的、没变化的。
+  const put = (fn) => run(async () => {
+    const x = await fn(); await load(true);
+    const on = st.instances.some((i) => i.rt.running);
+    toast({ added: `已加入全局库${on ? '；开着的实例重启后才有它' : ''}`,
+      hot: `“${x.name}”已更新${on ? '：开着的实例里马上生效，已经打开的网页刷新一下' : ''}`,
+      restart: `“${x.name}”已更新${on ? '；这次版本号或 manifest 变了，开着的实例要重启才生效' : ''}`,
+      same: `“${x.name}”和上次一样，没有变化` }[x.outcome] || '已更新');
+  });
+  const reload = (x) => () => { toast(x.path ? '正在重新读取文件夹…' : '正在从商店获取…'); put(() => api('POST', `/api/extensions/${x.id}/reload`)); };
+  const canReload = (x) => !!x.path || x.source === 'store';
   const more = (x) => async () => {
-    const opts = [['scope', `范围：${x.scope === 'all' ? '全部实例' : '指定实例'}`], x.scope === 'selected' && ['pick', '选择实例'], ['data', `数据：${x.data === 'shared' ? '共享' : '独立'}`], x.backups.length > 0 && ['rollback', `回滚共享数据（共 ${x.backups.length} 份备份）`], ['del', '从全局库移除']].filter(Boolean);
+    const opts = [canReload(x) && ['reload', x.path ? '重载（重新读取文件夹）' : '更新到商店里现在的版本'], ['scope', `范围：${x.scope === 'all' ? '全部实例' : '指定实例'}`], x.scope === 'selected' && ['pick', '选择实例'], ['data', `数据：${x.data === 'shared' ? '共享' : '独立'}`], x.backups.length > 0 && ['rollback', `回滚共享数据（共 ${x.backups.length} 份备份）`], ['del', '从全局库移除']].filter(Boolean);
     const v = await choose(x.name, opts, null);
-    if (v === 'scope') { const s = await choose('范围', [['all', '全部实例'], ['selected', '指定实例']], x.scope); if (s) act(() => api('PATCH', `/api/extensions/${x.id}`, { scope: s })); }
+    if (v === 'reload') reload(x)();
+    else if (v === 'scope') { const s = await choose('范围', [['all', '全部实例'], ['selected', '指定实例']], x.scope); if (s) act(() => api('PATCH', `/api/extensions/${x.id}`, { scope: s })); }
     else if (v === 'data') { const s = await choose('数据', [['shared', '共享', '各实例共用一份配置（启动时拉取、退出时回写）'], ['isolated', '独立', '各实例各存各的']], x.data); if (s) act(() => api('PATCH', `/api/extensions/${x.id}`, { data: s })); }
     else if (v === 'pick') { const s = await choose('加一个 / 去掉一个实例', masked.map((i) => [i.id, `#${i.no} ${i.name || ''}`, x.instanceIds.includes(i.id) ? '已选（点一下去掉）' : '未选']), null); if (s) { const ids = new Set(x.instanceIds); ids.has(s) ? ids.delete(s) : ids.add(s); act(() => api('PATCH', `/api/extensions/${x.id}`, { instanceIds: [...ids] })); } }
     else if (v === 'rollback' && await confirmDlg('把共享数据回滚到上一份？', '重启实例后生效。', '回滚')) act(() => api('POST', `/api/extensions/${x.id}/rollback`, { backup: x.backups[0] }), '已回滚，重启实例后生效');
@@ -59,8 +71,9 @@ function extensions() {
   return [appBar(['扩展', h('span', { class: 'cnt' }, String(st.extensions.length))], null, h('button', { class: 'btn tonal', onclick: addExt }, icon('add', 18), '添加')),
     stale.length > 0 && h('div', { class: 'warn need' }, icon('refresh', 20), h('span', { class: 'tx' }, `${stale.map((i) => '#' + i.no).join('、')} 开着，重启后才会用上这里的改动`),
       h('button', { class: 'lk', onclick: restartStale }, stale.length > 1 ? '全部重启' : '立即重启')),
-    st.extensions.map((x) => row({ ic: 'ext', t: [x.name, h('span', { class: 'sub' }, x.version)], s: [`${x.scope === 'all' ? '全部实例' : `${x.instanceIds.length} 个实例`} · 数据${x.data === 'shared' ? '共享' : '独立'}`, x.warn && h('span', { class: 'mid' }, ' · ' + x.warn)],
-      trail: [sw(x.enabled, x.enabled ? '停用' : '启用', (v) => act(() => api('PATCH', `/api/extensions/${x.id}`, { enabled: v }))), ibtn('more', '更多', more(x))] })),
+    st.extensions.map((x) => row({ ic: 'ext', t: [x.name, h('span', { class: 'sub' }, x.version)], s: [`${x.scope === 'all' ? '全部实例' : `${x.instanceIds.length} 个实例`} · 数据${x.data === 'shared' ? '共享' : '独立'}`, x.warn && h('span', { class: 'mid' }, ' · ' + x.warn),
+      x.path ? h('span', { class: 'el src', style: { display: 'block' }, title: x.path }, '来自 ' + x.path) : x.source === 'file' && h('span', { class: 'src', style: { display: 'block' } }, '以前加的，没记下文件夹：把那个文件夹再“添加”一次（不会多出一份），之后就能重载')],
+      trail: [x.path && ibtn('refresh', '重载：重新读取文件夹里的内容', reload(x)), sw(x.enabled, x.enabled ? '停用' : '启用', (v) => act(() => api('PATCH', `/api/extensions/${x.id}`, { enabled: v }))), ibtn('more', '更多', more(x))] })),
     !st.extensions.length && h('div', { class: 'empty' }, '全局库里还没有扩展。'),
     h('div', { class: 'foot noic' }, '“数据”选“共享”时各实例用同一份配置（在实例启动时拉取、退出时回写，不是实时的；两个实例都改过时后关闭的生效），选“独立”时各存各的。')];
 }

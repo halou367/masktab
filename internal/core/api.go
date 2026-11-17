@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -861,8 +862,12 @@ func (a *App) routes(mux *http.ServeMux) {
 			reply(w, nil, err)
 			return
 		}
-		x, err := a.AddExtension(b.Store, b.Path, me(r))
-		reply(w, x, err)
+		x, outcome, err := a.AddExtension(b.Store, b.Path, me(r))
+		reply(w, extResult{x, outcome}, err)
+	})
+	mux.HandleFunc("POST /api/extensions/{id}/reload", func(w http.ResponseWriter, r *http.Request) {
+		x, outcome, err := a.ReloadExtension(r.PathValue("id"), me(r))
+		reply(w, extResult{x, outcome}, err)
 	})
 	mux.HandleFunc("PATCH /api/extensions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
@@ -940,19 +945,57 @@ func (a *App) extLocked(id string) *model.GlobalExtension {
 
 // AddExtension 把扩展加入全局库（8.10）。store 为商店网址或扩展 ID；path 为本机的 .crx / .zip 文件或解包目录。
 // 商店下载经发起请求的实例的代理通道发出。
-func (a *App) AddExtension(store, path, fromInst string) (*model.GlobalExtension, error) {
+//
+// 第二个返回值说这一次的结果，界面按它说话：
+//
+//	added   新加的。开着的实例要重启才有它（扩展只能在启动时交给浏览器）。
+//	hot     库里已经有，版本没变，文件原地换了，manifest 没变：开着的实例里由伴随扩展把它关一下再开，
+//	        后台脚本、内容脚本就是新的（网页要刷新一下），不用重启。
+//	restart 库里已经有，版本变了或者 manifest 变了：开着的实例要重启（浏览器不会重读 manifest）。
+//	same    和库里的一模一样，什么都没动。
+//
+// 从本机路径加的会记下路径（Path）。同一个路径再加一次是“更新那一个”，不会多出一份：
+// 没带密钥的本地扩展，ID 是第一次加的时候生成的那把密钥定的，再加时沿用（以前每次都新生成一把，于是每次都是一个“新”扩展）。
+// 以前加的没记路径：名字一样的本地扩展认成同一个。
+func (a *App) AddExtension(store, path, fromInst string) (*model.GlobalExtension, string, error) {
 	var info *extlib.Info
 	var err error
 	source := "file"
 	lib := a.p("extensions")
+	if path != "" {
+		path = filepath.Clean(path)
+	}
+	keyFor := func(name string) []byte {
+		if path == "" {
+			return nil
+		}
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		var old *model.GlobalExtension
+		for _, x := range a.Exts {
+			if x.Path != "" && samePath(x.Path, path) {
+				old = x
+				break
+			}
+		}
+		for _, x := range a.Exts {
+			if old == nil && x.Source == "file" && x.Path == "" && x.Name == name {
+				old = x
+			}
+		}
+		if old == nil {
+			return nil
+		}
+		return extlib.KeyOf(a.p("extensions", old.ExtID, old.Version))
+	}
 	switch {
 	case store != "":
 		id := extlib.ParseStoreID(store)
 		if id == "" {
-			return nil, errors.New("请粘贴商店网址或 32 位扩展 ID")
+			return nil, "", errors.New("请粘贴商店网址或 32 位扩展 ID")
 		}
 		if id == companion.ID {
-			return nil, errors.New("这是伴随扩展自身")
+			return nil, "", errors.New("这是伴随扩展自身")
 		}
 		hc := &http.Client{Timeout: 120 * time.Second}
 		a.mu.Lock()
@@ -962,45 +1005,102 @@ func (a *App) AddExtension(store, path, fromInst string) (*model.GlobalExtension
 		a.mu.Unlock()
 		var data []byte
 		if data, err = extlib.FetchStore(hc, id); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		source = "store"
-		info, err = extlib.Install(lib, data)
+		info, err = extlib.Install(lib, data, nil)
 	case path != "":
 		st, serr := os.Stat(path)
 		if serr != nil {
-			return nil, errors.New("路径不存在：" + path)
+			return nil, "", errors.New("路径不存在：" + path)
 		}
 		if st.IsDir() {
-			info, err = extlib.InstallDir(lib, path)
+			info, err = extlib.InstallDir(lib, path, keyFor)
 		} else {
 			var data []byte
 			if data, err = os.ReadFile(path); err == nil {
-				info, err = extlib.Install(lib, data)
+				info, err = extlib.Install(lib, data, keyFor)
 			}
 		}
 	default:
-		return nil, errors.New("缺少扩展来源")
+		return nil, "", errors.New("缺少扩展来源")
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	x := a.extLocked(info.ExtID)
-	if x == nil {
+	outcome := "added"
+	switch {
+	case x == nil:
 		x = &model.GlobalExtension{ID: newID(), ExtID: info.ExtID, Enabled: true, Scope: "all", InstanceIDs: []string{}, Data: a.Settings.NewExtData}
 		a.Exts = append(a.Exts, x)
-	} else if x.Version != info.Version && !a.anyRunningLocked() {
-		// 换了版本：旧版本的文件可能正被开着的实例用着（浏览器是按需从这个目录读的，删了那个实例里的扩展当场就坏），
-		// 有实例开着就先留着，下次启动核心服务时清（sweepExtDirs）。
-		_ = os.RemoveAll(a.p("extensions", x.ExtID, x.Version))
+	case x.Version != info.Version:
+		outcome = "restart"
+		if !a.anyRunningLocked() {
+			// 换了版本：旧版本的文件可能正被开着的实例用着（浏览器是按需从这个目录读的，删了那个实例里的扩展当场就坏），
+			// 有实例开着就先留着，下次启动核心服务时清（sweepExtDirs）。
+			_ = os.RemoveAll(a.p("extensions", x.ExtID, x.Version))
+		}
+		x.MRev = 0
+	case info.Replaced && !info.Changed:
+		outcome = "same"
+	default: // 版本没变，文件原地换了
+		outcome = "hot"
+		x.CodeAt = now()
+		if info.ManifestChanged {
+			outcome = "restart"
+			x.MRev++
+		}
 	}
-	x.Name, x.Version, x.Source, x.Warn, x.UpdatedAt = info.Name, info.Version, source, info.Warn, now()
+	if path != "" {
+		x.Path = path
+	}
+	x.Name, x.Version, x.Source, x.Warn = info.Name, info.Version, source, info.Warn
+	if outcome != "same" {
+		x.UpdatedAt = now()
+	}
 	a.markExtChangedLocked()
 	a.saveLocked("extensions")
 	a.bumpLocked("state", "")
-	return x, nil
+	log.Printf("扩展 %s（%s %s）：%s", x.ExtID, x.Name, x.Version, outcome)
+	return x, outcome, nil
+}
+
+// extResult 是“添加 / 重载扩展”的回答：扩展本身，加上这一次的结果（见 AddExtension）。
+type extResult struct {
+	*model.GlobalExtension
+	Outcome string `json:"outcome"`
+}
+
+// samePath 两个本机路径是不是同一个（Windows 不分大小写）。
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// ReloadExtension 从扩展的来源再取一次：本机路径加的重新读那个路径，商店加的重新下载商店里现在的版本。结果同 AddExtension。
+func (a *App) ReloadExtension(id, fromInst string) (*model.GlobalExtension, string, error) {
+	a.mu.Lock()
+	x := a.extLocked(id)
+	var path, store, source string
+	if x != nil {
+		path, store, source = x.Path, x.ExtID, x.Source
+	}
+	a.mu.Unlock()
+	switch {
+	case x == nil:
+		return nil, "", errors.New("扩展不存在")
+	case path != "":
+		return a.AddExtension("", path, fromInst)
+	case source == "store":
+		return a.AddExtension(store, "", fromInst)
+	}
+	return nil, "", errors.New("这个扩展是以前加的，没记下它在哪个文件夹。点“添加”把那个文件夹的路径再填一次（会认成同一个扩展，不会多出一份），以后就能直接重载")
 }
 
 // PatchExtension 修改扩展的启用状态、范围、数据模式。
