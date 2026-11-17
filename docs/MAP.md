@@ -98,7 +98,7 @@
 | 三分钟 | `scripts/check.sh smoke` | 真内核 + 真核心服务：开实例、指纹、隔离、断流、订阅、编号 | `scripts/smoke.mjs` |
 | 二十多分钟 | `scripts/release.sh [--check]` | Windows 安装包和真窗口、安卓模拟器；通过后发版 | `.github/workflows/*.yml` |
 
-环境（Go、Node、Playwright）一条命令恢复：`scripts/dev-setup.sh`。
+环境（Go、Node、Playwright、git 远端和推送凭据）一条命令恢复：`scripts/dev-setup.sh`。推送后看 CI：`scripts/ci-watch.sh`。
 
 ## 还欠着的结构整理（改到哪一块就顺手做哪一块）
 
