@@ -205,25 +205,29 @@ func Filled(win, vis, work Rect, scale float64) Rect {
 	return Rect{work.L - (vis.L - win.L), top - (vis.T - win.T), work.R + (win.R - vis.R), work.B + (win.B - vis.B)}
 }
 
-// ---------- 自动收起（decisions UI-17）：平时是窗口顶上的一条色条，鼠标靠近才展开 ----------
+// ---------- 自动收起（decisions UI-17）：平时是窗口顶上的一条色条，鼠标放上去才展开 ----------
 //
-// 收起：每个实例一小段自己的颜色，贴在窗口最上面那几个像素里（那里本来只是标题栏的底色），不另占地方。
+// 收起：每个实例一小段自己的颜色，骑在窗口的上沿上（上沿外面 4 像素、里面 5 像素；里面那 5 像素本来只是标题栏的底色）。
+// 这一条是实例栏自己的窗口：鼠标到了上面不会变成“改窗口大小”的箭头，也拖不到窗口，只管展开。
 // 展开：整条栏盖在浏览器自己那排标签页上，鼠标离开就收回去。右上角三个窗口按钮不盖。
 const (
-	StripH = 5   // 色条的高
-	OpenH  = 40  // 展开时的高：盖住窗口最上面 40 像素，也就是浏览器自己那排标签页
-	capW   = 140 // 最小化 / 最大化 / 关闭三个按钮一共多宽
-	openDY = 2   // 展开时标签比平时靠下这么多：和浏览器的标签页一样从第 7 个像素开始
+	StripH  = 9   // 色条的高（当前实例那一段；别的矮 3 像素）
+	stripUp = 4   // 其中露在窗口上沿外面的部分
+	OpenH   = 44  // 实例栏窗口的高：上沿外面 stripUp + 窗口最上面 40 像素（浏览器自己那排标签页）
+	capW    = 140 // 最小化 / 最大化 / 关闭三个按钮一共多宽
+	openDY  = 6   // 展开时标签比平时靠下这么多：stripUp，再加 2（和浏览器的标签页一样从窗口的第 7 个像素开始）
 )
 
-// CompactRect 是自动收起时实例栏的位置：左上角和窗口对齐，右边让出窗口按钮。open 为 false 时只有色条那么高。
+// CompactRect 是自动收起时实例栏的范围：左边和窗口对齐，右边让出窗口按钮，上面比窗口高出 stripUp。
+// open 为 false 时只有色条那么高。
 func CompactRect(vis Rect, scale float64, open bool) Rect {
-	r := Rect{vis.L, vis.T, vis.R - px(capW, scale), vis.T + px(StripH, scale)}
+	top := vis.T - px(stripUp, scale)
+	r := Rect{vis.L, top, vis.R - px(capW, scale), top + px(StripH, scale)}
 	if r.W() < px(240, scale) { // 窗口太窄：不让了
 		r.R = vis.R
 	}
 	if open {
-		r.B = vis.T + px(OpenH, scale)
+		r.B = top + px(OpenH, scale)
 	}
 	return r
 }
@@ -246,15 +250,19 @@ func LayCompact(width, n int, scale float64) Layout {
 	return Lay(width, n, scale).Down(px(openDY, scale))
 }
 
-// Reach 报告鼠标是不是“靠近”了收起的色条（该展开了）：左右在有色条（和 ＋）的那一段里，
-// 上下在窗口上沿外面 6 像素到里面 8 像素之间。再往下就是浏览器自己的标签页，不能算。
-func Reach(strip Rect, l Layout, x, y int, scale float64) bool {
-	left, right := strip.L+l.Plus.L, strip.L+l.Plus.R
+// Band 是收起时“鼠标放上去就展开”的那一条（相对实例栏左上角）：从第一段色条左边一点到 ＋ 的位置，色条那么高。
+// 段与段之间的缝也算（画的时候这一条整个都接鼠标），不然鼠标正好落在缝里就漏到下面的窗口上去了。
+func Band(l Layout, scale float64) Rect {
+	left := l.Plus.L
 	if len(l.Slots) > 0 {
-		left = strip.L + l.Slots[0].Tab.L
+		left = l.Slots[0].Tab.L
 	}
-	m := px(6, scale)
-	return x >= left-m && x < right+m && y >= strip.T-m && y < strip.T+px(StripH+3, scale)
+	return Rect{max(0, left-px(4, scale)), 0, l.Plus.R, px(StripH, scale)}
+}
+
+// Reach 报告鼠标是不是在收起的色条上（该展开了）。
+func Reach(strip Rect, l Layout, x, y int, scale float64) bool {
+	return Band(l, scale).Has(x-strip.L, y-strip.T)
 }
 
 // Stay 报告鼠标是不是还在展开的栏附近（四周放宽 10 像素）：不在了就收起。
@@ -269,9 +277,10 @@ func CarryCompact(vis Rect, x, y, grabX, grabY int, scale float64) (dx, dy int) 
 	return carry(bar, LayCompact(bar.W(), 1, scale).Slots[0].Tab, x, y, grabX, grabY, scale)
 }
 
-// FilledCompact 同 Filled，用于自动收起的栏：色条在窗口里面，窗口直接占满整个可用区域。
-func FilledCompact(win, vis, work Rect) Rect {
-	return Rect{work.L - (vis.L - win.L), work.T - (vis.T - win.T), work.R + (win.R - vis.R), work.B + (win.B - vis.B)}
+// FilledCompact 同 Filled，用于自动收起的栏：窗口占满可用区域，只在最上面让出色条露在外面的那几个像素。
+func FilledCompact(win, vis, work Rect, scale float64) Rect {
+	top := work.T + px(stripUp, scale)
+	return Rect{work.L - (vis.L - win.L), top - (vis.T - win.T), work.R + (win.R - vis.R), work.B + (win.B - vis.B)}
 }
 
 // Next 在当前标签没了以后选下一个：原来排在它后面的第一个还在的；没有就取它前面最近的。

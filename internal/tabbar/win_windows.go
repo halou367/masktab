@@ -70,6 +70,7 @@ var (
 	pCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
 	pGetPixel           = gdi32.NewProc("GetPixel")
 	pGdiFlush           = gdi32.NewProc("GdiFlush")
+	pBitBlt             = gdi32.NewProc("BitBlt")
 	pSelectObject       = gdi32.NewProc("SelectObject")
 	pDeleteObject       = gdi32.NewProc("DeleteObject")
 	pDeleteDC           = gdi32.NewProc("DeleteDC")
@@ -308,4 +309,13 @@ func setEdge(h uintptr, c [3]int) bool {
 func resetEdge(h uintptr) {
 	v := uint32(0xFFFFFFFF)
 	_, _, _ = pDwmSetWindowAttribute.Call(h, 34, uintptr(unsafe.Pointer(&v)), 4)
+}
+
+// setCalm 关掉 / 恢复这个窗口的系统动画（出现、消失、最小化时的缩放和淡入淡出）。别的进程的窗口也可以设。
+func setCalm(h uintptr, on bool) {
+	v := uint32(0)
+	if on {
+		v = 1
+	}
+	_, _, _ = pDwmSetWindowAttribute.Call(h, 3 /* DWMWA_TRANSITIONS_FORCEDISABLED */, uintptr(unsafe.Pointer(&v)), 4)
 }

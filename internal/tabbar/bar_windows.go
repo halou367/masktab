@@ -74,6 +74,7 @@ type mgr struct {
 	busy   bool     // 正在处理一件事。处理当中系统还会插进别的通知来（真机上遇到过：正把一个实例拖出去，换前台窗口的通知插进来又对了一遍账，
 	again  bool     // 看到的是做到一半的状态）：插进来的一律不处理，记下 again，等手上这件做完再对一遍
 	trace  []string // 最近发生的事（诊断用）
+	veilW  uintptr  // 换实例时盖在上面的那一层（见 fade_windows.go）
 	noEdge bool     // 这台机器上染不了边线（Windows 10）：不再试
 
 	bgBy   map[string][3]int // 各实例窗口标题栏的颜色（从屏幕上量到的）
@@ -133,7 +134,7 @@ func Run(h Host) {
 	}
 	ctlHwnd.Store(m.ctl)
 	_, _, _ = pSetTimer.Call(m.ctl, 1, 250, 0)
-	_, _, _ = pSetTimer.Call(m.ctl, 2, 30, 0) // 看鼠标是不是靠近了收起的色条
+	_, _, _ = pSetTimer.Call(m.ctl, 2, 20, 0) // 看鼠标是不是靠近了收起的色条
 	m.evCB = syscall.NewCallback(winEvent)
 	_, _, _ = pSetWinEventHook.Call(evForeground, evMinimizeEnd, 0, m.evCB, 0, 0, 0x2 /* 跳过自己进程 */)
 	var ms msg
@@ -232,6 +233,7 @@ func (m *mgr) newGroup() *group {
 		m.host.Logf("合并窗口：建实例栏失败")
 		return nil
 	}
+	setCalm(h, true)
 	g := &group{m: m, hwnd: h, scale: 1, hover: -1}
 	m.groups = append(m.groups, g)
 	mu.Lock()
@@ -567,8 +569,16 @@ func (g *group) switchTo(id string) {
 		cur = 0
 	}
 	r := g.lastWin
+	var v *veil
 	if cur != 0 && cur != tgt && isWindow(cur) && isVisible(cur) && !isIconic(cur) {
 		r = winRect(cur)
+		if !m.drag.on { // 换实例不闪：先把现在的样子盖在上面，底下换好了再让它淡出去（decisions UI-18）
+			v = g.veilUp(cur)
+		}
+	}
+	if v != nil { // 这一下不要系统自己的“窗口出现 / 消失”动画：两个动画叠在一起就是闪
+		setCalm(tgt, true)
+		setCalm(cur, true)
 	}
 	if isIconic(tgt) || isZoomed(tgt) {
 		show(tgt, swShowNoActivate) // 回到普通大小（不然改不了位置）
@@ -602,6 +612,13 @@ func (g *group) switchTo(id string) {
 	g.pickBg()
 	g.paintEdge()
 	g.repaintIfChanged()
+	if v != nil {
+		v.fade(m)
+		setCalm(tgt, false)
+		if isWindow(cur) {
+			setCalm(cur, false)
+		}
+	}
 }
 
 // toggleFill 在“铺满屏幕”和原来的大小之间切换。浏览器自己的最大化不给实例栏留地方，所以一发现它最大化了就换成这个。
@@ -627,7 +644,7 @@ func (g *group) toggleFill() {
 	}
 	to := Filled(winRect(h), visRect(h), work, scaleOf(h))
 	if g.m.st.Compact {
-		to = FilledCompact(winRect(h), visRect(h), work)
+		to = FilledCompact(winRect(h), visRect(h), work, scaleOf(h))
 	}
 	setPos(h, to, 0)
 	g.filled, g.fillTo = true, winRect(h)
@@ -977,22 +994,15 @@ func (g *group) dropRect() Rect {
 	return g.rect
 }
 
-// mine 报告屏幕上 (x, y) 这一点是不是这一组自己的：最上面的窗口是这条栏或者当前的浏览器窗口。
-// 别的程序的窗口盖在上面时不算。窗口上沿外面那几个像素不属于任何一个，就看当前的浏览器窗口是不是前台。
-func (g *group) mine(h uintptr, vis Rect, x, y int) bool {
+// under 返回屏幕上 (x, y) 这一点最上面是哪个窗口（顶层的）。
+func under(x, y int) uintptr {
 	at, _, _ := pWindowFromPoint.Call(uintptr(uint32(x)) | uintptr(uint32(y))<<32)
-	if root, _, _ := pGetAncestor.Call(at, 2 /* 顶层窗口 */); root == g.hwnd || root == h {
-		return true
-	}
-	if y < vis.T {
-		fg, _, _ := pGetForegroundWindow.Call()
-		return fg == h
-	}
-	return false
+	root, _, _ := pGetAncestor.Call(at, 2 /* 顶层窗口 */)
+	return root
 }
 
-// hoverTick 每 30 毫秒看一次鼠标：在收起的色条附近停了 0.08 秒就展开，离开展开的栏 0.35 秒就收起。
-// 正拖着、正有实例要并进来的时候不收。
+// hoverTick 每 20 毫秒看一次鼠标：在收起的色条上停了 0.06 秒就展开，离开展开的栏 0.35 秒就收起。
+// “在色条上”= 鼠标底下最上面的窗口就是这条栏（别的程序的窗口盖在上面时不算）。正拖着、正有实例要并进来的时候不收。
 func (m *mgr) hoverTick() {
 	x, y := cursor()
 	now := time.Now()
@@ -1003,22 +1013,21 @@ func (m *mgr) hoverTick() {
 			continue
 		}
 		keep := g.drop || (m.drag.on && m.drag.g == g) || now.Before(g.pin)
-		vis := visRect(h)
 		if !g.open {
-			if !keep && !(Reach(CompactRect(vis, g.scale, false), g.lay, x, y, g.scale) && g.mine(h, vis, x, y)) {
+			if !keep && !(Reach(g.rect, g.lay, x, y, g.scale) && under(x, y) == g.hwnd) {
 				g.nearAt = time.Time{}
 				continue
 			}
 			if g.nearAt.IsZero() {
 				g.nearAt = now
 			}
-			if keep || now.Sub(g.nearAt) >= 80*time.Millisecond {
+			if keep || now.Sub(g.nearAt) >= 60*time.Millisecond {
 				g.setOpen(true)
 				changed = true
 			}
 			continue
 		}
-		if keep || (Stay(g.rect, x, y, g.scale) && g.mine(h, vis, x, y)) {
+		if at := under(x, y); keep || (Stay(g.rect, x, y, g.scale) && (at == g.hwnd || at == h)) {
 			g.awayAt = time.Time{}
 			continue
 		}
@@ -1249,8 +1258,19 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		case wp&mkTest != 0: // 测试脚本：当作鼠标就在这儿，先展开
 			g.pin = time.Now().Add(6 * time.Second)
 			g.setOpen(true)
-		case !g.open: // 真鼠标碰到了色条：展开由 hoverTick 管（停一小会儿才展开），这里不当成点击
-			return 0
+		case !g.open:
+			// 真鼠标在收着的色条上。只是路过：展开由 hoverTick 管（停一小会儿才展开）。
+			// 没等展开就按下去了：马上展开（不放过渡），按的是哪一段色条就当作点了哪个标签（色条和标签左右位置一样）
+			if ms != wmLButtonDown {
+				return 0
+			}
+			g.nearAt, g.awayAt = time.Time{}, time.Time{}
+			g.open = true
+			g.rect = Rect{}
+			g.place()
+			if len(g.lay.Slots) > 0 {
+				y = (g.lay.Slots[0].Tab.T + g.lay.Slots[0].Tab.B) / 2
+			}
 		}
 	}
 	switch ms {

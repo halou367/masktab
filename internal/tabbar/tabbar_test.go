@@ -203,24 +203,24 @@ func TestEars(t *testing.T) {
 func TestCompact(t *testing.T) {
 	vis := Rect{100, 200, 1300, 900}
 	shut, open := CompactRect(vis, 1, false), CompactRect(vis, 1, true)
-	if shut != (Rect{100, 200, 1160, 205}) || open != (Rect{100, 200, 1160, 240}) {
+	if shut != (Rect{100, 196, 1160, 205}) || open != (Rect{100, 196, 1160, 240}) {
 		t.Fatalf("收起 %v 展开 %v", shut, open)
 	}
 	if r := CompactRect(Rect{0, 0, 300, 400}, 1, false); r.R != 300 {
 		t.Fatalf("窄窗口不该再让出按钮：%v", r)
 	}
 	l := LayCompact(open.W(), 3, 1)
-	if l.Slots[0].Tab.T != 6 || l.Slots[0].Tab.B != 32 || l.Slots[0].Tab.L != 8 {
-		t.Fatalf("展开时标签该从第 7 个像素开始：%v", l.Slots[0].Tab)
+	if l.Slots[0].Tab.T != 10 || l.Slots[0].Tab.B != 36 || l.Slots[0].Tab.L != 8 {
+		t.Fatalf("展开时标签该从窗口的第 7 个像素开始：%v", l.Slots[0].Tab)
 	}
 	if k, i := l.Hit(300, 20); k != HitTab || i != 1 {
 		t.Fatalf("展开后点第二个标签：%d %d", k, i)
 	}
-	// 靠近：色条上、窗口上沿外面一点、里面一点都算；浏览器标签页的位置、色条右边的空白不算
+	// 鼠标在色条那一条上才算（段与段之间的缝、＋ 的位置也算）；窗口里面（标题栏、浏览器的标签页）、色条右边的空白不算
 	for _, c := range []struct {
 		x, y int
 		want bool
-	}{{150, 202, true}, {150, 195, true}, {150, 207, true}, {150, 208, false}, {150, 193, false}, {900, 202, false}, {700, 202, true}} {
+	}{{150, 196, true}, {150, 204, true}, {150, 205, false}, {150, 195, false}, {299, 200, true}, {700, 200, true}, {105, 200, true}, {102, 200, false}, {720, 200, false}, {900, 200, false}} {
 		if got := Reach(shut, l, c.x, c.y, 1); got != c.want {
 			t.Fatalf("Reach(%d,%d) = %v", c.x, c.y, got)
 		}
@@ -236,9 +236,9 @@ func TestCompact(t *testing.T) {
 	if bar.L+tab.L+40 != 640 || bar.T+12 != 480 {
 		t.Fatalf("挪完以后抓的点在 %d,%d", bar.L+tab.L+40, bar.T+12)
 	}
-	// 铺满：窗口看得见的那一圈占满整个可用区域
-	f := FilledCompact(Rect{93, 100, 1107, 807}, Rect{100, 100, 1100, 800}, Rect{0, 0, 1920, 1032})
-	if f != (Rect{-7, 0, 1927, 1039}) {
+	// 铺满：窗口占满可用区域，上面让出色条露在外面的 4 像素
+	f := FilledCompact(Rect{93, 100, 1107, 807}, Rect{100, 100, 1100, 800}, Rect{0, 0, 1920, 1032}, 1)
+	if f != (Rect{-7, 4, 1927, 1039}) {
 		t.Fatalf("铺满 %v", f)
 	}
 }
@@ -252,51 +252,60 @@ func TestMorph(t *testing.T) {
 
 	// 收着：只有色条
 	c := Morph(800, l, tabs, lk, 1, 0, false)
-	if c.H != 40 {
+	if c.H != 44 {
 		t.Fatalf("高 %d", c.H)
 	}
 	alpha := func(x, y int) int { return int(c.Pix[(y*c.W+x)*4+3]) }
-	if c.At(mid(0), 1) != red || c.At(mid(1), 1) != blue {
-		t.Fatalf("没选中的两段该是实例自己的颜色：%v %v", c.At(mid(0), 1), c.At(mid(1), 1))
+	if c.At(mid(0), 6) != red || c.At(mid(1), 6) != blue {
+		t.Fatalf("没选中的两段该是实例自己的颜色：%v %v", c.At(mid(0), 6), c.At(mid(1), 6))
 	}
-	if alpha(mid(0), 3) != 0 || alpha(mid(2), 3) != 255 || alpha(mid(2), 5) != 0 {
-		t.Fatalf("没选中的 3 像素高，选中的 5 像素：%d %d %d", alpha(mid(0), 3), alpha(mid(2), 3), alpha(mid(2), 5))
+	// 选中的 9 像素高，没选中的 6 像素、下面对齐（上面 3 行只有接鼠标用的那一丝）
+	if alpha(mid(2), 1) != 255 || alpha(mid(2), 8) != 255 || alpha(mid(0), 1) != 1 || alpha(mid(0), 4) != 255 || alpha(mid(0), 9) != 0 {
+		t.Fatalf("色条的高不对：%d %d %d %d %d", alpha(mid(2), 1), alpha(mid(2), 8), alpha(mid(0), 1), alpha(mid(0), 4), alpha(mid(0), 9))
 	}
-	if got := c.At(mid(2), 1); got == yellow {
+	if got := c.At(mid(2), 4); got == yellow {
 		t.Fatalf("和标题栏同色的那一段该用浅一档：%v", got)
 	}
-	for _, x := range []int{2, l.Slots[0].Tab.R + 2, l.Plus.L + 5, 780} { // 段与段之间、＋ 的位置、右边：全透明
-		if alpha(x, 1) != 0 || alpha(x, 20) != 0 {
-			t.Fatalf("x=%d 该是透明的", x)
+	for _, x := range []int{l.Slots[0].Tab.R + 2, l.Plus.L + 5, 5} { // 段与段之间的缝、＋ 的位置、最左边一点：看不见，但接得住鼠标
+		if alpha(x, 5) != 1 || c.At(x, 5) != [3]int{0, 0, 0} {
+			t.Fatalf("x=%d 该是一丝透明度：%d", x, alpha(x, 5))
 		}
 	}
-	if a := alpha(l.Slots[2].Tab.L, 4); a >= 255 {
+	for _, pt := range [][2]int{{2, 5}, {l.Plus.R + 3, 5}, {780, 5}, {mid(0), 20}, {300, 12}} { // 色条以外：全透明，点得穿
+		if alpha(pt[0], pt[1]) != 0 {
+			t.Fatalf("%v 该是透明的", pt)
+		}
+	}
+	if a := alpha(l.Slots[2].Tab.L, 0); a >= 255 {
 		t.Fatalf("角该是圆的：%d", a)
 	}
 
-	// 完全展开：和平时的栏一样的东西，整张不透明
+	// 完全展开：窗口上沿外面的 4 行是空的，下面和平时的栏一样、整张不透明
 	c = Morph(800, l, tabs, lk, 1, 1, false)
-	want := draw(800, 40, l, tabs, lk, 1, false)
-	for _, pt := range [][2]int{{mid(0), 20}, {mid(2), 20}, {700, 20}, {3, 38}, {l.Slots[0].Tab.L, l.Slots[0].Tab.T}, {(l.Plus.L + l.Plus.R) / 2, 19}} {
+	want := draw(800, 44, l, tabs, lk, 1, false)
+	for _, pt := range [][2]int{{mid(0), 24}, {mid(2), 24}, {700, 20}, {3, 42}, {l.Slots[0].Tab.L, l.Slots[0].Tab.T}, {(l.Plus.L + l.Plus.R) / 2, 23}} {
 		if c.At(pt[0], pt[1]) != want.At(pt[0], pt[1]) || alpha(pt[0], pt[1]) != 255 {
 			t.Fatalf("展开后 %v 处是 %v（透明度 %d），该是 %v", pt, c.At(pt[0], pt[1]), alpha(pt[0], pt[1]), want.At(pt[0], pt[1]))
 		}
+	}
+	if alpha(700, 2) != 0 || alpha(mid(0), 3) != 0 {
+		t.Fatalf("展开后窗口上沿外面不该有东西：%d %d", alpha(700, 2), alpha(mid(0), 3))
 	}
 
 	// 中间：标签长了一半，底色半透明、只铺到一半，字还没出来
 	c = Morph(800, l, tabs, lk, 1, 0.5, false)
 	r := MorphRect(l.Slots[0].Tab, false, 1, 0.5)
-	if r.T != 3 || r.B != 18 || r.L != l.Slots[0].Tab.L {
+	if r.T != 7 || r.B != 23 || r.L != l.Slots[0].Tab.L {
 		t.Fatalf("一半的时候标签在 %v", r)
 	}
-	if alpha(mid(0), 10) != 255 || alpha(mid(0), 19) == 255 {
-		t.Fatalf("标签是实的，标签下面不是：%d %d", alpha(mid(0), 10), alpha(mid(0), 19))
+	if alpha(mid(0), 12) != 255 || alpha(mid(0), 25) == 255 {
+		t.Fatalf("标签是实的，标签下面不是：%d %d", alpha(mid(0), 12), alpha(mid(0), 25))
 	}
-	if a := alpha(700, 10); a < 120 || a > 135 {
+	if a := alpha(700, 12); a < 120 || a > 135 {
 		t.Fatalf("底色该是半透明：%d", a)
 	}
-	if alpha(700, 30) != 0 {
-		t.Fatalf("底色还没铺到下面：%d", alpha(700, 30))
+	if alpha(700, 34) != 0 {
+		t.Fatalf("底色还没铺到下面：%d", alpha(700, 34))
 	}
 	if InkAlpha(0.5) != 0 || InkAlpha(1) != 1 || InkAlpha(0.75) != 0.5 {
 		t.Fatal("字在后一半才淡入")

@@ -248,13 +248,14 @@ func mix(a, b [3]int, t float64) [3]int {
 	return [3]int{int(lerp(float64(a[0]), float64(b[0]), t) + 0.5), int(lerp(float64(a[1]), float64(b[1]), t) + 0.5), int(lerp(float64(a[2]), float64(b[2]), t) + 0.5)}
 }
 
-// MorphRect 是一个标签在 e 这一刻占的位置：e = 0 是色条里的一小段（当前的 5 像素高，别的 3 像素），e = 1 是展开后的标签。左右不变。
+// MorphRect 是一个标签在 e 这一刻占的位置：e = 0 是色条里的一小段（当前的那个占满色条的高，别的矮 3 像素、下面对齐），
+// e = 1 是展开后的标签。左右不变。
 func MorphRect(tab Rect, active bool, scale, e float64) Rect {
-	sh := px(3, scale)
+	top := px(3, scale)
 	if active {
-		sh = px(StripH, scale)
+		top = 0
 	}
-	return Rect{tab.L, int(lerp(0, float64(tab.T), e) + 0.5), tab.R, int(lerp(float64(sh), float64(tab.B), e) + 0.5)}
+	return Rect{tab.L, int(lerp(float64(top), float64(tab.T), e) + 0.5), tab.R, int(lerp(float64(px(StripH, scale)), float64(tab.B), e) + 0.5)}
 }
 
 // InkAlpha 是 e 这一刻字、×、＋ 有多实：前一半不出现（标签还太扁），后一半渐渐出来。
@@ -264,19 +265,31 @@ func InkAlpha(e float64) float64 {
 
 // Morph 画自动收起的栏在 e 这一刻的样子（不含字）：e = 0 收着，只有色条；e = 1 完全展开。
 // 中间：每一段色条往下长成标签（颜色、圆角一起过渡），底色从透明变实并从上往下铺开，×、＋ 最后淡入。
-// 位图高 OpenH、预乘透明度，直接交给分层窗口；透明的地方鼠标点得穿。
+// 位图高 OpenH、预乘透明度，直接交给分层窗口。最上面 stripUp 行在窗口上沿外面，只有色条会画到那里；底色从窗口上沿开始。
+// 没展开完的时候，Band 那一条里没画东西的点留一丝透明度（看不出来，但接得住鼠标），别处全透明、点得穿。
 func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlus bool) *Canvas {
 	e = math.Max(0, math.Min(1, e))
-	h := px(OpenH, scale)
+	h, up := px(OpenH, scale), px(stripUp, scale)
 	c := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4), Premul: true}
+	if e < 1 {
+		band := Band(l, scale)
+		for y := band.T; y < band.B && y < h; y++ {
+			for x := band.L; x < band.R && x < w; x++ {
+				c.Pix[(y*w+x)*4+3] = 1
+			}
+		}
+	}
 	if e > 0 { // 底
 		edge := lerp(float64(px(StripH, scale)), float64(h), e)
-		for y := 0; y < h; y++ {
+		for y := up; y < h; y++ {
 			a := e * math.Max(0, math.Min(1, edge-float64(y))) // 最下面一行按露出多少算：往下铺的时候边缘不跳
 			if a <= 0 {
 				break
 			}
 			b, g, r, al := byte(float64(lk.Bg[2])*a+0.5), byte(float64(lk.Bg[1])*a+0.5), byte(float64(lk.Bg[0])*a+0.5), byte(255*a+0.5)
+			if al == 0 {
+				al = 1
+			}
 			row := c.Pix[y*w*4 : (y+1)*w*4]
 			for x := 0; x < w; x++ {
 				row[x*4], row[x*4+1], row[x*4+2], row[x*4+3] = b, g, r, al

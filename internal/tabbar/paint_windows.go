@@ -167,7 +167,6 @@ func newSurface(w, h int) *surface {
 	}
 	sf.old, _, _ = pSelectObject.Call(sf.mem, sf.dib)
 	sf.pix = unsafe.Slice((*byte)(bits), w*h*4)
-	sf.keep = make([]byte, w*h*4)
 	_, _, _ = pSetBkMode.Call(sf.mem, 1 /* 透明 */)
 	return sf
 }
@@ -197,6 +196,9 @@ func (g *group) frame(sf *surface, e float64) {
 	copy(sf.pix, c.Pix)
 	if ink := InkAlpha(e); ink > 0 {
 		// 字由系统画。系统画字不管透明度那一位，也不会“画得淡一点”：先留一份没字的，画完以后把字按 ink 混回去，透明度用原来的
+		if sf.keep == nil {
+			sf.keep = make([]byte, len(sf.pix))
+		}
 		copy(sf.keep, c.Pix)
 		g.m.fonts(g.scale)
 		var boxes []Rect
@@ -235,7 +237,8 @@ func (g *group) frame(sf *surface, e float64) {
 			}
 		}
 	}
-	Corners(sf.pix, sf.w, sf.h, 8*g.scale, true, false) // 左上角和窗口的圆角对齐；右边在标题栏中间，不削
+	up := px(stripUp, g.scale) // 底色从窗口的上沿开始：左上角和窗口的圆角对齐；右边在标题栏中间，不削
+	Corners(sf.pix[up*sf.w*4:], sf.w, sf.h-up, 8*g.scale, true, false)
 	size, src := point32{int32(sf.w), int32(sf.h)}, point32{}
 	blend := [4]byte{0, 0, 255, 1}
 	_, _, _ = pUpdateLayeredWindow.Call(g.hwnd, sf.screen, 0, uintptr(unsafe.Pointer(&size)), sf.mem, uintptr(unsafe.Pointer(&src)), 0, uintptr(unsafe.Pointer(&blend)), 2)
