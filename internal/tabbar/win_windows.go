@@ -61,6 +61,7 @@ var (
 	pDestroyMenu              = user32.NewProc("DestroyMenu")
 	pDrawTextW                = user32.NewProc("DrawTextW")
 	pUpdateLayeredWindow      = user32.NewProc("UpdateLayeredWindow")
+	pSetLayeredWindowAttrs    = user32.NewProc("SetLayeredWindowAttributes")
 	pGetDC                    = user32.NewProc("GetDC")
 	pReleaseDC                = user32.NewProc("ReleaseDC")
 	pWindowFromPoint          = user32.NewProc("WindowFromPoint")

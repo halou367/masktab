@@ -15,8 +15,7 @@ import (
 // 等新窗口画好，再让盖着的这一层淡出去。看到的就是旧画面渐渐变成新画面。
 
 type veil struct {
-	sf *surface
-	r  Rect
+	r Rect
 }
 
 // veilUp 把这一组现在的样子（当前窗口 + 实例栏）拍下来盖在上面。cur 是当前窗口。拍不了就返回 nil（照旧直接换）。
@@ -36,8 +35,9 @@ func (g *group) veilUp(cur uintptr) *veil {
 		return nil
 	}
 	if m.veilW == 0 || !isWindow(m.veilW) {
-		// 分层窗口、鼠标点得穿、任务栏上没有按钮、不抢焦点
-		m.veilW, _, _ = pCreateWindowExW.Call(0x80000|0x20|0x80|0x08000000, uintptr(unsafe.Pointer(m.cls)), 0, 0x80000000 /* WS_POPUP */, 0, 0, 1, 1, 0, 0, m.inst, 0)
+		// 分层窗口、鼠标点得穿、任务栏上没有按钮、不抢焦点、总在最上面。
+		// 总在最上面：换窗口的过程中新窗口会先被提到最前面，这一层不在它上面的话，那一瞬间就露出来了（真机上量到过：闪一帧新画面又变回去）
+		m.veilW, _, _ = pCreateWindowExW.Call(0x80000|0x20|0x80|0x08000000|0x8, uintptr(unsafe.Pointer(m.cls)), 0, 0x80000000 /* WS_POPUP */, 0, 0, 1, 1, 0, 0, m.inst, 0)
 		if m.veilW == 0 {
 			return nil
 		}
@@ -50,23 +50,24 @@ func (g *group) veilUp(cur uintptr) *veil {
 	if sf == nil {
 		return nil
 	}
+	defer sf.free()
 	if ok, _, _ := pBitBlt.Call(sf.mem, 0, 0, uintptr(r.W()), uintptr(r.H()), sf.screen, uintptr(r.L), uintptr(r.T), 0x00CC0020 /* 照抄 */); ok == 0 {
-		sf.free()
 		return nil
 	}
-	// 归实例栏所有：总在栏（和它底下的窗口）上面，别的程序的窗口该在哪还在哪
-	_, _, _ = pSetWindowLongPtrW.Call(m.veilW, ^uintptr(7) /* GWLP_HWNDPARENT */, g.hwnd)
-	pos, size, src := point32{int32(r.L), int32(r.T)}, point32{int32(r.W()), int32(r.H())}, point32{}
-	blend := [4]byte{0, 0, 255, 0} // 整张图一个透明度（拍下来的图没有自己的透明度）
-	_, _, _ = pUpdateLayeredWindow.Call(m.veilW, sf.screen, uintptr(unsafe.Pointer(&pos)), uintptr(unsafe.Pointer(&size)), sf.mem, uintptr(unsafe.Pointer(&src)), 0, uintptr(unsafe.Pointer(&blend)), 2)
-	_, _, _ = pSetWindowPos.Call(m.veilW, 0 /* 最上面 */, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate|swpShow)
+	// 整个窗口一个透明度，由系统在显卡上合成：淡出的时候每一帧只改这一个数，不用重新交图（交图的话一帧要三十多毫秒，看着是卡的）。
+	// 先全透明地摆好、把拍下来的图画上去，再变成不透明：不会有一帧是空的
+	_, _, _ = pSetLayeredWindowAttrs.Call(m.veilW, 0, 0, 2 /* LWA_ALPHA */)
+	_, _, _ = pSetWindowPos.Call(m.veilW, ^uintptr(0) /* 总在最上面 */, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), swpNoActivate|swpShow)
+	dc, _, _ := pGetDC.Call(m.veilW)
+	_, _, _ = pBitBlt.Call(dc, 0, 0, uintptr(r.W()), uintptr(r.H()), sf.mem, 0, 0, 0x00CC0020)
+	_, _, _ = pReleaseDC.Call(m.veilW, dc)
+	_, _, _ = pSetLayeredWindowAttrs.Call(m.veilW, 0, 255, 2)
 	_, _, _ = pDwmFlush.Call() // 等它真的上了屏幕再动底下的窗口
-	return &veil{sf: sf, r: r}
+	return &veil{r: r}
 }
 
 // fade 等新窗口画好，再让盖着的那一层淡出去，最后拿掉。
 func (v *veil) fade(m *mgr) {
-	defer v.sf.free()
 	wait := func() {
 		t0 := time.Now()
 		if hr, _, _ := pDwmFlush.Call(); hr != 0 || time.Since(t0) < 2*time.Millisecond {
@@ -85,12 +86,10 @@ func (v *veil) fade(m *mgr) {
 			break
 		}
 		x = x * x * (3 - 2*x) // 两头慢中间快
-		blend := [4]byte{0, 0, byte(255*(1-x) + 0.5), 0}
-		_, _, _ = pUpdateLayeredWindow.Call(m.veilW, 0, 0, 0, 0, 0, 0, uintptr(unsafe.Pointer(&blend)), 2)
+		_, _, _ = pSetLayeredWindowAttrs.Call(m.veilW, 0, uintptr(255*(1-x)+0.5), 2)
 		frames++
 		wait()
 	}
 	show(m.veilW, swHide)
-	_, _, _ = pSetWindowLongPtrW.Call(m.veilW, ^uintptr(7), 0) // 不再归那条栏所有：栏拆掉的时候别把它带走
 	m.note("fade %d frames in %dms", frames, time.Since(start).Milliseconds())
 }
