@@ -35,6 +35,15 @@ func TestMergeHostState(t *testing.T) {
 	if st.Tabs[0].Pid != 11 || st.Tabs[0].Color != [3]int{26, 115, 232} || st.Tabs[1].Color != [3]int{217, 48, 37} {
 		t.Fatalf("进程号、颜色不对：%+v", st.Tabs)
 	}
+	if st.Compact {
+		t.Fatal("自动收起默认是关的")
+	}
+	a.mu.Lock()
+	a.Settings.MergeCompact = true
+	a.mu.Unlock()
+	if !h.State().Compact {
+		t.Fatal("自动收起的开关没传给实例栏")
+	}
 	// ＋ 菜单：没在运行的实例可以打开（正在启动的不列），最后是新建
 	if len(st.Menu) != 3 || st.Menu[0].Key != "open:c" || st.Menu[1].Label != "-" || st.Menu[2].Key != "new" {
 		t.Fatalf("菜单不对：%+v", st.Menu)

@@ -82,6 +82,9 @@ export function settingsAdv(c) {
     // 合并窗口（决策 UI-15）：只有 Windows 桌面版做了
     !host && st.os === 'windows' && row({ ic: 'layers', t: '合并窗口', s: '各实例的窗口叠在同一个位置，顶上多一排实例标签，点标签切换',
       trail: sw(s.mergeWindows, '合并窗口', (v) => set(c, 'mergeWindows', v)) }),
+    // 实例栏自动收起（决策 UI-17，试验）
+    !host && st.os === 'windows' && s.mergeWindows && row({ ic: 'layers', t: '实例栏自动收起', s: '平时收成窗口顶上的一条色条，鼠标靠近再展开',
+      trail: sw(s.mergeCompact, '实例栏自动收起', (v) => set(c, 'mergeCompact', v)) }),
     !host && row({ ic: 'close', t: '退出 MaskTab', s: '关闭全部实例并退出（下次启动会恢复）', onclick: async () => { if (await confirmDlg('关闭全部实例并退出？', '', '退出', true)) api('POST', '/api/quit').catch(() => {}); } })];
 }
 

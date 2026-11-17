@@ -28,6 +28,7 @@ type Item struct {
 // State 是核心服务这一刻的情况。
 type State struct {
 	Enabled bool
+	Compact bool   // 实例栏平时收成一条色条，鼠标靠近才展开（decisions UI-17）
 	Tabs    []Tab  // 按显示顺序
 	Menu    []Item // “＋”菜单：还没打开的实例、新建
 }
@@ -165,8 +166,10 @@ func Over(bar Rect, x, y int, scale float64) bool {
 // Carry 给出窗口该挪多少：挪完以后，它自己那条实例栏的第一个标签上被抓住的那一点正好在鼠标 (x, y) 底下。
 // vis 是窗口现在看得见的那一圈；grabX 是抓的那一点离标签左边多远，grabY 是离栏顶多远。
 func Carry(vis Rect, x, y, grabX, grabY int, scale float64) (dx, dy int) {
-	bar := BarRect(vis, scale)
-	tab := Lay(vis.W(), 1, scale).Slots[0].Tab
+	return carry(BarRect(vis, scale), Lay(vis.W(), 1, scale).Slots[0].Tab, x, y, grabX, grabY, scale)
+}
+
+func carry(bar, tab Rect, x, y, grabX, grabY int, scale float64) (dx, dy int) {
 	if m := tab.W() - px(30, scale); grabX > m { // 新的标签可能比原来的窄：别抓到 × 上或者标签外面
 		grabX = m
 	}
@@ -200,6 +203,75 @@ func Fit(win, vis, work Rect, scale float64) (Rect, bool) {
 func Filled(win, vis, work Rect, scale float64) Rect {
 	top := work.T + px(BarH, scale) - px(Overlap, scale)
 	return Rect{work.L - (vis.L - win.L), top - (vis.T - win.T), work.R + (win.R - vis.R), work.B + (win.B - vis.B)}
+}
+
+// ---------- 自动收起（decisions UI-17）：平时是窗口顶上的一条色条，鼠标靠近才展开 ----------
+//
+// 收起：每个实例一小段自己的颜色，贴在窗口最上面那几个像素里（那里本来只是标题栏的底色），不另占地方。
+// 展开：整条栏盖在浏览器自己那排标签页上，鼠标离开就收回去。右上角三个窗口按钮不盖。
+const (
+	StripH = 5   // 色条的高
+	OpenH  = 40  // 展开时的高：盖住窗口最上面 40 像素，也就是浏览器自己那排标签页
+	capW   = 140 // 最小化 / 最大化 / 关闭三个按钮一共多宽
+	openDY = 2   // 展开时标签比平时靠下这么多：和浏览器的标签页一样从第 7 个像素开始
+)
+
+// CompactRect 是自动收起时实例栏的位置：左上角和窗口对齐，右边让出窗口按钮。open 为 false 时只有色条那么高。
+func CompactRect(vis Rect, scale float64, open bool) Rect {
+	r := Rect{vis.L, vis.T, vis.R - px(capW, scale), vis.T + px(StripH, scale)}
+	if r.W() < px(240, scale) { // 窗口太窄：不让了
+		r.R = vis.R
+	}
+	if open {
+		r.B = vis.T + px(OpenH, scale)
+	}
+	return r
+}
+
+// Down 把整个排版往下挪 d。
+func (l Layout) Down(d int) Layout {
+	out := Layout{Plus: l.Plus.Move(0, d)}
+	for _, s := range l.Slots {
+		if s.Close.W() > 0 {
+			s.Close = s.Close.Move(0, d)
+		}
+		s.Tab = s.Tab.Move(0, d)
+		out.Slots = append(out.Slots, s)
+	}
+	return out
+}
+
+// LayCompact 是自动收起时的排版：和平时一样，只是靠下一点。色条的每一段就是对应标签的左右位置。
+func LayCompact(width, n int, scale float64) Layout {
+	return Lay(width, n, scale).Down(px(openDY, scale))
+}
+
+// Reach 报告鼠标是不是“靠近”了收起的色条（该展开了）：左右在有色条（和 ＋）的那一段里，
+// 上下在窗口上沿外面 6 像素到里面 8 像素之间。再往下就是浏览器自己的标签页，不能算。
+func Reach(strip Rect, l Layout, x, y int, scale float64) bool {
+	left, right := strip.L+l.Plus.L, strip.L+l.Plus.R
+	if len(l.Slots) > 0 {
+		left = strip.L + l.Slots[0].Tab.L
+	}
+	m := px(6, scale)
+	return x >= left-m && x < right+m && y >= strip.T-m && y < strip.T+px(StripH+3, scale)
+}
+
+// Stay 报告鼠标是不是还在展开的栏附近（四周放宽 10 像素）：不在了就收起。
+func Stay(open Rect, x, y int, scale float64) bool {
+	m := px(10, scale)
+	return x >= open.L-m && x < open.R+m && y >= open.T-m && y < open.B+m
+}
+
+// CarryCompact 同 Carry，用于自动收起的栏（拖着的时候它是展开的）。
+func CarryCompact(vis Rect, x, y, grabX, grabY int, scale float64) (dx, dy int) {
+	bar := CompactRect(vis, scale, true)
+	return carry(bar, LayCompact(bar.W(), 1, scale).Slots[0].Tab, x, y, grabX, grabY, scale)
+}
+
+// FilledCompact 同 Filled，用于自动收起的栏：色条在窗口里面，窗口直接占满整个可用区域。
+func FilledCompact(win, vis, work Rect) Rect {
+	return Rect{work.L - (vis.L - win.L), work.T - (vis.T - win.T), work.R + (win.R - vis.R), work.B + (win.B - vis.B)}
 }
 
 // Next 在当前标签没了以后选下一个：原来排在它后面的第一个还在的；没有就取它前面最近的。

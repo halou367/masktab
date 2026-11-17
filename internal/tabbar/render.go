@@ -188,7 +188,16 @@ func (p TabPaint) Ink(lk Look) [3]int {
 
 // Draw 画出整条实例栏（不含字）。hoverPlus：鼠标在 ＋ 上。
 func Draw(w int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bool) *Canvas {
-	c := NewCanvas(w, px(BarH, scale), lk.Bg)
+	return draw(w, px(BarH, scale), l, tabs, lk, scale, hoverPlus)
+}
+
+// DrawOpen 画自动收起的栏展开时的样子：一样的内容，高是 OpenH。
+func DrawOpen(w int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bool) *Canvas {
+	return draw(w, px(OpenH, scale), l, tabs, lk, scale, hoverPlus)
+}
+
+func draw(w, h int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bool) *Canvas {
+	c := NewCanvas(w, h, lk.Bg)
 	rad := 7 * scale
 	for i, s := range l.Slots {
 		if i >= len(tabs) {
@@ -212,5 +221,47 @@ func Draw(w int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bo
 	cx, cy, d := float64(l.Plus.L+l.Plus.R)/2, float64(l.Plus.T+l.Plus.B)/2, 5*scale
 	c.Line(cx-d, cy, cx+d, cy, 1.5*scale, lk.Dim, 1)
 	c.Line(cx, cy-d, cx, cy+d, 1.5*scale, lk.Dim, 1)
+	return c
+}
+
+// StripColor 是色条里这个实例那一段的颜色：实例自己的颜色；和标题栏几乎一样时（看不出来）用浅一档。
+func (p TabPaint) StripColor(lk Look) [3]int {
+	if near(p.Color, lk.Bg) {
+		return Tint([3]int{255, 255, 255}, p.Color, 0.62)
+	}
+	return p.Color
+}
+
+// Strip 画收起时的色条（decisions UI-17）：每个实例一段，左右位置和展开后它的标签一样，当前的那个高一些。
+// 别处全透明（透明的地方鼠标点得穿，窗口上沿照常能拖、能改大小）。位图是预乘透明度的，直接交给分层窗口。
+func Strip(w int, l Layout, tabs []TabPaint, lk Look, scale float64) *Canvas {
+	h := px(StripH, scale)
+	c := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4)}
+	for i, s := range l.Slots {
+		if i >= len(tabs) {
+			break
+		}
+		col := tabs[i].StripColor(lk)
+		sh := h
+		if !tabs[i].Active {
+			sh = px(3, scale)
+		}
+		rad := math.Min(2.5*scale, float64(sh)/2) // 只有下面两个角是圆的：上面贴着窗口的上沿
+		for y := 0; y < sh; y++ {
+			for x := s.Tab.L; x < s.Tab.R; x++ {
+				if x < 0 || x >= w {
+					continue
+				}
+				a := 1.0
+				if dy := float64(y) + 0.5 - (float64(sh) - rad); dy > 0 {
+					fx := float64(x) + 0.5
+					dx := math.Max(math.Max(float64(s.Tab.L)+rad-fx, fx-(float64(s.Tab.R)-rad)), 0)
+					a = math.Max(0, math.Min(1, rad+0.5-math.Hypot(dx, dy)))
+				}
+				p := c.Pix[(y*w+x)*4:]
+				p[0], p[1], p[2], p[3] = byte(float64(col[2])*a+0.5), byte(float64(col[1])*a+0.5), byte(float64(col[0])*a+0.5), byte(255*a+0.5)
+			}
+		}
+	}
 	return c
 }

@@ -37,6 +37,13 @@ type group struct {
 	hover, hoverKind int
 	tracking         bool
 
+	// 自动收起（decisions UI-17）
+	open   bool      // 现在是展开的
+	clip   int       // 展开 / 收起的过程中只露出最上面这么多行（0 = 全部）
+	nearAt time.Time // 鼠标从什么时候起一直在色条附近
+	awayAt time.Time // 鼠标从什么时候起离开了展开的栏
+	pin    time.Time // 测试脚本刚发过鼠标消息：这之前不收起（真鼠标不在这儿）
+
 	lastWin Rect // 当前窗口最近一次的外框：它没了以后，下一个摆在这里
 	normal  Rect // 没铺满时的外框
 	filled  bool // 铺满屏幕（代替最大化）
@@ -127,6 +134,7 @@ func Run(h Host) {
 	}
 	ctlHwnd.Store(m.ctl)
 	_, _, _ = pSetTimer.Call(m.ctl, 1, 250, 0)
+	_, _, _ = pSetTimer.Call(m.ctl, 2, 50, 0) // 看鼠标是不是靠近了收起的色条
 	m.evCB = syscall.NewCallback(winEvent)
 	_, _, _ = pSetWinEventHook.Call(evForeground, evMinimizeEnd, 0, m.evCB, 0, 0, 0x2 /* 跳过自己进程 */)
 	var ms msg
@@ -441,7 +449,7 @@ func (g *group) sync(before []string, fresh string, fg uintptr) {
 		} else {
 			win, vis := winRect(h), visRect(h)
 			work, mon := screenOf(h)
-			if !covers(vis, mon) {
+			if !covers(vis, mon) && !m.st.Compact { // 自动收起时色条在窗口里面，不用腾地方
 				if r, moved := Fit(win, vis, work, scaleOf(h)); moved {
 					setPos(h, r, 0)
 				}
@@ -449,8 +457,11 @@ func (g *group) sync(before []string, fresh string, fg uintptr) {
 		}
 	}
 	g.hookLoc(pidOf(h))
+	if !m.st.Compact {
+		g.open, g.clip = false, 0
+	}
 	g.place()
-	if !switched && g.shown && !g.moving && !dragging {
+	if !switched && g.shown && !g.moving && !dragging && !g.open { // 展开的栏盖着标题栏：量不到
 		if c, ok := frameColor(h, visRect(h), g.scale); ok {
 			m.bgBy[g.active] = c
 		}
@@ -616,6 +627,9 @@ func (g *group) toggleFill() {
 		g.normal = winRect(h)
 	}
 	to := Filled(winRect(h), visRect(h), work, scaleOf(h))
+	if g.m.st.Compact {
+		to = FilledCompact(winRect(h), visRect(h), work)
+	}
 	setPos(h, to, 0)
 	g.filled, g.fillTo = true, winRect(h)
 }
@@ -645,10 +659,13 @@ func (g *group) place() {
 	}
 	sc := scaleOf(h)
 	r := BarRect(vis, sc)
+	if g.m.st.Compact {
+		r = CompactRect(vis, sc, g.open)
+	}
 	if r == g.rect && g.shown && sc == g.scale {
 		return
 	}
-	resized := r.W() != g.rect.W() || sc != g.scale || !g.shown
+	resized := r.W() != g.rect.W() || r.H() != g.rect.H() || sc != g.scale || !g.shown
 	g.rect, g.scale = r, sc
 	flags := uintptr(swpNoActivate | swpNoZOrder)
 	if !g.shown {
@@ -733,7 +750,7 @@ func (m *mgr) snapshot() {
 			slots = append(slots, s.Tab)
 		}
 		x := map[string]any{"bar": g.hwnd, "shown": g.shown, "rect": g.rect, "scale": g.scale, "active": g.active, "activeNo": no[g.active],
-			"filled": g.filled, "slots": slots, "plus": g.lay.Plus, "bg": g.bg, "tabs": tabs, "drop": g.drop}
+			"filled": g.filled, "slots": slots, "plus": g.lay.Plus, "bg": g.bg, "tabs": tabs, "drop": g.drop, "open": g.open}
 		groups = append(groups, x)
 		if g == m.cur || cur == nil {
 			cur = x
@@ -744,6 +761,7 @@ func (m *mgr) snapshot() {
 		s[k] = v
 	}
 	s["enabled"], s["groups"], s["windows"], s["dragging"] = m.st.Enabled, groups, wins, m.drag.on
+	s["compact"] = m.st.Compact
 	s["trace"] = append([]string(nil), m.trace...)
 	mu.Lock()
 	snap = s
@@ -783,6 +801,10 @@ func (m *mgr) detach(g *group, id string, x, y, gx, gy int) *group {
 	g.sig = ""
 	g.repaintIfChanged()
 	dx, dy := Carry(vis, x, y, gx, gy, g.scale)
+	if m.st.Compact {
+		dx, dy = CarryCompact(vis, x, y, gx, gy, g.scale)
+		ng.open = true // 正被拖着：展开的
+	}
 	r := win.Move(dx, dy)
 	_, _, _ = pSetWindowPos.Call(h, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), swpNoActivate)
 	if !isVisible(h) {
@@ -897,7 +919,7 @@ func (m *mgr) aim(x, y int) {
 	d := &m.drag
 	var t *group
 	for _, o := range m.groups {
-		if o != d.g && o.shown && Over(o.rect, x, y, o.scale) {
+		if o != d.g && o.shown && Over(o.dropRect(), x, y, o.scale) {
 			t = o
 			break
 		}
@@ -940,6 +962,108 @@ func (m *mgr) endDrag(commit bool) {
 		g.rect = Rect{} // 让 place 按窗口的实际位置重新摆一次
 	}
 	m.sync()
+}
+
+// ---------- 自动收起（decisions UI-17） ----------
+
+// dropRect 是“拖到这一组的栏上”认的范围：收起的栏按展开时的位置算（色条太细，对不准）。
+func (g *group) dropRect() Rect {
+	if h := g.m.main[g.active]; g.m.st.Compact && h != 0 {
+		return CompactRect(visRect(h), g.scale, true)
+	}
+	return g.rect
+}
+
+// mine 报告屏幕上 (x, y) 这一点是不是这一组自己的：最上面的窗口是这条栏或者当前的浏览器窗口。
+// 别的程序的窗口盖在上面时不算。窗口上沿外面那几个像素不属于任何一个，就看当前的浏览器窗口是不是前台。
+func (g *group) mine(h uintptr, vis Rect, x, y int) bool {
+	at, _, _ := pWindowFromPoint.Call(uintptr(uint32(x)) | uintptr(uint32(y))<<32)
+	if root, _, _ := pGetAncestor.Call(at, 2 /* 顶层窗口 */); root == g.hwnd || root == h {
+		return true
+	}
+	if y < vis.T {
+		fg, _, _ := pGetForegroundWindow.Call()
+		return fg == h
+	}
+	return false
+}
+
+// hoverTick 每 50 毫秒看一次鼠标：在收起的色条附近停了 0.1 秒就展开，离开展开的栏 0.35 秒就收起。
+// 正拖着、正有实例要并进来的时候不收。
+func (m *mgr) hoverTick() {
+	x, y := cursor()
+	now := time.Now()
+	changed := false
+	for _, g := range m.groups {
+		h := m.main[g.active]
+		if !g.shown || h == 0 {
+			continue
+		}
+		keep := g.drop || (m.drag.on && m.drag.g == g) || now.Before(g.pin)
+		vis := visRect(h)
+		if !g.open {
+			if !keep && !(Reach(CompactRect(vis, g.scale, false), g.lay, x, y, g.scale) && g.mine(h, vis, x, y)) {
+				g.nearAt = time.Time{}
+				continue
+			}
+			if g.nearAt.IsZero() {
+				g.nearAt = now
+			}
+			if keep || now.Sub(g.nearAt) >= 100*time.Millisecond {
+				g.setOpen(true)
+				changed = true
+			}
+			continue
+		}
+		if keep || (Stay(g.rect, x, y, g.scale) && g.mine(h, vis, x, y)) {
+			g.awayAt = time.Time{}
+			continue
+		}
+		if g.awayAt.IsZero() {
+			g.awayAt = now
+		}
+		if now.Sub(g.awayAt) >= 350*time.Millisecond {
+			g.setOpen(false)
+			changed = true
+		}
+	}
+	if changed {
+		m.snapshot()
+	}
+}
+
+// setOpen 展开 / 收起，中间过几帧：画的一直是展开的那一条，只是露出来的高度在变。
+func (g *group) setOpen(v bool) {
+	if g.open == v {
+		return
+	}
+	g.nearAt, g.awayAt = time.Time{}, time.Time{}
+	lo, hi := px(StripH, g.scale), px(OpenH, g.scale)
+	steps := []int{35, 65, 88}
+	frame := func(pct int) {
+		g.clip = lo + (hi-lo)*pct/100
+		g.render()
+		time.Sleep(13 * time.Millisecond)
+	}
+	if v {
+		g.open, g.clip = true, lo+(hi-lo)*steps[0]/100
+		g.rect = Rect{}
+		g.place() // 挪到展开的位置，画第一帧
+		time.Sleep(13 * time.Millisecond)
+		for _, p := range steps[1:] {
+			frame(p)
+		}
+		g.clip = 0
+		g.render()
+		return
+	}
+	g.hover, g.hoverKind = -1, HitNone
+	for i := len(steps) - 1; i >= 0; i-- {
+		frame(steps[i])
+	}
+	g.open, g.clip = false, 0
+	g.rect = Rect{}
+	g.place()
 }
 
 // ---------- 鼠标 ----------
@@ -1079,6 +1203,13 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 	if hwnd == m.ctl {
 		switch ms {
 		case wmTimer, wmApp:
+			if ms == wmTimer && wp == 2 {
+				if m.st.Compact && !m.off && m.enter() {
+					m.hoverTick()
+					m.leave()
+				}
+				return 0
+			}
 			if m.enter() {
 				m.sync()
 				m.leave()
@@ -1127,6 +1258,15 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 	}
 	defer m.leave()
 	x, y, sx, sy := g.where(wp, lp)
+	if m.st.Compact {
+		switch {
+		case wp&mkTest != 0: // 测试脚本：当作鼠标就在这儿，先展开
+			g.pin = time.Now().Add(6 * time.Second)
+			g.setOpen(true)
+		case !g.open: // 真鼠标碰到了色条：展开由 hoverTick 管（停一小会儿才展开），这里不当成点击
+			return 0
+		}
+	}
 	switch ms {
 	case wmMouseMove:
 		if m.drag.on {

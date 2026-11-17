@@ -30,6 +30,7 @@ func (h mergeHost) State() tabbar.State {
 	if !st.Enabled {
 		return st
 	}
+	st.Compact = a.Settings.MergeCompact
 	list := append([]*model.Instance(nil), a.Instances...)
 	sort.SliceStable(list, func(i, j int) bool { return list[i].No < list[j].No })
 	for _, in := range list {

@@ -198,3 +198,76 @@ func TestEars(t *testing.T) {
 		t.Fatalf("耳朵不对：%v %v %v %v", at(0, 5), at(9, 4), at(5, 5), at(5, 3))
 	}
 }
+
+// 自动收起（decisions UI-17）。
+func TestCompact(t *testing.T) {
+	vis := Rect{100, 200, 1300, 900}
+	shut, open := CompactRect(vis, 1, false), CompactRect(vis, 1, true)
+	if shut != (Rect{100, 200, 1160, 205}) || open != (Rect{100, 200, 1160, 240}) {
+		t.Fatalf("收起 %v 展开 %v", shut, open)
+	}
+	if r := CompactRect(Rect{0, 0, 300, 400}, 1, false); r.R != 300 {
+		t.Fatalf("窄窗口不该再让出按钮：%v", r)
+	}
+	l := LayCompact(open.W(), 3, 1)
+	if l.Slots[0].Tab.T != 6 || l.Slots[0].Tab.B != 32 || l.Slots[0].Tab.L != 8 {
+		t.Fatalf("展开时标签该从第 7 个像素开始：%v", l.Slots[0].Tab)
+	}
+	if k, i := l.Hit(300, 20); k != HitTab || i != 1 {
+		t.Fatalf("展开后点第二个标签：%d %d", k, i)
+	}
+	// 靠近：色条上、窗口上沿外面一点、里面一点都算；浏览器标签页的位置、色条右边的空白不算
+	for _, c := range []struct {
+		x, y int
+		want bool
+	}{{150, 202, true}, {150, 195, true}, {150, 207, true}, {150, 208, false}, {150, 193, false}, {900, 202, false}, {700, 202, true}} {
+		if got := Reach(shut, l, c.x, c.y, 1); got != c.want {
+			t.Fatalf("Reach(%d,%d) = %v", c.x, c.y, got)
+		}
+	}
+	if !Stay(open, 500, 248, 1) || Stay(open, 500, 251, 1) {
+		t.Fatal("离开展开的栏 10 像素以内还算在")
+	}
+	// 拖着走：抓的那一点还在鼠标底下
+	dx, dy := CarryCompact(vis, 640, 480, 40, 12, 1)
+	moved := vis.Move(dx, dy)
+	bar := CompactRect(moved, 1, true)
+	tab := LayCompact(bar.W(), 1, 1).Slots[0].Tab
+	if bar.L+tab.L+40 != 640 || bar.T+12 != 480 {
+		t.Fatalf("挪完以后抓的点在 %d,%d", bar.L+tab.L+40, bar.T+12)
+	}
+	// 铺满：窗口看得见的那一圈占满整个可用区域
+	f := FilledCompact(Rect{93, 100, 1107, 807}, Rect{100, 100, 1100, 800}, Rect{0, 0, 1920, 1032})
+	if f != (Rect{-7, 0, 1927, 1039}) {
+		t.Fatalf("铺满 %v", f)
+	}
+}
+
+func TestStrip(t *testing.T) {
+	red, blue, yellow := [3]int{217, 48, 37}, [3]int{26, 115, 232}, [3]int{249, 171, 0}
+	lk := LookOn([3]int{249, 171, 0}) // 标题栏是黄的
+	l := LayCompact(800, 3, 1)
+	c := Strip(800, l, []TabPaint{{Color: red}, {Color: blue}, {Color: yellow, Active: true}}, lk, 1)
+	if c.H != 5 {
+		t.Fatalf("高 %d", c.H)
+	}
+	alpha := func(x, y int) int { return int(c.Pix[(y*c.W+x)*4+3]) }
+	mid := func(i int) int { return (l.Slots[i].Tab.L + l.Slots[i].Tab.R) / 2 }
+	if c.At(mid(0), 1) != red || c.At(mid(1), 1) != blue {
+		t.Fatalf("没选中的两段该是实例自己的颜色：%v %v", c.At(mid(0), 1), c.At(mid(1), 1))
+	}
+	if alpha(mid(0), 3) != 0 || alpha(mid(2), 3) != 255 {
+		t.Fatalf("没选中的只有 3 像素高，选中的 5 像素：%d %d", alpha(mid(0), 3), alpha(mid(2), 3))
+	}
+	if got := c.At(mid(2), 1); got == yellow {
+		t.Fatalf("和标题栏同色的那一段该用浅一档：%v", got)
+	}
+	for _, x := range []int{2, l.Slots[0].Tab.R + 2, l.Plus.L + 5, 780} { // 段与段之间、＋ 的位置、右边：全透明
+		if alpha(x, 1) != 0 {
+			t.Fatalf("x=%d 该是透明的", x)
+		}
+	}
+	if a := alpha(l.Slots[2].Tab.L, 4); a >= 255 {
+		t.Fatalf("下面的角该是圆的：%d", a)
+	}
+}

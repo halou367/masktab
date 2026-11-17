@@ -22,13 +22,24 @@ func (g *group) repaintIfChanged() {
 	if g.drop {
 		drop = '1'
 	}
-	sig := sb.String() + "@" + g.active + string(rune('0'+g.hover+1)) + string(rune('0'+g.hoverKind)) + string(drop) +
-		string(rune(g.rect.W())) + string(rune(int(g.scale*100))) + string(rune(g.bg[0]<<16|g.bg[1]<<8|g.bg[2]))
+	mode := '0' // 平时 / 自动收起：收着 / 自动收起：展开
+	if g.m.st.Compact {
+		mode = '1'
+		if g.open {
+			mode = '2'
+		}
+	}
+	sig := sb.String() + "@" + g.active + string(rune('0'+g.hover+1)) + string(rune('0'+g.hoverKind)) + string(drop) + string(mode) +
+		string(rune(g.rect.W())) + string(rune(g.rect.H())) + string(rune(int(g.scale*100))) + string(rune(g.bg[0]<<16|g.bg[1]<<8|g.bg[2]))
 	if sig == g.sig {
 		return
 	}
 	g.sig = sig
-	g.lay = Lay(g.rect.W(), len(g.tabs), g.scale)
+	if g.m.st.Compact {
+		g.lay = LayCompact(g.rect.W(), len(g.tabs), g.scale)
+	} else {
+		g.lay = Lay(g.rect.W(), len(g.tabs), g.scale)
+	}
 	g.render()
 }
 
@@ -67,7 +78,20 @@ func (g *group) render() {
 	for i, t := range g.tabs {
 		paints[i] = TabPaint{Color: t.Color, Active: t.ID == g.active, Hover: g.hover == i, HoverX: g.hover == i && g.hoverKind == HitClose}
 	}
-	c := Draw(w, g.lay, paints, lk, g.scale, g.hoverKind == HitPlus)
+	compact := g.m.st.Compact
+	strip := compact && !g.open // 收着：只画色条，没有字
+	var c *Canvas
+	switch {
+	case strip:
+		c = Strip(w, g.lay, paints, lk, g.scale)
+	case compact:
+		c = DrawOpen(w, g.lay, paints, lk, g.scale, g.hoverKind == HitPlus)
+	default:
+		c = Draw(w, g.lay, paints, lk, g.scale, g.hoverKind == HitPlus)
+	}
+	if c.H != hgt { // 栏的位置还没跟上（下一遍对账会摆好再画）
+		return
+	}
 	full := hgt + ear(g.scale)
 	screen, _, _ := pGetDC.Call(0)
 	mem, _, _ := pCreateCompatibleDC.Call(screen)
@@ -90,7 +114,7 @@ func (g *group) render() {
 	g.m.fonts(g.scale)
 	_, _, _ = pSetBkMode.Call(mem, 1 /* 透明 */)
 	for i, s := range g.lay.Slots {
-		if i >= len(g.tabs) {
+		if i >= len(g.tabs) || strip {
 			break
 		}
 		f := g.m.font
@@ -111,9 +135,18 @@ func (g *group) render() {
 		_, _, _ = pDrawTextW.Call(mem, uintptr(unsafe.Pointer(&txt[0])), uintptr(len(txt)-1), uintptr(unsafe.Pointer(&tr)), 0x20|0x4|0x8000|0x800)
 	}
 	_, _, _ = pGdiFlush.Call()
-	RoundTop(pix[:w*hgt*4], w, hgt, 8*g.scale) // 系统画字时不写透明度那一位，这里统一补上
-	Ears(pix, w, full, ear(g.scale), g.bg)
+	if !strip {
+		RoundTop(pix[:w*hgt*4], w, hgt, 8*g.scale) // 系统画字时不写透明度那一位，这里统一补上
+	}
+	if compact { // 栏在窗口里面：不用补那两只耳朵
+		clear(pix[w*hgt*4:])
+	} else {
+		Ears(pix, w, full, ear(g.scale), g.bg)
+	}
 	size, src := point32{int32(w), int32(full)}, point32{}
+	if g.clip > 0 && g.clip < hgt { // 展开 / 收起的过程中
+		size.Y = int32(g.clip)
+	}
 	blend := [4]byte{0, 0, 255, 1} // 按位图自带的透明度合成
 	_, _, _ = pUpdateLayeredWindow.Call(g.hwnd, screen, 0, uintptr(unsafe.Pointer(&size)), mem, uintptr(unsafe.Pointer(&src)), 0, uintptr(unsafe.Pointer(&blend)), 2)
 }
