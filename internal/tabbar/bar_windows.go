@@ -463,7 +463,11 @@ func (g *group) sync(before []string, fresh string, fg uintptr) {
 	}
 	g.hookLoc(pidOf(h))
 	if !isIconic(h) && !isZoomed(h) && !g.moving && !dragging && !time.Now().Before(g.settle) {
-		g.align(winRect(h))
+		if r := winRect(h); !g.filled {
+			g.align(r)
+		} else if g.normal.W() > 0 { // 铺满着：藏着的窗口待在铺满之前的位置（退出时记下的是平常的大小，不是铺满的）
+			g.align(g.normal)
+		}
 	}
 	if !m.st.Compact {
 		g.open = false
