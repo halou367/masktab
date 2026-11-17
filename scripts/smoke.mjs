@@ -278,25 +278,34 @@ try {
     // → 停一下 → 一步一步往下移开。按得快和按得慢各来一遍。
     try {
       const NAME = '单击标签后移开鼠标不会把实例拖出去';
-      const MOUSE = `Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y); [DllImport("user32.dll")] public static extern void mouse_event(uint f,int dx,int dy,uint d,UIntPtr e);' -Name M -Namespace W; `;
+      // 每一步记个时间到文件里（有的测试机上这段脚本会卡很久：要知道卡在哪一步）
+      const stamps = path.join(os.tmpdir(), 'masktab-mouse-steps.txt'), steps = [];
+      const MOUSE = `$sw=[Diagnostics.Stopwatch]::StartNew(); function T($s){ Add-Content -LiteralPath '${stamps.replace(/'/g, "''")}' ("{0}:{1}" -f $s,$sw.ElapsedMilliseconds) }; T 'ps'; Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y); [DllImport("user32.dll")] public static extern void mouse_event(uint f,int dx,int dy,uint d,UIntPtr e);' -Name M -Namespace W; T 'compiled'; `;
+      const mouse = async (what, script) => {
+        try { fs.rmSync(stamps, { force: true }); } catch {}
+        const t0 = Date.now(); await powershell(MOUSE + script + `; T 'done'`);
+        let got = ''; try { got = fs.readFileSync(stamps, 'utf8').trim().split(/\s+/).join(' '); } catch {}
+        steps.push(`${what} ${Date.now() - t0}ms [${got}]`);
+      };
       const bar = async () => { const x = await api('GET', '/api/debug/tabbar'); return { all: x, g: (x.groups || [])[0] || {} }; };
       const until = async (ok, ms) => { let b; for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(150)) { b = await bar(); if (ok(b)) return b; } return null; };
       const tail = (x, n = 14) => (x.trace || []).slice(-n);
       const clickAway = async (hold) => {
         let b = await bar();
         if ((b.all.groups || []).length !== 1 || (b.g.tabs || []).length < 2) return { skip: '没有两个实例并在一组：' + JSON.stringify({ groups: (b.all.groups || []).length, tabs: b.g.tabs }) };
-        await powershell(MOUSE + `[W.M]::SetCursorPos(${b.g.rect.L + 320},${b.g.rect.T + 260}); [W.M]::mouse_event(1,1,1,0,[UIntPtr]::Zero)`);
+        steps.length = 0;
+        await mouse('away', `[W.M]::SetCursorPos(${b.g.rect.L + 320},${b.g.rect.T + 260}); [W.M]::mouse_event(1,1,1,0,[UIntPtr]::Zero)`);
         b = await until((x) => x.g.open === false && x.g.band, 9000);
         if (!b) return { skip: '鼠标移开以后栏没收起：' + JSON.stringify(tail((await bar()).all, 6)) };
         const bx = Math.round((b.g.band.L + b.g.band.R) / 2), by = Math.round((b.g.band.T + b.g.band.B) / 2) + 1;
-        await powershell(MOUSE + `[W.M]::SetCursorPos(${bx},${by - 1}); Start-Sleep -Milliseconds 60; [W.M]::SetCursorPos(${bx},${by}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 60; [W.M]::mouse_event(1,-1,0,0,[UIntPtr]::Zero)`); // 之后鼠标就停在色条上
+        await mouse('hover', `[W.M]::SetCursorPos(${bx},${by - 1}); Start-Sleep -Milliseconds 60; [W.M]::SetCursorPos(${bx},${by}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 60; [W.M]::mouse_event(1,-1,0,0,[UIntPtr]::Zero)`); // 之后鼠标就停在色条上
         const o = await until((x) => x.g.open === true && (x.g.slots || []).length >= 2, 4000);
-        if (!o) return { skip: '鼠标移到色条上以后栏没展开（测试机上鼠标可能动不了）：' + JSON.stringify({ at: [bx, by], band: b.g.band, rect: b.g.rect, trace: tail((await bar()).all, 6) }) };
+        if (!o) return { skip: '鼠标移到色条上以后栏没展开（测试机上鼠标可能动不了）：' + JSON.stringify({ at: [bx, by], band: b.g.band, rect: b.g.rect, trace: tail((await bar()).all, 6), dragging: (await bar()).all.dragging, steps }) };
         const i = o.g.tabs.findIndex((n) => n !== o.g.activeNo), slot = o.g.slots[i], want = o.g.tabs[i];
         const cx = o.g.rect.L + Math.round((slot.L + slot.R) / 2), cy = o.g.rect.T + Math.round((slot.T + slot.B) / 2);
-        await powershell(MOUSE + `[W.M]::SetCursorPos(${cx},${cy}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 350; [W.M]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds ${hold}; [W.M]::mouse_event(4,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 300; for ($i = 1; $i -le 16; $i++) { [W.M]::SetCursorPos(${cx},${cy} + $i * 25); [W.M]::mouse_event(1,0,1,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 35 }; Start-Sleep -Milliseconds 1500`);
+        await mouse('click', `[W.M]::SetCursorPos(${cx},${cy}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 350; [W.M]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds ${hold}; [W.M]::mouse_event(4,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 300; for ($i = 1; $i -le 16; $i++) { [W.M]::SetCursorPos(${cx},${cy} + $i * 25); [W.M]::mouse_event(1,0,1,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 35 }; Start-Sleep -Milliseconds 1500`);
         const a = await bar();
-        return { want, activeNo: a.g.activeNo, groups: (a.all.groups || []).length, dragging: a.all.dragging, at: [cx, cy], trace: tail(a.all) };
+        return { want, activeNo: a.g.activeNo, groups: (a.all.groups || []).length, dragging: a.all.dragging, at: [cx, cy], steps: [...steps], trace: tail(a.all) };
       };
       for (const hold of [25, 120]) {
         const r = await clickAway(hold), what = `（按下 ${hold} 毫秒就松）`;
