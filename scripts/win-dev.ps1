@@ -116,10 +116,10 @@ switch ($cmd) {
   'drag' {
     $d = (Api GET '/api/debug/tabbar'); $g = $d.groups[[int]$a1]; $h = [IntPtr][long]$g.bar
     $x0 = [int]$g.rect.L + [int]$a2; $y0 = [int]$g.rect.T + [int]$a3; $x1 = [int]$a4; $y1 = [int]$a5
-    function LP($x, $y) { [IntPtr]((($y -band 0xFFFF) -shl 16) -bor ($x -band 0xFFFF)) }
-    [void][W]::PostMessage($h, 0x0201, [IntPtr]0x8001, (LP $x0 $y0)); Start-Sleep -Milliseconds 120
-    for ($i = 1; $i -le 12; $i++) { $x = [int]($x0 + ($x1 - $x0) * $i / 12); $y = [int]($y0 + ($y1 - $y0) * $i / 12); [void][W]::PostMessage($h, 0x0200, [IntPtr]0x8001, (LP $x $y)); Start-Sleep -Milliseconds 40 }
-    if ($a6 -ne 'hold') { [void][W]::PostMessage($h, 0x0202, [IntPtr]0x8000, (LP $x1 $y1)) }
+    function PackXY($x, $y) { [IntPtr]((($y -band 0xFFFF) -shl 16) -bor ($x -band 0xFFFF)) }
+    [void][W]::PostMessage($h, 0x0201, [IntPtr]0x8001, (PackXY $x0 $y0)); Start-Sleep -Milliseconds 120
+    for ($i = 1; $i -le 12; $i++) { $x = [int]($x0 + ($x1 - $x0) * $i / 12); $y = [int]($y0 + ($y1 - $y0) * $i / 12); [void][W]::PostMessage($h, 0x0200, [IntPtr]0x8001, (PackXY $x $y)); Start-Sleep -Milliseconds 40 }
+    if ($a6 -ne 'hold') { [void][W]::PostMessage($h, 0x0202, [IntPtr]0x8000, (PackXY $x1 $y1)) }
     Start-Sleep -Milliseconds 900
     (Api GET '/api/debug/tabbar') | ConvertTo-Json -Depth 8 -Compress
   }
