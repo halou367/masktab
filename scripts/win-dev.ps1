@@ -101,14 +101,16 @@ switch ($cmd) {
   }
   'bar' { (Api GET '/api/debug/tabbar') | ConvertTo-Json -Depth 8 -Compress }
   'click' {
+    # screen coordinates + flag 0x8000: the bar then does not ask where the real mouse is
     $d = (Api GET '/api/debug/tabbar'); $h = [IntPtr][long]$d.bar
-    $lp = [IntPtr](([int]$a2 -shl 16) -bor ([int]$a1 -band 0xFFFF))
-    [void][W]::PostMessage($h, 0x0200, [IntPtr]0, $lp)
+    $sx = [int]$d.rect.L + [int]$a1; $sy = [int]$d.rect.T + [int]$a2
+    $lp = [IntPtr]((($sy -band 0xFFFF) -shl 16) -bor ($sx -band 0xFFFF))
+    [void][W]::PostMessage($h, 0x0200, [IntPtr]0x8000, $lp)
     switch ($a3) {
-      'dbl' { [void][W]::PostMessage($h, 0x0201, [IntPtr]1, $lp); [void][W]::PostMessage($h, 0x0202, [IntPtr]0, $lp); [void][W]::PostMessage($h, 0x0203, [IntPtr]1, $lp); [void][W]::PostMessage($h, 0x0202, [IntPtr]0, $lp) }
-      'mid' { [void][W]::PostMessage($h, 0x0207, [IntPtr]0x10, $lp); [void][W]::PostMessage($h, 0x0208, [IntPtr]0, $lp) }
+      'dbl' { [void][W]::PostMessage($h, 0x0201, [IntPtr]0x8001, $lp); [void][W]::PostMessage($h, 0x0202, [IntPtr]0x8000, $lp); [void][W]::PostMessage($h, 0x0203, [IntPtr]0x8001, $lp); [void][W]::PostMessage($h, 0x0202, [IntPtr]0x8000, $lp) }
+      'mid' { [void][W]::PostMessage($h, 0x0207, [IntPtr]0x8010, $lp); [void][W]::PostMessage($h, 0x0208, [IntPtr]0x8000, $lp) }
       'hover' { }
-      default { [void][W]::PostMessage($h, 0x0201, [IntPtr]1, $lp); [void][W]::PostMessage($h, 0x0202, [IntPtr]0, $lp) }
+      default { [void][W]::PostMessage($h, 0x0201, [IntPtr]0x8001, $lp); [void][W]::PostMessage($h, 0x0202, [IntPtr]0x8000, $lp) }
     }
     Start-Sleep -Milliseconds 700
     (Api GET '/api/debug/tabbar') | ConvertTo-Json -Depth 8 -Compress
