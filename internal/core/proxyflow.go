@@ -277,6 +277,12 @@ func (a *App) applyConfig() error {
 		}
 	}
 	in.ScanPorts = a.scanPorts
+	if a.updPort != 0 { // 更新通道：能切到任何一个节点，平时停在 REJECT
+		in.Instances = append(in.Instances, proxy.InstCfg{ID: updChan, Port: a.updPort, Members: in.ScanMembers})
+		if a.updWant != "" {
+			wants[proxy.Group(updChan)] = a.updWant
+		}
+	}
 	a.mu.Unlock()
 	changed, err := a.core.WriteConfig(proxy.Generate(in))
 	if err != nil {

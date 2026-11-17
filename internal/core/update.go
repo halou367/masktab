@@ -8,15 +8,18 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/halou367/masktab/internal/kernel"
 	"github.com/halou367/masktab/internal/netx"
+	"github.com/halou367/masktab/internal/proxy"
 	"github.com/halou367/masktab/internal/update"
 )
 
@@ -99,12 +102,123 @@ func fileSHA256(path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// updateSources：正式环境是“直连 → 本机代理 → 镜像”；指到假服务上测试时只直连（假服务在本机，别去碰真的镜像站）。
+// updateSources：正式环境是“浏览器的节点 → 直连 → 本机代理 → 镜像”；指到假服务上测试时只直连（假服务在本机，别去碰真的镜像站）。
+// 检查更新和下载安装包都按这个次序一条一条试，前一条不通（或者下载太慢）才用后一条。
 func (a *App) updateSources() []netx.Source {
 	if a.updateEndpoints() != update.Default() {
+		if os.Getenv("MASKTAB_UPDATE_NODES") != "" { // 测试：假服务也先经节点
+			return append(a.nodeSources(), netx.Source{Name: "直连"})
+		}
 		return []netx.Source{{Name: "直连"}}
 	}
-	return a.sources()
+	return append(a.nodeSources(), a.sources()...)
+}
+
+// updChan 是“更新通道”在代理内核里的名字（入站 in-upd、策略组 g-upd）。
+const updChan = "upd"
+
+// nodeSources 是“走浏览器的节点”的途径（需求方 2026-11-17：“更新默认就走代理，也就是浏览器的节点，都不通再直连”）。两种，依次排：
+//
+//  1. 开着的、代理开着的、出口探得到的实例：经它的探测通道出去（和它的网页是同一条线路，不受断流影响），延迟低的在前，最多两条
+//     （每条不通都要等到超时才换下一条，多了的话轮到直连就太晚了）。
+//  2. 订阅里测过是通的节点：按延迟取前三个，现测一次，第一个还通的接到“更新通道”上，算一条。没有实例开着（或者开着的都是直连）时靠它。
+//
+// 两种都没有时是空的，调用方接着用直连那一串。用完调 updRelease 把更新通道关上。
+// 注意：这样更新的请求是从节点的出口 IP 发出去的（GitHub 看得到这个 IP 在下载 MaskTab）。
+func (a *App) nodeSources() []netx.Source {
+	a.mu.Lock()
+	if !a.coreOK {
+		a.mu.Unlock()
+		return nil
+	}
+	out := a.instSourcesLocked()
+	spare, port, testURL := a.spareNodesLocked(), a.updPort, a.Settings.DelayURL
+	a.mu.Unlock()
+	if port == 0 {
+		return out
+	}
+	for _, n := range spare {
+		if a.delayOnce(n.Name, testURL, 4000) <= 0 {
+			continue
+		}
+		a.mu.Lock()
+		a.updWant = n.Name
+		a.mu.Unlock()
+		if err := a.core.Select(proxy.Group(updChan), n.Name); err != nil {
+			log.Printf("更新通道切到 %s 失败：%v", n.Label, err)
+			continue
+		}
+		out = append(out, netx.Source{Name: "节点 " + n.Label, Proxy: &url.URL{Scheme: "socks5", Host: fmt.Sprintf("127.0.0.1:%d", port)}})
+		break
+	}
+	return out
+}
+
+// updRelease 把更新通道关上（切回 REJECT）：不用的时候，本机别的程序不该能借这个端口走节点。
+func (a *App) updRelease() {
+	a.mu.Lock()
+	was, ok := a.updWant, a.coreOK
+	a.updWant = ""
+	a.mu.Unlock()
+	if was != "" && ok {
+		_ = a.core.Select(proxy.Group(updChan), "REJECT")
+	}
+}
+
+// spareNodesLocked：全部订阅里测过是通的节点，延迟低的在前，最多三个。Label 是给人看的名字。
+func (a *App) spareNodesLocked() []nodeRef {
+	type cand struct {
+		n nodeRef
+		d int
+	}
+	var cs []cand
+	for _, sub := range a.Subs {
+		for i, n := range a.nodesLocked(sub) {
+			if sub.Kind != "edgetunnel" && i >= maxNodesPerSub { // 超出的没写进代理内核的配置，切不过去
+				break
+			}
+			if n.Gone {
+				continue
+			}
+			if d := a.scanLocked(n.Name).Delay; d > 0 {
+				if n.Label == "" {
+					n.Label = hostPort(n.Server, n.Port)
+				}
+				cs = append(cs, cand{n, d})
+			}
+		}
+	}
+	sort.SliceStable(cs, func(i, j int) bool { return cs[i].d < cs[j].d })
+	if len(cs) > 3 {
+		cs = cs[:3]
+	}
+	var out []nodeRef
+	for _, c := range cs {
+		out = append(out, c.n)
+	}
+	return out
+}
+
+// instSourcesLocked：开着的实例里能借的线路（见 nodeSources 的第 1 种）。
+func (a *App) instSourcesLocked() []netx.Source {
+	type cand struct{ no, lat, port int }
+	var cs []cand
+	for _, in := range a.Instances {
+		r := a.rt[in.ID]
+		if r == nil || !r.Running || !r.active || r.probePort == 0 || in.Proxy.State != "on" || r.Latency <= 0 || r.Probe == nil {
+			continue
+		}
+		cs = append(cs, cand{in.No, r.Latency, r.probePort})
+	}
+	sort.Slice(cs, func(i, j int) bool { return cs[i].lat < cs[j].lat })
+	if len(cs) > 2 {
+		cs = cs[:2]
+	}
+	var out []netx.Source
+	for _, c := range cs {
+		out = append(out, netx.Source{Name: fmt.Sprintf("#%d 的节点", c.no), Proxy: &url.URL{Scheme: "socks5", Host: fmt.Sprintf("127.0.0.1:%d", c.port)}})
+	}
+	return out
 }
 
 func (a *App) updateFile(rel *update.Release) string {
@@ -127,9 +241,10 @@ func (a *App) UpdateCheck(manual bool) error {
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second) // 节点不通时每条要等十几秒才轮到直连
 	rel, err := update.Latest(ctx, a.updateEndpoints(), a.updateSources(), update.AssetName(runtime.GOOS, runtime.GOARCH))
 	cancel()
+	a.updRelease()
 	ready := ""
 	if err == nil && rel.Asset != "" && rel.SHA256 != "" && update.Newer(rel.Version, a.Version) {
 		// 以前下载过这一版（比如下完没装就关了）：校验还对就不用再下
@@ -207,6 +322,7 @@ func (a *App) UpdateDownload() error {
 	a.mu.Unlock()
 	go func() {
 		defer a.updBusy.Unlock()
+		defer a.updRelease()
 		if es, err := os.ReadDir(a.p("update")); err == nil { // 别的版本的安装包、没下完的残留：删掉
 			for _, e := range es {
 				if !strings.HasPrefix(e.Name(), filepath.Base(dst)) {

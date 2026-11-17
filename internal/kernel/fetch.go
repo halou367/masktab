@@ -99,7 +99,7 @@ var (
 	errSlow  = errors.New("速度过慢")
 )
 
-// Fetch 把一个组件下载到 dst。依次尝试 sources（直连 → 本机代理 → 镜像），
+// Fetch 把一个组件下载到 dst。依次尝试 sources（调用方排好的次序，通常是直连 → 本机代理 → 镜像；在线更新前面还有节点），
 // 换途径时从已下载的位置续传；全部下完后校验 SHA-256，不符则丢弃并换下一个途径。
 // 第一轮里速度过慢的途径会被放弃（留给更快的途径），第二轮不再嫌慢。
 func Fetch(ctx context.Context, a Asset, dst string, sources []netx.Source, cb Progress, logf func(string, ...any)) error {

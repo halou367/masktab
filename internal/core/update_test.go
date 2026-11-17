@@ -1,18 +1,26 @@
 package core
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/halou367/masktab/internal/kernel"
+	"github.com/halou367/masktab/internal/model"
+	"github.com/halou367/masktab/internal/netx"
 	"github.com/halou367/masktab/internal/update"
 )
 
@@ -198,5 +206,141 @@ func TestChangesOf(t *testing.T) {
 		if got := changesOf(in); got != want {
 			t.Errorf("changesOf(%q) = %q，应为 %q", in, got, want)
 		}
+	}
+}
+
+// 假的 socks5 代理（顶替某个实例的探测通道）：照着请求连出去，数一共经手了几条连接。
+func fakeSocks5(t *testing.T) (port int, used *atomic.Int32) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	used = &atomic.Int32{}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				b := make([]byte, 262)
+				if _, err := io.ReadFull(c, b[:2]); err != nil || b[0] != 5 {
+					return
+				}
+				if _, err := io.ReadFull(c, b[:int(b[1])]); err != nil {
+					return
+				}
+				_, _ = c.Write([]byte{5, 0})
+				if _, err := io.ReadFull(c, b[:4]); err != nil || b[1] != 1 {
+					return
+				}
+				var host string
+				switch b[3] {
+				case 1:
+					_, _ = io.ReadFull(c, b[:4])
+					host = net.IP(b[:4]).String()
+				case 3:
+					_, _ = io.ReadFull(c, b[:1])
+					n := int(b[0])
+					_, _ = io.ReadFull(c, b[:n])
+					host = string(b[:n])
+				default:
+					return
+				}
+				_, _ = io.ReadFull(c, b[:2])
+				up, err := net.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(int(b[0])<<8|int(b[1]))))
+				if err != nil {
+					_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+					return
+				}
+				defer up.Close()
+				used.Add(1)
+				_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+				go func() { _, _ = io.Copy(up, c) }()
+				_, _ = io.Copy(c, up)
+			}(c)
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port, used
+}
+
+// 更新默认走浏览器的节点（需求方 2026-11-17）：开着的、代理开着的、出口探得到的实例里延迟最低的两个排在最前面，后面才是直连那一串；
+// 没有这样的实例就和以前一样从直连开始。经节点那一条真的能查到版本、下完安装包（请求确实是从那个代理出去的）。
+func TestUpdateViaNode(t *testing.T) {
+	a, err := Open(t.TempDir(), t.TempDir(), "0.1.72")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, used := fakeSocks5(t)
+	mk := func(no int, state string, r *Runtime) {
+		in := &model.Instance{ID: fmt.Sprintf("i%d", no), No: no}
+		in.Proxy.State = state
+		a.Instances = append(a.Instances, in)
+		a.rt[in.ID] = r
+	}
+	ok := &model.ExitProbe{}
+	a.mu.Lock()
+	mk(11, "on", &Runtime{Running: true, active: true, probePort: 1, Latency: 300, Probe: ok}) // 第三名：不用
+	mk(12, "on", &Runtime{Running: true, active: true, probePort: port, Latency: 80, Probe: ok})
+	mk(13, "on", &Runtime{Running: true, active: true, probePort: 3, Latency: 120, Probe: ok})
+	mk(14, "off", &Runtime{Running: true, active: true, probePort: 4, Latency: 10, Probe: ok}) // 直连的实例：它的通道就是直连，不算“节点”
+	mk(15, "on", &Runtime{Running: true, active: true, probePort: 5, Latency: -1})             // 节点不通
+	mk(16, "on", &Runtime{active: true, probePort: 6, Latency: 20, Probe: ok})                 // 没开着
+	a.mu.Unlock()
+	if got := a.nodeSources(); got != nil {
+		t.Fatalf("代理内核没好的时候不该有节点这一路：%v", got)
+	}
+	a.mu.Lock()
+	a.coreOK = true
+	a.mu.Unlock()
+	ns := a.nodeSources()
+	if len(ns) != 2 || ns[0].Name != "#12 的节点" || ns[1].Name != "#13 的节点" || ns[0].Proxy.String() != fmt.Sprintf("socks5://127.0.0.1:%d", port) {
+		t.Fatalf("节点这一路：%+v", ns)
+	}
+	// 订阅里的节点：测过是通的才算，延迟低的在前，最多三个；没测过、不通的不算
+	sub := &model.Subscription{ID: "sub-1"}
+	for i, d := range []int{400, 0, -1, 90, 250, 700} {
+		key := fmt.Sprintf("k%d", i)
+		sub.Nodes = append(sub.Nodes, model.ProxyNode{Key: key, Name: fmt.Sprintf("节点%d", i), Raw: map[string]any{"type": "socks5", "server": "127.0.0.1", "port": 1}})
+		if d != 0 {
+			a.scan[nodeName(sub, key)] = &model.NodeScan{Delay: d}
+		}
+	}
+	a.mu.Lock()
+	a.Subs = append(a.Subs, sub)
+	sp := a.spareNodesLocked()
+	a.Subs = nil // 下面查次序时不去现测（这里没有代理内核）
+	a.mu.Unlock()
+	if len(sp) != 3 || sp[0].Label != "节点3" || sp[1].Label != "节点4" || sp[2].Label != "节点0" || sp[0].Name != nodeName(sub, "k3") {
+		t.Fatalf("备用节点：%+v", sp)
+	}
+	all := a.updateSources()
+	if len(all) < 3 || all[0].Name != "#12 的节点" || all[1].Name != "#13 的节点" || all[2].Name != "直连" {
+		t.Fatalf("次序该是 节点 → 直连 → …：%+v", all)
+	}
+
+	// 经节点那一条查版本、下安装包（假的发布页在本机；正式环境里指到假服务时只直连，所以这里直接拿这一条去用）
+	body := []byte(strings.Repeat("installer-bytes ", 4096))
+	fakeGitHub(t, "v0.1.99", body, false)
+	rel, err := update.Latest(context.Background(), a.updateEndpoints(), ns[:1], update.AssetName("windows", "amd64"))
+	if err != nil || rel.Version != "0.1.99" || rel.Via != "#12 的节点" || used.Load() == 0 {
+		t.Fatalf("经节点查版本：%+v %v（代理经手 %d 条连接）", rel, err, used.Load())
+	}
+	before := used.Load()
+	dst := filepath.Join(t.TempDir(), "setup.exe")
+	if err := kernel.Fetch(context.Background(), kernel.Asset{URL: rel.URL, SHA256: rel.SHA256, Size: rel.Size}, dst, ns[:1], nil, nil); err != nil {
+		t.Fatalf("经节点下载：%v", err)
+	}
+	if b, _ := os.ReadFile(dst); string(b) != string(body) || used.Load() == before {
+		t.Fatalf("下载的内容不对，或者没经过代理（经手 %d → %d）", before, used.Load())
+	}
+	// 节点不通（端口上没人）：这一条报错，调用方会接着用后面的直连
+	if _, err := update.Latest(context.Background(), a.updateEndpoints(), ns[1:], update.AssetName("windows", "amd64")); err == nil {
+		t.Fatal("节点不通时这一条该报错")
+	}
+	if rel, err := update.Latest(context.Background(), a.updateEndpoints(), []netx.Source{ns[1], {Name: "直连"}}, update.AssetName("windows", "amd64")); err != nil || rel.Via != "直连" {
+		t.Fatalf("节点不通该落到直连：%+v %v", rel, err)
 	}
 }

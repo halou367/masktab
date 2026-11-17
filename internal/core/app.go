@@ -117,6 +117,8 @@ type App struct {
 	core      *proxy.Core
 	coreOK    bool
 	scanPorts []int
+	updPort   int    // “更新通道”的本地 socks 端口：没有开着的实例可借时，在线更新经它走订阅里的节点（见 update.go 的 nodeSources）
+	updWant   string // 更新通道当前该选的出站；空 = REJECT（不用的时候关着）
 	scanPool  chan int
 	setupMu   sync.Mutex
 	// 在线更新（update.go）

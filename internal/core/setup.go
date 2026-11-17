@@ -135,6 +135,7 @@ func (a *App) ensureCore() {
 	a.mu.Lock()
 	a.core = c
 	a.scanPorts = nil
+	a.updPort = freePort()
 	a.scanPool = make(chan int, scanChannels)
 	for i := 0; i < scanChannels; i++ {
 		a.scanPorts = append(a.scanPorts, freePort())
