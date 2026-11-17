@@ -2,12 +2,13 @@
 // 卡片写出口国旗和完整 IP（决策 UI-10；以前只画国旗、悬停才看到 IP）；记住账号的站点画成小图标；长按卡片拖动排序；
 // 点卡片打开右侧抽屉看账号、密码、Cookie；“导入邮箱”批量建实例。
 import { api, shownExit, RESTART_WHY } from './api.js';
-import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, appBar, sec } from './ui.js';
+import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, appBar, sec, row, sw, ask, confirmDlg } from './ui.js';
 import { siteIcon, siteName, siteKey, uniqSites } from './sites.js';
 import { face, stepLine } from './menu.js';
 
 const MAXI = 9; // 卡片上最多几个站点图标，多的显示 +N
-let ctx;        // { st, act, load, render, lite?, back? }；lite = 手机精简版（一行一张卡片，照 demo/unified 的 mInstsLite），back = 标题左边的返回
+let ctx;        // { st, act, load, render, lite?, back?, openNode?, open? }；lite = 手机精简版（一行一张卡片，照 demo/unified 的 mInstsLite），back = 标题左边的返回，
+                // openNode(id) = 打开这个实例的“节点与出口”（它不用开着），open(路由) = 打开别的页
 const route = () => location.hash.slice(1).split('/'); // ['instances', id | 'import']
 const setRoute = (sub) => { location.hash = sub ? `instances/${sub}` : 'instances'; };
 
@@ -15,11 +16,19 @@ export function instancesView(c) {
   ctx = c;
   const { st } = c;
   const [, sub] = route();
+  // 编号有空缺（删过实例）时顶栏多一个“整理编号”：按从小到大重排成 1、2、3…（决策 F-HEAL）。平时不出现。
+  const masked = st.instances.filter((i) => i.no > 0), gaps = masked.length > 0 && Math.max(...masked.map((i) => i.no)) > masked.length;
+  const tidy = async () => {
+    const sorted = [...masked].sort((a, b) => a.no - b.no), moves = sorted.map((i, k) => (i.no !== k + 1 ? `#${i.no} → #${k + 1}` : '')).filter(Boolean);
+    if (await confirmDlg('整理编号？', `按现在的编号从小到大重新排成 1 到 ${masked.length}：${moves.slice(0, 6).join('，')}${moves.length > 6 ? ` 等 ${moves.length} 个` : ''}。只改编号，数据、账号、颜色都不动。`, '整理')) c.act(() => api('POST', '/api/instances/renumber'), '编号已整理');
+  };
   // 顶栏（2026-11-15 起照 Chrome 设置页，决策 UI-1）：手机是图标按钮，电脑多两个带字的按钮
   const head = c.lite
     ? appBar(['实例', h('span', { class: 'cnt' }, String(st.instances.length))], c.back,
+      gaps && ibtn('sort', '整理编号：重新排成 1、2、3…', tidy),
       ibtn('mail', '导入邮箱：一个邮箱一个实例', () => setRoute('import')), ibtn('add', '新建伪装实例', () => c.act(() => api('POST', '/api/instances', {}), '正在创建…'), 'on'))
     : appBar(['实例', h('span', { class: 'cnt' }, String(st.instances.length))], c.back,
+      gaps && h('button', { class: 'btn', title: '删过实例以后编号有空缺：重新排成 1、2、3…', onclick: tidy }, icon('sort', 18), '整理编号'),
       h('button', { class: 'btn', title: '批量导入邮箱，一个邮箱一个实例', onclick: () => setRoute('import') }, icon('mail', 18), '导入邮箱'),
       h('button', { class: 'btn tonal', title: '新建伪装实例（Ctrl+M）', onclick: () => c.act(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('add', 18), '新建'));
   // 分成“运行中 / 休眠”两组（演示定稿，决策 UI-10）；拖动排序只在同一组里换位置。
@@ -69,14 +78,14 @@ function card(i) {
   const sites = cardSites(i);
   // 运行中 / 休眠不写字（决策 UI-9）：头像右上角的点、右边是“关闭”还是“打开”已经说了；只有正在启动时写进度。
   const state = rt.starting ? stepLine(i, ctx.st.launchSteps) : null;
-  const warn = rt.error ? h('div', { class: 'cw bad', title: rt.error }, icon('warn', 14), h('span', {}, rt.error))
-    : rt.needRestart?.length ? h('div', { class: 'cw mid' }, icon('refresh', 14), h('span', {}, '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、'))) : null;
+  const warn = warnLine(i);
   const el = h('div', { class: 'cardi' + (rt.running ? ' running' : '') + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color }, title: '点开看账号与 Cookie；长按拖动排序',
     onclick: (ev) => { if (ev.target.closest('button,input,.fl') || el.dataset.dragged) return; setRoute(i.id); } },
   h('div', { class: 'ct' }, face(i, false, true, true), h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm', title: nameOf(i) }, nameOf(i))), state || exitLine(i)),
     // 动作在名字右边（演示定稿）：运行中 = 关闭，休眠 = 打开。有改动等着重启时多一个“重启”；平时要重启，点开卡片，在详情顶上。
     rt.running ? [rt.needRestart?.length > 0 && ibtn('refresh', '重启（让改动生效）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`)), 'need'), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
-      : !rt.starting && ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
+      : rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
+        : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
   sites.length > 0 && h('div', { class: 'cs' }, sites.length ? [sites.slice(0, MAXI).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
     sites.length > MAXI && h('span', { class: 'more', title: sites.slice(MAXI).map(siteTip).join('\n') }, `+${sites.length - MAXI}`)]
     : null),
@@ -84,6 +93,14 @@ function card(i) {
   return el;
 }
 
+// 卡片最下面的提示行：断着网的原因（红）、等着重启的改动、程序替用户改过的选择（黄）。一次只写最要紧的一条。
+function warnLine(i) {
+  const rt = i.rt;
+  if (rt.error) return h('div', { class: 'cw bad', title: rt.error }, icon('warn', 14), h('span', {}, (rt.running ? '断网中：' : '') + rt.error));
+  if (rt.needRestart?.length) return h('div', { class: 'cw mid' }, icon('refresh', 14), h('span', {}, '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、')));
+  if (rt.fixed) return h('div', { class: 'cw mid', title: rt.fixed }, icon('info', 14), h('span', {}, rt.fixed));
+  return null;
+}
 // 卡片第二行：出口（国旗 + 写全的 IP）、延迟、记了几个账号。直连 / 还没探测出来时写一个词。
 function exitLine(i) {
   const rt = i.rt, on = i.kind !== 'normal' && i.proxy.state === 'on', ex = on ? shownExit(i) : null;
@@ -101,10 +118,11 @@ function cardLite(i) {
   h('div', { class: 'ct' }, face(i, false, true, true),
     h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))), rt.starting ? stepLine(i, ctx.st.launchSteps) : exitLine(i)),
     rt.running ? ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
-      : !rt.starting && ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
+      : rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
+        : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
   sites.length > 0 && h('div', { class: 'cs' }, sites.slice(0, MAXL).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
     sites.length > MAXL && h('span', { class: 'more' }, `+${sites.length - MAXL}`)),
-  rt.error && h('div', { class: 'cw bad' }, icon('warn', 14), rt.error));
+  warnLine(i));
   return el;
 }
 
@@ -160,6 +178,25 @@ async function loadAccts(id, force) {
 function copy(text, what) {
   navigator.clipboard.writeText(text).then(() => { toast(`已复制${what}，30 秒后清空剪贴板`); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30_000); }, () => toast('复制失败', true));
 }
+// 抽屉里的“节点与出口”：代理开关、用的哪条线路、出了什么问题；点进去是完整的节点面板（对着这个实例，它不用开着）。
+// 以前节点只能在实例自己的窗口里改：订阅删了、节点坏了，实例开不起来，也就没有地方改（用户反馈，决策 F-HEAL）。
+function netRows(i) {
+  const st = ctx.st, px = i.proxy, on = px.state === 'on', rt = i.rt;
+  const sub = st.subscriptions.find((x) => x.id === px.subscriptionId) || null, et = sub?.kind === 'edgetunnel';
+  const pf = et ? (sub.profiles || []).find((x) => x.key && x.key === px.profile) || (sub.profiles || []).find((x) => x.host === px.host) || (sub.profiles || [])[0] : null;
+  const node = sub && !et ? sub.nodes.find((n) => n.id === px.nodeKey) : null;
+  const auto = px.exitMode !== 'manual', region = (px.region || '').toUpperCase();
+  const how = !sub ? null : et ? [auto ? '出口自动' : '出口手动', region && auto ? ' · ' + cname(region) : '', px.entryMode !== 'manual' ? ' · 入口自动' : ' · 入口手动']
+    : [auto ? '自动选节点' : '手动', node ? ' · ' + (node.label || node.server) : auto ? '' : h('span', { class: 'bad' }, ' · 节点已不在订阅里')];
+  const go = () => (ctx.openNode ? ctx.openNode(i.id) : toast('请在这个实例的窗口里打开“节点与出口”', true));
+  const lk = (t, fn) => h('button', { class: 'lk', onclick: fn }, t);
+  return [h('h3', {}, icon('globe', 16), '节点与出口'),
+    rt.error && on ? h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, (rt.running ? '断网中（没有直连）：' : '') + rt.error), lk('去改', go)) : null,
+    rt.fixed ? h('div', { class: 'warn' }, icon('info', 20), h('span', { class: 'tx' }, rt.fixed), lk('知道了', () => ctx.act(() => api('POST', `/api/instances/${i.id}/ack`)))) : null,
+    row({ ic: 'shield', t: '代理', s: on ? '经订阅出网，不通时断流，不会直连' : '关闭：直连，网站看到真实 IP', trail: sw(on, on ? '关闭代理' : '开启代理', (v) => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { proxy: { state: v ? 'on' : 'off' } }))) }),
+    row({ ic: 'sub', t: sub ? (pf?.host || sub.name) : st.subscriptions.length ? '还没选线路' : '还没有订阅', s: sub ? how : on ? h('span', { class: 'bad' }, st.subscriptions.length ? '选一条线路才能上网' : '添加订阅才能上网') : '订阅、出口、入口都在这里改',
+      chev: true, aria: '设置节点与出口', title: '设置这个实例的订阅、出口、入口（不用先打开它）', onclick: go })];
+}
 function drawer(i) {
   if (accts.id !== i.id || !accts.items) loadAccts(i.id).catch((e) => toast(e.message, true));
   const items = accts.id === i.id ? accts.items : null;
@@ -185,15 +222,27 @@ function drawer(i) {
     h('input', { name: 'pass', placeholder: '密码', 'aria-label': '密码', value: a?.pass || '', required: true }),
     h('div', { class: 'ea' }, h('button', { class: 'btn', type: 'button', onclick: () => { editing = ''; ctx.render(); } }, '取消'), h('button', { class: 'btn pri' }, icon('check', 16), '保存')));
   const cookies = i.acct?.cookies || [];
+  // 改编号：被别的实例用着就对调。编号只是名字，数据按实例 id 记，不受影响。
+  const editNo = async () => {
+    const v = await ask(`#${i.no} 的新编号`, { value: String(i.no), type: 'number', ok: '保存', note: '1 到 9999。这个编号已经有实例在用的话，两个对调。只改编号，数据、账号都不动。' });
+    if (v == null) return;
+    const n = parseInt(v, 10);
+    if (!(n >= 1 && n <= 9999) || String(n) !== v.trim()) { toast('编号要是 1 到 9999 之间的整数', true); return; }
+    if (n === i.no) return;
+    const other = ctx.st.instances.find((x) => x.no === n);
+    ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { no: n }), other ? `已和原来的 #${n} 对调` : `已改成 #${n}`);
+  };
   return h('div', { class: 'scrim', onclick: (ev) => ev.target === ev.currentTarget && close() },
     h('aside', { class: 'drawer', style: { '--c': i.color } },
       h('div', { class: 'dh' }, ibtn('back', '收起', close), face(i, true, true, true), h('div', { class: 'grow' },
         h('input', { class: 'name', value: i.name || '', placeholder: nameOf(i), title: '名称（回车保存）', onchange: (ev) => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { name: ev.target.value })) }),
-        h('div', { class: 'sub el', style: { paddingLeft: '8px' } }, `#${i.no} · `, i.proxy.state === 'on' ? (shownExit(i) ? `${shownExit(i).ip} · ${cname(shownExit(i).country)}` : '代理') : '直连')),
+        h('div', { class: 'sub el', style: { paddingLeft: '8px' } }, i.no > 0 ? h('button', { class: 'lk', title: '改编号', 'aria-label': '改编号', onclick: editNo }, `#${i.no}`, icon('edit', 13)) : `#${i.no}`, ' · ', i.proxy.state === 'on' ? (shownExit(i) ? `${shownExit(i).ip} · ${cname(shownExit(i).country)}` : '代理') : '直连')),
         // 电脑上开关也在这里（卡片上平时只有“关闭 / 打开”一个按钮）；手机屏窄，这一行留给名字，开关在卡片上
         ctx.lite ? null : i.rt.running ? [ibtn('refresh', '重启', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`))), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
-          : !i.rt.starting && ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)))),
+          : i.rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
+            : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)))),
       h('div', { class: 'sw2', style: { padding: '4px 16px 0' }, title: '实例颜色' }, ctx.st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, title: '实例颜色', onclick: () => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
+      netRows(i),
       h('h3', {}, icon('key', 16), '账号管理', h('span', { class: 'grow' }), ibtn('plus', '手动添加一条', () => { editing = 'new'; ctx.render(); })),
       h('div', { class: 'sub hint' }, '在这个实例里登录过的账号会自动记住；网站不让浏览器记密码也照样记。下次打开登录页自动填好，不会替你点登录。'),
       editing === 'new' && form(null),

@@ -3,7 +3,7 @@
 // 2026-11-15 起全部照 Chrome 设置页的样子（决策 UI-1），页面之间的关系也照 Chrome：设置首页 → 各分页，顶栏左上角返回上一页。
 //   idle            空页面（没在显示）：不画东西、不轮询
 //   settings        设置首页（MaskTab 一组放最前）；settings/adv 高级、settings/about 组件与更新、settings/ntp 新标签页
-//   node / fp       节点与出口 / 指纹与伪装——和电脑版是同一份代码（panel.js）
+//   node / fp       节点与出口 / 指纹与伪装——和电脑版是同一份代码（panel.js）；node/<实例 id> = 改另一个实例的节点（从实例详情点进来）
 //   instances…      实例（instances/<id> 账号抽屉、instances/import 导入邮箱）——共用 instances.js
 //   exits           订阅与地址库——共用 pages.js；旧路由 subs 也认
 //   addons          扩展：从 addons.mozilla.org 安装的火狐扩展（手机内核是 GeckoView，用不了 Chrome 扩展，这一页两端不同）
@@ -144,9 +144,10 @@ function render(force) {
   try {
     if (!st.me) throw new Error('没有实例');
     const c = ctx();
+    if (p === 'node' || p === 'fp') panel.target(p === 'node' ? route().split('/')[1] || '' : '');
     const view = {
       settings: () => settingsHome(c), 'settings/adv': () => settingsAdv(c), 'settings/about': () => settingsAbout(c), 'settings/ntp': () => settingsNtp(c), 'settings/verify': () => verifyView(c),
-      node: () => panel.kids(), fp: () => panel.kids(), instances: () => instancesView({ st, act, load, render: () => render(true), lite: true, back }),
+      node: () => panel.kids(), fp: () => panel.kids(), instances: () => instancesView({ st, act, load, render: () => render(true), lite: true, back, openNode: (id) => open('node/' + id), open }),
       exits: () => exitsView(c), addons: addonsPage, diag: () => diagView(c), history: historyPage,
       menu: () => [appBar('', back), menuView(st, { node: () => open('node'), fp: () => open('fp'), open, render: () => render(true) })],
     }[p] || (() => settingsHome(c));

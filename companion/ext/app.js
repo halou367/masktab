@@ -6,7 +6,8 @@ import { panel } from './panel.js';
 import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView } from './pages.js';
 
 // 电脑版设置页的外壳：左边导航（照 Chrome 桌面设置页），右边一栏放共用的页面（pages.js / instances.js / panel.js，和手机同一份）。
-// 路由 = 地址 # 后面：settings（概览）、instances[/id|/import]、node、fp、exits、extensions、settings/adv|about|ntp、diag。
+// 路由 = 地址 # 后面：settings（概览）、instances[/id|/import]、node[/实例 id]、fp、exits、extensions、settings/adv|about|ntp、diag。
+// node 是本窗口这个实例的节点；node/<id> 是从实例管理点进来、改另一个实例的（它不用开着，决策 F-HEAL）。
 // 左边导航照定稿的演示（决策 UI-10）：上面一组是 MaskTab 自己的页，下面“浏览器”一组是基本设置和高级。
 // 没有“概览”：它只是把左边这几项再列一遍。“新标签页”的设置从“基本设置”里点进去。
 const NAV = [['', [['instances', 'layers', '实例'], ['node', 'globe', '节点与出口'], ['exits', 'sub', '订阅与地址库'], ['fp', 'finger', '指纹与伪装'], ['extensions', 'ext', '扩展'], ['settings/about', 'update', '组件与更新'], ['diag', 'bug', '诊断']]],
@@ -29,7 +30,8 @@ async function load(force) {
   if (force || (!editing() && !document.querySelector('.scrim'))) render();
 }
 
-panel.init(main, { load: () => load(true), render: () => render(), open, back: null });
+const shell = { load: () => load(true), render: () => render(), open, back: null }; // back：改别的实例时回到它的详情
+panel.init(main, shell);
 
 // 全局扩展（电脑专有：Chrome 扩展库；手机是火狐扩展，在 app 里管）
 function extensions() {
@@ -70,18 +72,22 @@ async function diagText() {
 function render() {
   if (!st) return;
   const p = page();
-  const at = p === 'settings/ntp' ? 'settings' : p; // “新标签页”的设置是从“基本设置”点进去的
+  const tid = p === 'node' ? route().split('/')[1] || '' : ''; // 节点面板对着哪个实例（空 = 本窗口的）
+  const at = p === 'settings/ntp' ? 'settings' : tid ? 'instances' : p; // “新标签页”的设置是从“基本设置”点进去的；改别的实例的节点算在“实例”里
   document.getElementById('nav').replaceChildren(h('div', { class: 'h' }, h('span', { class: 'lg' }, icon('mask', 20)), 'MaskTab'),
     ...NAV.flatMap(([g, l]) => [g && h('div', { class: 'g' }, g), ...l.map(([r, ic, t]) => h('button', { class: at === r ? 'on' : '', onclick: () => open(r) }, icon(ic, 20), t))]).filter(Boolean));
   const c = { st, act, open, back, render, link: (u) => chrome.tabs.create({ url: u }), diag: diagText };
+  const ic = { st, act, load, render, openNode: (id) => open('node/' + id), open };
   let kids;
   if (p === 'node' || p === 'fp') {
     if (lastPage !== p) panel.home(p === 'fp');
+    panel.target(tid);
+    shell.back = tid ? () => open('instances/' + tid) : null;
     kids = panel.kids();
   } else {
     // 左边导航里有的页没有“返回”（导航就在旁边）；只有从“基本设置”点进去的“新标签页”有
-    kids = ({ settings: () => settingsHome({ ...c, back: null, pc: true }), instances: () => instancesView({ st, act, load, render }), exits: () => exitsView({ ...c, back: null }), extensions,
-      'settings/adv': () => settingsAdv({ ...c, back: null }), 'settings/about': () => settingsAbout({ ...c, back: null }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back: null }) }[p] || (() => instancesView({ st, act, load, render })))();
+    kids = ({ settings: () => settingsHome({ ...c, back: null, pc: true }), instances: () => instancesView(ic), exits: () => exitsView({ ...c, back: null }), extensions,
+      'settings/adv': () => settingsAdv({ ...c, back: null }), 'settings/about': () => settingsAbout({ ...c, back: null }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back: null }) }[p] || (() => instancesView(ic)))();
   }
   main.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
   if (p === 'node' || p === 'fp') panel.after();

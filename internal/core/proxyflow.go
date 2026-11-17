@@ -92,10 +92,13 @@ func (a *App) resolveLocked(in *model.Instance) resolved {
 	}
 	sub := a.subLocked(in.Proxy.SubscriptionID)
 	if sub == nil {
-		return resolved{want: "REJECT", err: "未选择订阅"}
+		if len(a.Subs) == 0 {
+			return resolved{want: "REJECT", err: "还没有订阅，添加订阅后才能上网"}
+		}
+		return resolved{want: "REJECT", err: "还没有选订阅线路"}
 	}
 	if sub.Kind != "edgetunnel" || sub.Template == nil {
-		r := resolved{want: "REJECT", err: "所选节点已不在订阅里"}
+		r := resolved{want: "REJECT", err: "所选节点已不在订阅里，请重新选一个"}
 		for _, n := range sub.Nodes {
 			name := nodeName(sub, n.Key)
 			p := map[string]any{}
@@ -110,7 +113,10 @@ func (a *App) resolveLocked(in *model.Instance) resolved {
 			}
 		}
 		if in.Proxy.NodeKey == "" {
-			r.err = "未选择节点"
+			r.err = "还没有选节点"
+			if len(sub.Nodes) == 0 {
+				r.err = "订阅“" + sub.Name + "”里没有节点（可能没拉下来），刷新订阅或换一个"
+			}
 		}
 		return r
 	}
@@ -128,7 +134,10 @@ func (a *App) resolveLocked(in *model.Instance) resolved {
 	} else {
 		n, ok := a.entryLocked(sub, in.Proxy.AddressID)
 		if !ok {
-			return resolved{want: "REJECT", err: "未选择入口地址"}
+			if len(a.nodesLocked(sub)) == 0 {
+				return resolved{want: "REJECT", err: "订阅“" + sub.Name + "”里没有可用的入口地址，刷新订阅或换一个"}
+			}
+			return resolved{want: "REJECT", err: "还没有选入口地址"}
 		}
 		server, port = n.Server, n.Port
 	}

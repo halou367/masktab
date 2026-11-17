@@ -142,6 +142,7 @@ func (a *App) ensureCore() {
 	}
 	a.coreOK = true
 	a.setup.CoreError = ""
+	a.clearRefusedLocked()
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
 	_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)
@@ -183,6 +184,7 @@ func (a *App) ensureKernel(onDownload func()) error {
 	a.mu.Lock()
 	first := a.kernelExe == ""
 	a.kernelExe = exe
+	a.clearRefusedLocked()
 	a.setup.Stage, a.setup.Error, a.setup.Done, a.setup.Total, a.setup.Source = "ready", "", 0, 0, ""
 	a.bumpLocked("setup", "")
 	a.mu.Unlock()
@@ -236,5 +238,14 @@ func (a *App) setupInfo() map[string]any {
 		"setup": a.setup, "version": a.Version, "coreOk": a.coreOK, "kernelReady": a.kernelExe != "",
 		"kernelVersion": kernel.KernelVersion, "kernelUrl": ka.URL, "kernelDir": a.p("kernel"),
 		"coreUrl": kernel.MihomoAsset().URL, "coreDir": a.p("core"),
+	}
+}
+
+// clearRefusedLocked 组件准备好了：把“组件没准备好，开不了”的提示从实例上拿掉（见 Launch 的 refuse）。
+func (a *App) clearRefusedLocked() {
+	for _, r := range a.rt {
+		if r.refused {
+			r.refused, r.Error = false, ""
+		}
 	}
 }

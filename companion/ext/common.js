@@ -15,7 +15,7 @@ export function mismatch(inst) {
   const p = inst?.rt?.probe;
   return !!(p && p.cf && p.direct && p.cf.country && p.direct.country && p.cf.country !== p.direct.country);
 }
-export const RESTART_WHY = { timezone: '出口时区已变化', extensions: '扩展有增删', fingerprint: '指纹 / 语言设置已改', appearance: '颜色已改' };
+export const RESTART_WHY = { timezone: '出口时区已变化', extensions: '扩展有增删', fingerprint: '指纹 / 语言设置已改', appearance: '颜色 / 编号已改' };
 // 核心服务给的提示有两种是代号（界面上各自有专门的展示），其余是直接能读的句子。
 export function noticeText(n, cname = (c) => c) {
   if (!n) return '';

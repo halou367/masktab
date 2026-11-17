@@ -60,6 +60,7 @@ func (a *App) hostStop(id string) {
 		a.mu.Unlock()
 		return
 	}
+	r.gen++ // 正在启动的那一次作废（见 Launch 的 stale）
 	r.Running, r.Starting, r.Pid, r.cmd, r.active, r.Cut, r.NeedRestart, r.Step = false, false, 0, nil, false, "", nil, 0
 	done := r.done
 	r.done = nil
@@ -115,7 +116,6 @@ func (a *App) importHost(d hostImport) (map[string]any, error) {
 		a.mu.Unlock()
 		return nil, errors.New("已经有实例了，不再导入旧数据")
 	}
-	maxNo := 0
 	for _, o := range d.Instances {
 		if o.ID == "" || o.No <= 0 {
 			continue
@@ -147,11 +147,7 @@ func (a *App) importHost(d hostImport) (map[string]any, error) {
 			in.Proxy.ExitMode = "manual" // 旧版里钉死了一个节点
 		}
 		a.Instances = append(a.Instances, in)
-		if o.No > maxNo {
-			maxNo = o.No
-		}
 	}
-	_ = writeJSON(a.p("state", "counter.json"), map[string]int{"maxNo": maxNo})
 	if d.SearchURL != "" {
 		a.Settings.SearchURL = d.SearchURL
 	}

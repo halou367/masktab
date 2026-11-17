@@ -62,7 +62,13 @@ function statCard(st, me, host) {
       cell(ringEl(q.score, 44), '纯净度', q.score != null ? '出口 IP' : '查不到'),
       cell(h('span', { class: 'cfbig ' + cf.st }, 'CF'), 'CF 信誉', cf.text)),
     mismatch(me) && h('div', { class: 'nswarn' }, icon('warn', 16), '两路出口不在同一国家', h('span', { class: 'grow' }), h('span', { title: '普网' }, flag(rt.probe.direct.country)), h('span', { title: 'CF 网站' }, flag(rt.probe.cf.country))));
-  return [inst, stat, !on && h('div', { class: 'nswarn out' }, icon('warn', 16), '直连中，网站看到真实 IP')];
+  // 窗口开着但断着网（订阅没了、节点不通…）：写在最显眼的地方，点一下去改（决策 F-HEAL）。以前这种情况窗口根本开不起来。
+  // 时区变了要重启才放行（电脑版）也算：以前新标签页上看不出来已经断着网。“启动中”“正在确认出口”只是一小会儿，不提示。
+  const tzCut = st.host !== 'android' && rt.needRestart?.includes('timezone');
+  const why = tzCut ? '出口时区变了，重启这个实例后才能上网' : rt.error || (rt.cut && !/^(启动中|正在确认出口)$/.test(rt.cut) ? rt.cut : '');
+  const down = on && rt.running && why
+    && h('button', { class: 'nswarn out fix bad', 'aria-label': '断网中，去设置节点', onclick: () => host.openNode() }, icon('warn', 16), h('span', {}, tzCut ? why : '断网中（没有直连）：' + why), tzCut ? '去重启' : '去改', icon('chevR', 16));
+  return [inst, down, stat, !on && h('div', { class: 'nswarn out' }, icon('warn', 16), '直连中，网站看到真实 IP')];
 }
 
 // 书签：一行三个（电脑四个）；长按 / 右键删除；最后一个“+”添加

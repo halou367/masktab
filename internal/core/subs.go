@@ -107,20 +107,7 @@ func (a *App) RefreshSubscription(id string, force bool) error {
 	a.saveLocked("subscriptions", "addresses", "instances")
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
-	if err := a.applyConfig(); err != nil {
-		return err
-	}
-	go a.Scan(id)
-	for _, iid := range a.activeIDs() {
-		a.mu.Lock()
-		in := a.instLocked(iid)
-		uses := in != nil && in.Proxy.SubscriptionID == id
-		a.mu.Unlock()
-		if uses {
-			go a.refresh(iid)
-		}
-	}
-	return nil
+	return a.afterSubChanged(id)
 }
 
 // applySubLocked 替换节点、模板、Host 池、订阅来源的优选 IP，并对使用该订阅的实例对账。
@@ -179,33 +166,26 @@ func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, has
 		s.Template, s.Hosts, s.Profiles = nil, []string{}, nil
 	}
 	a.Addresses = keep
+	// 用这个订阅的实例对账（节点没了、入口地址没了、那套参数没了）：见 heal.go
 	for _, in := range a.Instances {
 		if in.Proxy.SubscriptionID != s.ID {
 			continue
 		}
-		r := a.rtLocked(in.ID)
-		if s.Kind == "edgetunnel" {
-			if _, ok := a.entryLocked(s, in.Proxy.AddressID); !ok && in.Proxy.AddressMode != "same-as-exit" {
-				in.Proxy.AddressID = a.bestAddrLocked(s.ID)
-				r.Notice = "原来的入口地址已经没有了，已换成延迟最低的"
-			}
-			// 原来用的那套参数 / Host 不在了：按默认规则重新分配
-			if in.Proxy.Profile != "" && profileOf(s, in.Proxy.Profile, "").Key != in.Proxy.Profile {
-				in.Proxy.Profile = ""
-			}
-			if !contains(profileOf(s, in.Proxy.Profile, in.Proxy.Host).Hosts, in.Proxy.Host) {
-				in.Proxy.Host = ""
-			}
-			a.fillProxyLocked(in, s)
-		} else if !hasNode(s, in.Proxy.NodeKey) && in.Proxy.NodeKey != "" {
-			r.Notice = "所选节点已不在订阅里，已断流，请重新选择" // 不自动换节点，也不回落直连
+		note, ch := a.healLocked(in)
+		if note != "" {
+			a.rtLocked(in.ID).Fixed = note
 		}
-		in.UpdatedAt = now()
+		if ch {
+			in.UpdatedAt = now()
+		}
 	}
 }
 
-func (a *App) DeleteSubscription(id string) {
+// DeleteSubscription 删订阅。还在用它的实例改用剩下的订阅（默认的那个，自动选线）；一个订阅都不剩时它们停在断流，
+// 窗口照样能打开，加了新订阅自动接上（heal.go）。返回受影响的实例编号、它们改用的订阅名（没有可用的 = ""）。
+func (a *App) DeleteSubscription(id string) (moved []int, to string) {
 	a.mu.Lock()
+	moved = a.usersOfLocked(id)
 	var subs []*model.Subscription
 	for _, s := range a.Subs {
 		if s.ID != id {
@@ -220,16 +200,75 @@ func (a *App) DeleteSubscription(id string) {
 		}
 	}
 	a.Addresses = ads
-	if a.Settings.DefaultSubscriptionID == id {
-		a.Settings.DefaultSubscriptionID = ""
-		if len(subs) > 0 {
-			a.Settings.DefaultSubscriptionID = subs[0].ID
-		}
+	changed := a.healAllLocked() // 顺带把“默认订阅”指到还在的订阅上
+	if s := a.subLocked(a.Settings.DefaultSubscriptionID); s != nil && len(moved) > 0 {
+		to = s.Name
 	}
 	a.saveLocked("subscriptions", "addresses", "settings")
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
-	_ = a.applyConfig()
+	a.healed(changed)
+	return moved, to
+}
+
+// UpdateSubscription 改订阅的名字 / 地址。以前订阅地址改不了，只能删了重加，而删掉以后用它的实例全都指向空处（用户反馈）。
+// 改地址：先按新地址拉一次，拉不下来就不改（原来的照用）；拉下来了订阅还是这一个（id 不变），用它的实例不用重新选订阅。
+func (a *App) UpdateSubscription(id string, name, url *string) error {
+	a.mu.Lock()
+	s := a.subLocked(id)
+	if s == nil {
+		a.mu.Unlock()
+		return errors.New("订阅不存在")
+	}
+	if name != nil {
+		if n := strings.TrimSpace(*name); n != "" && n != s.Name {
+			s.Name, s.UpdatedAt = n, now()
+			a.saveLocked("subscriptions")
+			a.bumpLocked("state", "")
+		}
+	}
+	old := s.URL
+	a.mu.Unlock()
+	if url == nil || strings.TrimSpace(*url) == old {
+		return nil
+	}
+	u := strings.TrimSpace(*url)
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		return errors.New("订阅地址必须以 http:// 或 https:// 开头")
+	}
+	nodes, err := fetchSub(u)
+	if err != nil {
+		return fmt.Errorf("新地址拉不下来，没有改：%w", err)
+	}
+	a.mu.Lock()
+	if s = a.subLocked(id); s == nil {
+		a.mu.Unlock()
+		return errors.New("订阅不存在")
+	}
+	s.URL, s.LastError, s.FetchedAt = u, "", now()
+	a.applySubLocked(s, nodes, subscription.ContentHash(nodes))
+	a.saveLocked("subscriptions", "addresses", "instances")
+	a.bumpLocked("state", "")
+	a.mu.Unlock()
+	return a.afterSubChanged(id)
+}
+
+// afterSubChanged 订阅内容换了之后：重写代理配置、重新测速，正在用它的实例重新确认出口。
+func (a *App) afterSubChanged(id string) error {
+	if err := a.applyConfig(); err != nil {
+		return err
+	}
+	go a.Scan(id)
+	for _, iid := range a.activeIDs() {
+		a.mu.Lock()
+		in := a.instLocked(iid)
+		uses := in != nil && in.Proxy.SubscriptionID == id
+		a.mu.Unlock()
+		if uses {
+			go a.refresh(iid)
+		}
+	}
+	return nil
 }
 
 // ImportExits 多行粘贴导入出口条目；域名默认"展开"为 IP。返回新增条数。

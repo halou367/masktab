@@ -190,10 +190,26 @@ export function exitsView(c) {
     s: [s.kind === 'edgetunnel' ? h('span', { class: 'tag' }, 'edgetunnel') : h('span', { class: 'tag g' }, '通用'), `${s.nodeCount} 个节点${s.kind === 'edgetunnel' ? ` · ${(s.profiles || []).length} 条线路` : ''} · ${ago(s.fetchedAt)}`, s.lastError && h('span', { class: 'bad' }, ' · ' + s.lastError)],
     chev: true, title: s.url,
     onclick: async () => {
-      const v = await choose(s.name, [['default', '设为默认订阅'], ['refresh', '立即刷新'], ['del', '删除订阅']], null);
+      const v = await choose(s.name, [['default', '设为默认订阅'], ['refresh', '立即刷新'], ['url', '修改订阅地址'], ['name', '改名'], ['del', '删除订阅']], null);
       if (v === 'default') act(() => api('POST', `/api/subscriptions/${s.id}/default`), '已设为默认');
       else if (v === 'refresh') act(() => api('POST', `/api/subscriptions/${s.id}/refresh?force=1`), '已刷新');
-      else if (v === 'del' && await confirmDlg(`删除订阅“${s.name}”？`, '用它的实例会断流，直到换上别的订阅。', '删除', true)) act(() => api('DELETE', `/api/subscriptions/${s.id}`));
+      else if (v === 'name') { const t = await ask('订阅名称', { value: s.name }); if (t && t.trim()) act(() => api('PATCH', `/api/subscriptions/${s.id}`, { name: t.trim() }), '已改名'); }
+      // 改地址：订阅还是这一个，用它的实例不用重新选（以前只能删了重加，实例就都断了）。新地址拉不下来就不改。
+      else if (v === 'url') {
+        const u = await ask('修改订阅地址', { value: s.url, type: 'url', ok: '保存', note: '换了订阅地址就在这里改，不用删了重加：用这个订阅的实例接着用它。新地址拉不下来的话不会改。' });
+        if (u && u.trim() && u.trim() !== s.url) { toast('正在拉取新地址…'); act(() => api('PATCH', `/api/subscriptions/${s.id}`, { url: u.trim() }), '订阅地址已修改'); }
+      } else if (v === 'del') {
+        // 删之前说清楚谁在用它、删了以后它们怎么办（决策 F-HEAL）：有别的订阅就改用别的，没有就断着网等新订阅——窗口照样能开。
+        const users = st.instances.filter((i) => i.proxy.subscriptionId === s.id), others = st.subscriptions.filter((x) => x.id !== s.id);
+        const next = others.find((x) => x.id === st.settings.defaultSubscriptionId) || others[0];
+        const who = users.map((i) => '#' + i.no).slice(0, 8).join('、') + (users.length > 8 ? ` 等 ${users.length} 个` : '');
+        const note = !users.length ? '没有实例在用它。'
+          : next ? `${who} 在用它，删除后改用“${next.name}”，自动选线。`
+            : `${who} 在用它。这是最后一个订阅：删除后这些实例会断网（不会直连，窗口照样能打开），添加新订阅后自动接上。只是换订阅地址的话，用“修改订阅地址”更省事。`;
+        if (await confirmDlg(`删除订阅“${s.name}”？`, note, '删除', true)) {
+          act(async () => { const r = await api('DELETE', `/api/subscriptions/${s.id}`); if (r?.moved?.length) toast(r.to ? `${r.moved.length} 个实例已改用“${r.to}”` : `${r.moved.length} 个实例暂时断网，添加订阅后自动接上`); });
+        }
+      }
     } });
   const seen = new Set(), custom = st.subscriptions.flatMap((x) => x.nodes).filter((n) => n.from === 'custom' && !seen.has(n.id) && seen.add(n.id));
   // 解析结果里的 IPv6：单个 IPv6 至少有两个冒号；带端口的写成 [IPv6]:端口。
@@ -208,7 +224,7 @@ export function exitsView(c) {
       else if (v === 'expand') act(() => api('PATCH', `/api/exits/${e.id}`, { expand: !e.expand }));
       else if (v === 'hours') { const n = await choose('重新解析的间隔', [0, 1, 3, 6, 12, 24].map((x) => [x, x ? `${x} 小时` : '不刷新']), e.refreshHours); if (n != null) act(() => api('PATCH', `/api/exits/${e.id}`, { refreshHours: n })); }
       else if (v === 'resolve') act(async () => { const r = await api('POST', `/api/exits/${e.id}/resolve`); toast(r?.error ? `解析失败：${r.error}` : `解析出 ${r?.count ?? 0} 个地址`); });
-      else if (v === 'del') act(() => api('DELETE', `/api/exits/${e.id}`));
+      else if (v === 'del') act(async () => { const r = await api('DELETE', `/api/exits/${e.id}`); if (r?.changed) toast(`有 ${r.changed} 个实例在用它，已换成别的，详情见各实例的提示`); });
     } });
   const importAddr = async () => {
     const v = await ask('导入地址', { multiline: true, ok: '导入', note: '是优选还是反代不用区分，探测后自动识别；域名默认展开为 IP（IPv4、IPv6、TXT 记录里的都算），每 3 小时重新解析。',
@@ -219,7 +235,7 @@ export function exitsView(c) {
     sec('订阅', String(st.subscriptions.length)),
     st.subscriptions.map(subRow),
     row({ ic: 'add', t: '添加订阅', onclick: addSub }),
-    custom.length > 0 && [sec('自定义地址', String(custom.length)), custom.map((n) => row({ ic: 'bolt', t: ipSpan(`${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port}`), s: n.label || null, trail: ibtn('del', '删除', () => act(() => api('DELETE', `/api/addresses/${n.id}`))) }))],
+    custom.length > 0 && [sec('自定义地址', String(custom.length)), custom.map((n) => row({ ic: 'bolt', t: ipSpan(`${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port}`), s: n.label || null, trail: ibtn('del', '删除', () => act(async () => { const r = await api('DELETE', `/api/addresses/${n.id}`); if (r?.changed) toast(`有 ${r.changed} 个实例把它当入口，已换成延迟最低的`); })) }))],
     sec('地址库（优选 IP / 反代 / SOCKS5 / HTTP）', String(st.exits.length)),
     st.exits.map(exitRow),
     row({ ic: 'add', t: '导入地址', s: 'IP、域名、列表网址、socks5:// http://', onclick: importAddr })];

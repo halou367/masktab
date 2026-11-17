@@ -303,6 +303,7 @@ type proxyPatch struct {
 }
 
 type instPatch struct {
+	No     *int // 改编号；被别的实例占着就和它对调
 	Name   *string
 	Color  *string
 	Proxy  *proxyPatch
@@ -350,6 +351,12 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 		}
 		in.TZ = *p.TZ
 	}
+	if p.No != nil {
+		if err := a.setNoLocked(in, *p.No); err != nil {
+			a.mu.Unlock()
+			return err
+		}
+	}
 	if p.Name != nil && *p.Name != in.Name {
 		in.Name = *p.Name
 	}
@@ -396,7 +403,16 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 		restart("fingerprint")
 	}
 	if pp := p.Proxy; pp != nil {
-		oldSub := in.Proxy.SubscriptionID
+		if pp.State != nil && *pp.State != "on" && *pp.State != "off" {
+			a.mu.Unlock()
+			return errors.New("代理只能是 on 或 off")
+		}
+		if pp.SubscriptionID != nil && *pp.SubscriptionID != "" && a.subLocked(*pp.SubscriptionID) == nil {
+			a.mu.Unlock()
+			return errors.New("这个订阅已经不在了，请重新选一个")
+		}
+		r.Fixed = "" // 用户自己动手改了选择：程序上次替他改了什么不用再提
+		oldSub, wasOn := in.Proxy.SubscriptionID, in.Proxy.State == "on"
 		setIf(&in.Proxy.State, pp.State)
 		setIf(&in.Proxy.SubscriptionID, pp.SubscriptionID)
 		if in.Proxy.SubscriptionID != oldSub { // 换订阅：清空旧选择，按默认规则重新补全
@@ -459,11 +475,19 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 			r.seenExit = nil // "换一个"的轮转从头算
 		}
 		in.Proxy.Auto = in.Proxy.ExitAuto()
-		if in.Proxy.State == "on" && in.Proxy.SubscriptionID == "" {
+		// 指着一个已经不在的订阅（旧数据、别处删的）也算“没选”：按默认规则补一个
+		if in.Proxy.State == "on" && a.subLocked(in.Proxy.SubscriptionID) == nil {
+			in.Proxy.SubscriptionID = ""
 			a.defaultProxyLocked(in)
 			if in.Proxy.SubscriptionID == "" {
-				a.mu.Unlock()
-				return errors.New("还没有订阅，请先添加订阅")
+				// 一个订阅都没有。defaultProxyLocked 这时会把代理关掉（新建实例用的规则）——
+				// 对一个本来开着代理的实例，那就是悄悄改成直连（以前删光订阅后在面板里随便点一下就会这样）。
+				if !wasOn { // 这一下是要打开代理：开不了，说明原因，仍然是关着的
+					in.Proxy.State = "off"
+					a.mu.Unlock()
+					return errors.New("还没有订阅，请先添加订阅")
+				}
+				in.Proxy.State = "on" // 本来就开着：保持断流，等用户加订阅
 			}
 		}
 		if sub := a.subLocked(in.Proxy.SubscriptionID); sub != nil {
@@ -475,6 +499,9 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 			if (pp.ExitID != nil && *pp.ExitID == "") || (pp.PipID != nil && *pp.PipID == "") { // 用户明确选了"不指定"
 				in.Proxy.ExitID, in.Proxy.ExitIP = keepExit, ""
 			}
+		}
+		if note, _ := a.healLocked(in); note != "" { // 填进来的 id 指向不存在的东西、别处删过东西：修好并说明
+			r.Fixed = note
 		}
 	}
 	in.UpdatedAt = now()
@@ -559,11 +586,29 @@ func (a *App) routes(mux *http.ServeMux) {
 			}()
 		case "probe":
 			go a.refresh(id)
+		case "ack": // 看过“程序替你改了什么”的提示
+			a.mu.Lock()
+			if a.instLocked(id) != nil {
+				a.rtLocked(id).Fixed = ""
+				a.bumpLocked("state", id)
+			}
+			a.mu.Unlock()
 		default:
 			reply(w, nil, errors.New("未知操作"))
 			return
 		}
 		reply(w, nil, nil)
+	})
+	// 整理编号：伪装实例按现在的编号从小到大重排成 1、2、3…
+	mux.HandleFunc("POST /api/instances/renumber", func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		n := a.renumberLocked()
+		if n > 0 {
+			a.saveLocked("instances")
+			a.bumpLocked("state", "")
+		}
+		a.mu.Unlock()
+		reply(w, map[string]int{"changed": n}, nil)
 	})
 	mux.HandleFunc("PATCH /api/instances/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var p instPatch
@@ -593,10 +638,23 @@ func (a *App) routes(mux *http.ServeMux) {
 			a.DeleteSubscription(s.ID)
 		}
 		if err == nil {
-			reply(w, map[string]any{"id": s.ID, "kind": s.Kind, "nodes": len(s.Nodes)}, nil)
+			// 开着代理却没有订阅的实例（订阅被删光以后留下的）：接到新订阅上
+			a.mu.Lock()
+			changed := a.healAllLocked()
+			a.mu.Unlock()
+			a.healed(changed)
+			reply(w, map[string]any{"id": s.ID, "kind": s.Kind, "nodes": len(s.Nodes), "adopted": len(changed)}, nil)
 			return
 		}
 		reply(w, nil, err)
+	})
+	mux.HandleFunc("PATCH /api/subscriptions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ Name, URL *string }
+		if err := body(r, &b); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		reply(w, nil, a.UpdateSubscription(r.PathValue("id"), b.Name, b.URL))
 	})
 	mux.HandleFunc("POST /api/subscriptions/{id}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -636,6 +694,11 @@ func (a *App) routes(mux *http.ServeMux) {
 			reply(w, nil, nil)
 		case "default":
 			a.mu.Lock()
+			if a.subLocked(id) == nil {
+				a.mu.Unlock()
+				reply(w, nil, errors.New("订阅不存在"))
+				return
+			}
 			a.Settings.DefaultSubscriptionID = id
 			a.saveLocked("settings")
 			a.bumpLocked("state", "")
@@ -646,8 +709,11 @@ func (a *App) routes(mux *http.ServeMux) {
 		}
 	})
 	mux.HandleFunc("DELETE /api/subscriptions/{id}", func(w http.ResponseWriter, r *http.Request) {
-		a.DeleteSubscription(r.PathValue("id"))
-		reply(w, nil, nil)
+		moved, to := a.DeleteSubscription(r.PathValue("id"))
+		if moved == nil {
+			moved = []int{}
+		}
+		reply(w, map[string]any{"moved": moved, "to": to}, nil)
 	})
 	mux.HandleFunc("POST /api/exits", func(w http.ResponseWriter, r *http.Request) {
 		var b struct{ Text string }
@@ -712,11 +778,10 @@ func (a *App) routes(mux *http.ServeMux) {
 		a.Exits = keep
 		a.saveLocked("exits")
 		a.bumpLocked("state", "")
+		changed := a.healAllLocked() // 指定了这个出口、用它当入口的实例：换掉并说明（heal.go）
 		a.mu.Unlock()
-		for _, iid := range a.activeIDs() { // 正在用这个出口的实例：重新解析后会落到 REJECT 或无出口，由 refresh 处理
-			go a.refresh(iid)
-		}
-		reply(w, nil, nil)
+		a.healed(changed)
+		reply(w, map[string]any{"changed": len(changed)}, nil)
 	})
 	mux.HandleFunc("POST /api/addresses", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
@@ -758,8 +823,10 @@ func (a *App) routes(mux *http.ServeMux) {
 		a.Addresses = keep
 		a.saveLocked("addresses")
 		a.bumpLocked("state", "")
+		changed := a.healAllLocked() // 把它钉成入口的实例：换成延迟最低的并说明
 		a.mu.Unlock()
-		reply(w, nil, a.applyConfig())
+		a.healed(changed)
+		reply(w, map[string]any{"changed": len(changed)}, nil)
 	})
 	mux.HandleFunc("PATCH /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()

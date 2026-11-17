@@ -1,5 +1,5 @@
 import { api, fmtBytes, RESTART_WHY, noticeText } from './api.js';
-import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, cfDot, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan } from './ui.js';
+import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, cfDot, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan, avatar } from './ui.js';
 import { disguise, cfRep } from './common.js';
 
 // 节点面板（电脑和手机共用，决策 D-4）：节点与出口、指纹与伪装，以及几个占满页面的列表（订阅线路、出口国家、出口、入口）。
@@ -14,7 +14,11 @@ import { disguise, cfRep } from './common.js';
 // 2026-11 起按需求方定的四条（决策 UI-9）：国家用下拉栏选（不再单开一页）；选中 = 整行换底色，行尾不放单选圈、不写“当前”；
 //   有图标就不再写字（住宅 / 机房只画图标）；IP 写全，同一件事一页只出现一次（首页不再有“当前出口 / 当前入口”两行）。
 //   自动选择是模式开关：开 = 只挑国家；关 = 从列表里选，或者填一个自定义的。入口同理。
+// 2026-11-17 起面板可以对着任何一个实例（target），不只是“本窗口的实例”：实例管理里点“节点与出口”就是它。
+//   以前面板只在实例自己的窗口里有，实例开不起来就没有地方改它的节点（用户反馈的死循环，决策 F-HEAL）。
 let st = null, host = null, root = null;
+let target = '';        // 面板对着哪个实例：'' = 本窗口的实例（st.me）
+const cur = () => (target ? st?.instances.find((i) => i.id === target) || null : st?.me || null);
 let busy = false;
 let view = '';          // '' = 节点与出口 | fp = 指纹与伪装 | sub = 订阅线路 | exit | entry = 列表
 let fpDirect = false;   // 直接打开的“指纹与伪装”（不是从节点页点进去的）：返回交给外壳
@@ -26,7 +30,7 @@ let fresh = false, autoScanned = false, told = 0;
 const open = (hash) => host.open(hash);
 const load = () => host.load();
 const render = () => host.render();
-const patch = (body) => run(async () => { await api('PATCH', `/api/instances/${st.me.id}`, body); await load(); });
+const patch = (body) => run(async () => { await api('PATCH', `/api/instances/${cur().id}`, body); await load(); });
 const stop = (fn) => (ev) => { ev.stopPropagation(); fn(ev); };
 const go = (v) => () => { view = v; flt = ''; kindFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; fresh = true; render(); };
 const home = () => { if (view === 'fp' && fpDirect) { host.back?.(); return; } view = ''; fresh = true; render(); };
@@ -290,6 +294,7 @@ function subView(me, sub) {
 // 两路出口不同时第二行列另一路（“普网” = 普通网站），不在同一国家时给黄色提示。国名、“住宅 / 机房”不写字：国旗和图标已经说了（悬停有字）。
 function exitCard(me, fixAuto) {
   const p = me.rt.probe;
+  if (!p && !(me.rt.running || me.rt.starting)) return null; // 没在运行：没有出口可说（以前这里一直转圈）
   if (!p) return h('div', { class: 'card xcard' }, h('span', { class: 'ic spin' }, icon('refresh', 20)), h('span', { class: 'sub' }, '正在探测出口…'));
   if (!(p.cf || p.direct)) return null;
   const main = (me.tz?.source === 'exit-direct' ? p.direct || p.cf : p.cf || p.direct);
@@ -314,8 +319,15 @@ function exitCard(me, fixAuto) {
 function mainView(me, sub) {
   const rt = me.rt, px = me.proxy, on = px.state === 'on', p = rt.probe, et = isET(sub), kids = [];
   const exitAuto = px.exitMode !== 'manual', entryAuto = px.entryMode !== 'manual', region = (px.region || '').toUpperCase();
+  const live = rt.running || rt.starting, mine = me.id === st.me?.id;
   kids.push(appBar('节点与出口', host.back && { fn: () => host.back(), title: host.backTitle || '返回' },
-    on && h('button', { class: 'ib', title: '重新探测出口', 'aria-label': '重新探测出口', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); }, '正在探测…') }, icon('refresh', 22))));
+    on && live && h('button', { class: 'ib', title: '重新探测出口', 'aria-label': '重新探测出口', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); }, '正在探测…') }, icon('refresh', 22))));
+  // 对着别的实例（从实例管理点进来的）：最上面写清楚改的是谁，旁边就能打开 / 关闭它
+  if (!mine) {
+    kids.push(row({ ic: avatar(me.color, String(me.no), 24, null, rt.running ? 'on' : rt.starting ? 'st' : null), t: `#${me.no} ${me.name || '未命名'}`, s: rt.starting ? '正在打开…' : rt.running ? '运行中' : '没在运行：改好以后再打开', 
+      trail: rt.starting || rt.running ? h('button', { class: 'btn', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/stop`); await load(); }) }, rt.starting ? '取消' : '关闭')
+        : h('button', { class: 'btn tonal', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/launch`); await load(); }, '正在打开…') }, '打开') }));
+  }
   const banner = (bad, text, ...acts) => h('div', { class: 'warn' + (bad ? ' bad' : '') }, icon('warn', 20), h('span', { class: 'tx' }, text), acts);
   const lk = (text, fn) => h('button', { class: 'lk', onclick: fn }, text);
   const allAuto = () => { const curId = pipIdOf(px), pip = et && curId ? (sub.pips || []).find((x) => x.id === curId) : null; patch({ proxy: { exitMode: 'auto', entryMode: 'auto', entryRegion: '', region: (pip && pcc(pip)) || (px.region || ''), state: 'on' } }); };
@@ -324,11 +336,24 @@ function mainView(me, sub) {
   const noexit = on && rt.notice?.startsWith('noexit:'), pipGone = on && sub && et && !exitAuto && p && p.direct && !p.cf;
   // 手机：重启实例换不掉内核里的会话状态，出口时区变了要重启整个 app 才算数（decisions A-11）
   const restartNow = st.host === 'android' && rt.needRestart?.includes('timezone') ? () => api('POST', '/ui/restart') : () => api('POST', `/api/instances/${me.id}/restart`);
+  // 断着网的时候，提示旁边直接给“怎么修”（决策 F-HEAL）：缺什么就去选什么，不让用户自己找。
+  const curNode = sub ? sub.nodes.find((n) => n.id === (et ? px.addressId : px.nodeKey)) || null : null;
+  const fixes = () => {
+    if (!on) return [];
+    if (!st.subscriptions.length) return [lk('添加订阅', () => addSub(me))];
+    if (!sub) return [lk('选线路', go('sub'))];
+    if (!curNode && !(et && px.addressMode === 'same-as-exit')) return [lk(et ? '选入口' : '选节点', go('entry'))];
+    return [live && lk('再试一次', () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); await load(); }, '正在探测…')),
+      !(exitAuto && entryAuto) && lk('改自动', allAuto),
+      linesOf().length > 1 && lk('换线路', go('sub'))];
+  };
   if (rt.needRestart?.length) kids.push(banner(false, '需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、'), lk('立即重启', () => run(restartNow))));
   else if (noexit) kids.push(banner(true, noticeText(rt.notice, cname), lk('换国家', (ev) => pickRegion(ev.currentTarget, me, sub))));
   else if (pipGone) kids.push(banner(true, '出口不通：CF 网站连不上', lk('选别的', go('exit')), lk('改自动', allAuto)));
-  else if (rt.cut || rt.error) kids.push(banner(true, rt.error || ('已断流：' + rt.cut), on && sub && !(exitAuto && entryAuto) && lk('改自动', allAuto)));
+  else if (rt.cut || rt.error) kids.push(banner(true, [live && h('b', {}, '断网中（没有直连）：'), rt.error || rt.cut], fixes()));
   else if (rt.notice && rt.notice !== 'switched') kids.push(banner(false, noticeText(rt.notice, cname)));
+  // 程序替用户改过选择（订阅被删、节点没了…）：说清楚改了什么，看过就收起
+  if (rt.fixed) kids.push(banner(false, rt.fixed, lk('知道了', () => run(async () => { await api('POST', `/api/instances/${me.id}/ack`); await load(); }))));
 
   kids.push(row({ ic: 'shield', t: '代理', s: on ? (me.kind === 'normal' ? '普通窗口' : '经订阅出网，不通时断流，不会直连') : '关闭：直连，网站看到真实 IP', trail: sw(on, on ? '关闭代理' : '开启代理', (v) => patch({ proxy: { state: v ? 'on' : 'off' } })) }));
 
@@ -383,7 +408,7 @@ function mainView(me, sub) {
     kids.push(sec('伪装'));
     kids.push(row({ ic: 'finger', t: '指纹与伪装', s: [PLAT[fi.platform] || fi.platform, tz ? utc(tz) || tz : '系统时区', fi.lang || '系统语言'].filter(Boolean).join(' · '), trail: dz.total ? h('span', { class: scoreCls(dz.pct) }, `${dz.pass}/${dz.total}`) : null, chev: true, aria: '指纹与伪装', onclick: () => { fpDirect = false; view = 'fp'; fresh = true; render(); } }));
   }
-  if (on) kids.push(row({ ic: 'speed', t: '流量', s: h('span', { class: 'mono', title: `已用 ↑ ${fmtBytes(rt.up || 0)}  ↓ ${fmtBytes(rt.down || 0)}` }, `↑ ${fmtBytes(rt.upRate)}/s   ↓ ${fmtBytes(rt.downRate)}/s`) }));
+  if (on && live) kids.push(row({ ic: 'speed', t: '流量', s: h('span', { class: 'mono', title: `已用 ↑ ${fmtBytes(rt.up || 0)}  ↓ ${fmtBytes(rt.down || 0)}` }, `↑ ${fmtBytes(rt.upRate)}/s   ↓ ${fmtBytes(rt.downRate)}/s`) }));
   kids.push(h('div', { class: 'foot' }, '出口 = 网站看到的 IP；入口 = 连到服务端用的地址。'));
   return kids;
 }
@@ -460,8 +485,8 @@ function fpView(me) {
 // kids()：按当前状态画出整页的全部节点；after()：放进页面之后要做的事（保持滚动位置、提示）。
 let keep = 0;
 function kids() {
-  const me = st?.me;
-  if (!me) return [h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, '找不到本实例'))];
+  const me = cur();
+  if (!me) return [appBar('节点与出口', host.back && { fn: () => host.back(), title: host.backTitle || '返回' }), h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, target ? '这个实例已经不在了' : '找不到本实例'))];
   const sub = st.subscriptions.find((s) => s.id === me.proxy.subscriptionId) || null;
   if (view === 'region') view = '';
   if (['exit', 'entry'].includes(view) && (!sub || (view === 'exit' && !isET(sub)))) view = '';
@@ -470,7 +495,7 @@ function kids() {
   return out.flat(Infinity).filter(Boolean);
 }
 function after() {
-  const me = st?.me;
+  const me = cur();
   if (!me) return;
   const sub = st.subscriptions.find((s) => s.id === me.proxy.subscriptionId) || null;
   if (fresh) {
@@ -489,6 +514,8 @@ export const panel = {
   init(el, hst) { root = el; host = hst; },
   set(state) { st = state; },
   kids, after,
+  /** 面板对着哪个实例：'' = 本窗口的实例。换了对象就回到首页。 */
+  target(id) { id = id || ''; if (id !== target) { target = id; view = ''; fpDirect = false; fresh = true; } },
   /** 当前是哪一个视图：'' 节点与出口 | fp | sub | exit | entry。 */
   get view() { return view; },
   /** 回到首页（从别的页面进来时调用）；fp = 直接打开“指纹与伪装”。 */

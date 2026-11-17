@@ -495,7 +495,9 @@ html.pc .ib.go { width: 34px; height: 34px; }
 .nstat { padding: 8px 10px 14px; } .nstat .nsech { padding: 2px 6px 4px; } .nstat .nsg { margin-top: 4px; }
 .nsec { margin-top: 0; }
 .nswarn.out { margin: 0 var(--gut) 8px; }
-button.nswarn.upd { width: calc(100% - 2 * var(--gut)); text-align: left; min-height: 40px; padding: 8px 12px; background: var(--tonal); color: var(--ontonal); } /* 有新版本的提示（决策 N-3）：是按钮，要自己撑满 */
+button.nswarn.upd, button.nswarn.fix { width: calc(100% - 2 * var(--gut)); text-align: left; min-height: 40px; padding: 8px 12px; } /* 是按钮，要自己撑满 */
+button.nswarn.upd { background: var(--tonal); color: var(--ontonal); } /* 有新版本的提示（决策 N-3） */
+button.nswarn.fix > span:nth-child(2) { flex: 1; min-width: 0; line-height: 1.4; } /* 断着网的提示（决策 F-HEAL）：原因可能有两行 */
 html.pc .ntp .ninst, html.pc .ntp .nstat, html.pc .ntp .nsec, html.pc .ntp .nq, html.pc .ntp .nswarn.out { width: 100%; margin-left: 0; margin-right: 0; }
 @media (max-width: 350px) { .btn.sm .bt { display: none; } .btn.sm { padding: 0 8px; } }
 /* 手机上“其它实例”标题右边只有“新建实例”（照定稿的演示）；电脑弹窗是唯一的入口，留着图标按钮 */
@@ -557,6 +559,7 @@ html.pc .ct > .ib { width: 34px; height: 34px; }
 .drawer .acc { gap: 4px; } .drawer .acc > .grow { margin-left: 8px; }
 .drawer .acc .sub { gap: 2px 8px; }
 .dh .sub.el { display: block; }
+.dh .sub .lk { font-size: inherit; padding: 2px 6px; margin-left: -6px; display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; } /* 抽屉里的编号：点一下改 */
 /* 窄屏：“已标记的网站”标题一行放不下时省略中间的说明，“怎么用？”不折行 */
 .rules h3 { flex-wrap: nowrap; white-space: nowrap; } .rules h3 > .sub:not(.tipq) { min-width: 0; overflow: hidden; text-overflow: ellipsis; } .rules h3 .tipq { flex: none; }
 .dh > .grow { min-width: 0; }

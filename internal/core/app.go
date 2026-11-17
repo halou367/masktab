@@ -38,6 +38,7 @@ type Runtime struct {
 	NeedRestart  []string         `json:"needRestart,omitempty"`
 	Error        string           `json:"error,omitempty"`
 	Notice       string           `json:"notice,omitempty"`
+	Fixed        string           `json:"fixed,omitempty"` // 程序替用户改过代理选择（订阅被删、节点没了…），说明改了什么；用户看过（点“知道了”或自己改了选择）就清掉
 	LaunchedTZ   string           `json:"launchedTz"`
 	LaunchedLang string           `json:"launchedLang,omitempty"` // 宿主模式：本次启动交给网页的语言（运行中不热换，见 decisions A-11）
 	Up           int64            `json:"up"`                     // 累计上传字节
@@ -48,6 +49,8 @@ type Runtime struct {
 	Step         int              `json:"step,omitempty"` // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
 
 	active      bool          // 是否已写入 mihomo 配置
+	refused     bool          // Error 是“组件没准备好，开不了”；组件好了以后清掉
+	gen         int           // 第几次启动；启动到一半被关闭 / 删除时加一，让那次启动收手
 	launchedSrc *model.IPInfo // 本次启动时定时区用的那一路出口（只取国家、时区）；运行中同一个国家里换出口不改时区（decisions A-12）
 	probePort   int
 	cmd         *exec.Cmd
@@ -271,6 +274,10 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 			in.Proxy.AddressID = "x:" + hostPort(h, port)
 		}
 	}
+	// 上一版留下的、指向空处的选择（订阅删了实例还指着它…）：启动时修一遍，见 heal.go
+	if len(a.healAllLocked()) > 0 {
+		log.Printf("启动时修好了一些实例里已经失效的代理选择")
+	}
 	a.loadIPQ()
 	a.openVault()
 	if a.inst0() == nil && !a.hosted() { // 宿主模式没有"普通窗口"
@@ -395,22 +402,12 @@ func cores(in *model.Instance) int {
 	return opts[int(b[5])%len(opts)]
 }
 
-// newInstanceLocked 新建实例：新编号（只增不复用）、调色板下一个颜色、新指纹种子，代理按全局默认生成（F-INST-2/3）。
+// newInstanceLocked 新建实例：最小的空编号（2026-11-17 起；以前只增不复用，见 heal.go“编号”）、按编号取调色板里的颜色、
+// 新指纹种子，代理按全局默认生成（F-INST-2/3）。
 func (a *App) newInstanceLocked(kind string) *model.Instance {
 	no := 0
 	if kind != "normal" {
-		no = 1
-		for _, in := range a.Instances {
-			if in.No >= no {
-				no = in.No + 1
-			}
-		}
-		var mx struct{ MaxNo int }
-		readJSON(a.p("state", "counter.json"), &mx)
-		if mx.MaxNo >= no {
-			no = mx.MaxNo + 1
-		}
-		_ = writeJSON(a.p("state", "counter.json"), map[string]int{"maxNo": no})
+		no = a.freeNoLocked()
 	}
 	seed := make([]byte, 32)
 	_, _ = rand.Read(seed)

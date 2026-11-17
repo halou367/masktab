@@ -5,7 +5,7 @@ type Instance struct {
 	ID         string    `json:"id"`
 	UpdatedAt  int64     `json:"updatedAt"`
 	Deleted    bool      `json:"deleted,omitempty"`
-	No         int       `json:"no"`   // 0 = 普通；1,2,3… 只增不复用
+	No         int       `json:"no"`   // 0 = 普通；1,2,3…：新建取最小的空号，可以改（只是给人看的名字，数据按 id 记）
 	Kind       string    `json:"kind"` // normal | persistent | disposable
 	Name       string    `json:"name,omitempty"`
 	Color      string    `json:"color"` // #RRGGBB

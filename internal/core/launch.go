@@ -88,17 +88,34 @@ func (a *App) Launch(id string) error {
 		a.mu.Unlock()
 		return nil
 	}
-	if a.kernelExe == "" {
+	// 这两种情况窗口确实开不了（没有浏览器；没有代理内核时伪装实例一出网就是真实 IP，硬规则 R-1）。
+	// 以前只把原因写进日志，界面上点“打开”没有任何反应；现在记在实例上，卡片和菜单里看得到，“组件与更新”里能重试。
+	refuse := func(msg string) error {
+		r.Error, r.refused = msg, true
+		a.bumpLocked("state", id)
 		a.mu.Unlock()
-		return errors.New("浏览器内核未就绪")
+		return errors.New(msg)
+	}
+	if a.kernelExe == "" {
+		return refuse("浏览器内核还没准备好，到“组件与更新”里看进度")
 	}
 	masked := in.Kind != "normal"
 	if masked && !a.coreOK {
-		a.mu.Unlock()
-		return errors.New("代理内核未就绪，伪装实例不能启动（硬规则 R-1）")
+		return refuse("代理内核没准备好，伪装实例不能打开（否则会用真实 IP 上网）。到“组件与更新”里重试")
 	}
+	r.refused = false
+	r.gen++
+	gen := r.gen // 这一次启动的编号：中途被叫停（关闭 / 删除）时 r.gen 会变，见 stale
 	r.Starting, r.Error, r.NeedRestart, r.Notice, r.Step = true, "", nil, "", 1
 	r.Cut = "启动中" // 浏览器起来之前主通道一律 REJECT
+	// 打开之前先把指向空处的代理选择修好（订阅被删了、节点没了…，见 heal.go）
+	if note, ch := a.healLocked(in); note != "" || ch {
+		if note != "" {
+			r.Fixed = note
+		}
+		in.UpdatedAt = now()
+		a.saveLocked("instances")
+	}
 	if !portFree(in.Port) {
 		in.Port = freePort()
 		if p := hostPortBase + in.No; a.hosted() && portFree(p) { // 宿主模式：端口尽量固定成 21000 + 编号，好认也好查
@@ -114,8 +131,19 @@ func (a *App) Launch(id string) error {
 	pport, state := r.probePort, in.Proxy.State
 	a.mu.Unlock()
 
+	// stale：这次启动已经被叫停。探出口要好几秒（线路不通时更久），这期间用户可能点了关闭或删除——
+	// 以前没人管，探完照样把浏览器拉起来（删掉的实例又冒出一个窗口）。Stop 已经把状态收拾好了，这里只管收手。
+	stale := func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return r.gen != gen
+	}
 	fail := func(msg string) error {
 		a.mu.Lock()
+		if r.gen != gen {
+			a.mu.Unlock()
+			return nil
+		}
 		r.Starting, r.active, r.Error, r.Cut, r.Step = false, false, msg, "", 0
 		a.saveLocked("runtime")
 		a.bumpLocked("state", id)
@@ -124,9 +152,13 @@ func (a *App) Launch(id string) error {
 		return errors.New(msg)
 	}
 	var pr *model.ExitProbe
-	// 宿主模式（安卓版）：浏览器一直开着，实例“打不开”没有意义——没有可用出口时照样算运行着，只是断流（mihomo 那边是 REJECT），
-	// 原因记在 hostErr 里显示给用户；选好节点 / 订阅刷新好之后由平时的流程自己恢复。桌面版仍然按 F-INST-4 拒绝启动。
-	hostErr := ""
+	// 代理这边不行（没选订阅、节点没了、线路不通）不再拒绝打开窗口（2026-11-17，decisions F-HEAL）。
+	// 以前电脑版按 F-INST-4 直接“没能打开”，而节点面板在实例自己的窗口里——开不起来就改不了，改不了就开不起来。
+	// 现在和手机一样：窗口照开，主通道停在 REJECT（不直连、不悄悄换节点），原因记在 openErr 里显示给用户；
+	// 用户在窗口里选好节点 / 订阅之后由平时的流程（refresh）确认出口再放行。
+	// F-INST-4 要防的事没有放松：出口确认之前一个字节也出不去；确认下来的时区和窗口启动时的不一样，
+	// 就停在断流并提示“需重启”（judgeExit），不会带着错的时区上网。
+	openErr := ""
 	fromCache := false // 用的是上次探到的出口（手机，decisions A-13）
 	a.step(id, 2)
 	if a.coreOK {
@@ -149,10 +181,7 @@ func (a *App) Launch(id string) error {
 		a.mu.Lock()
 		res := a.resolveLocked(in)
 		a.mu.Unlock()
-		if masked && state == "on" { // 出口探测完成、时区确定之前不得启动浏览器进程（F-INST-4）
-			if res.want == "REJECT" && !a.hosted() {
-				return fail("没能打开：" + res.err)
-			}
+		if masked && state == "on" { // 出口探测完成、时区确定之前主通道不放行（F-INST-4）；探不出来窗口照开，停在断流
 			tried := map[string]bool{}
 			var p model.ExitProbe
 			why := ""
@@ -185,21 +214,35 @@ func (a *App) Launch(id string) error {
 			fixed := in.TZ.Mode == "fixed" && in.TZ.Fixed != ""
 			a.mu.Unlock()
 			switch {
-			case res.want == "REJECT": // 只有宿主模式会走到这里
-				hostErr = res.err
-			case p.Error != "" && a.hosted():
-				hostErr = "代理不通（" + why + "）。请换一个节点或出口后再试。"
-			case p.Error != "" && !fixed:
-				return fail("没能打开：代理不通（" + why + "）。请换一个节点或出口后再试。")
+			case res.want == "REJECT":
+				openErr = res.err
+			case p.Error != "" && (a.hosted() || !fixed):
+				openErr = "代理不通（" + or(why, p.Error) + "）。请换一个节点或出口。"
 			default: // 探测成功；或者桌面版固定了时区、探测失败也照常启动（原来的行为）
 				pr = &p
 			}
 		}
 	}
+	if stale() {
+		return nil
+	}
 	a.step(id, 7)
 	a.mu.Lock()
+	// 这次没探出出口，但线路和上次一样：窗口按上次那个出口的时区、语言启动。线路只是一时不通的话，
+	// 恢复以后出口多半还在原来的国家，不用为了时区再重启一次。主通道仍然断着，要等 refresh 现探确认。
+	var guess *model.ExitProbe
+	if openErr != "" && !a.hosted() {
+		if le, ok := a.lastExit[id]; ok && le.Key != "" && le.Key == a.exitKeyLocked(in) {
+			g := le.Probe
+			guess = &g
+		}
+	}
 	tz, lang, _ := expectTZ(in, pr)
 	r.Probe, r.launchedSrc = pr, pinOf(in, pr)
+	if guess != nil {
+		tz, lang, _ = expectTZ(in, guess)
+		r.launchedSrc = pinOf(in, guess)
+	}
 	if !fromCache && masked && pr != nil {
 		a.rememberExitLocked(id, in, pr)
 	}
@@ -222,16 +265,20 @@ func (a *App) Launch(id string) error {
 		l.ProxyPort = in.Port
 	}
 	if a.hosted() { // 浏览器由宿主管：到这里代理、出口、时区都已就绪
+		if r.gen != gen {
+			a.mu.Unlock()
+			return nil
+		}
 		in.LastUsedAt = now()
 		a.saveLocked("instances")
 		a.hostLaunched(id, in, r, tz, lang)
-		if hostErr != "" {
-			r.Error = hostErr
+		if openErr != "" {
+			r.Error = openErr
 			a.bumpLocked("state", id)
 		}
 		a.mu.Unlock()
 		switch {
-		case hostErr != "" || !masked || state != "on" || pr == nil:
+		case openErr != "" || !masked || state != "on" || pr == nil:
 			go a.refresh(id)
 		case fromCache:
 			go a.verifyLaunch(id)
@@ -277,17 +324,35 @@ func (a *App) Launch(id string) error {
 		_ = os.Remove(a.p("profiles", id, repairMark))
 		log.Printf("实例 #%d 上次运行时伴随扩展后台没有启动，已重置它的 Service Worker 注册", in.No)
 	}
+	if stale() {
+		if logf != nil {
+			logf.Close()
+		}
+		return nil
+	}
 	a.step(id, 8)
 	if err := cmd.Start(); err != nil {
 		return fail("启动内核失败：" + err.Error())
 	}
 	a.mu.Lock()
+	if r.gen != gen { // 就在拉起进程的这一下被叫停了
+		a.mu.Unlock()
+		_ = cmd.Process.Kill()
+		go func() { _ = cmd.Wait(); logf.Close() }()
+		return nil
+	}
 	r.Seen, r.startedAt = 0, now()
 	r.cmd, r.Running, r.Starting, r.Pid, r.LaunchedTZ, r.Cut, r.Step = cmd, true, false, cmd.Process.Pid, tz, "", 0
 	r.extSetHash, r.pulled, r.done = extHash, pulled, make(chan struct{})
+	if openErr != "" { // 代理没准备好也开了窗口：主通道接着断着，原因给用户看；下面的 refresh 会再确认一次
+		r.Cut, r.Error = "出口还没确认", openErr
+	}
 	a.saveLocked("runtime")
 	a.bumpLocked("state", id)
 	a.mu.Unlock()
+	if openErr != "" {
+		log.Printf("实例 #%d 已启动但断着网（pid %d，时区 %q）：%s", in.No, cmd.Process.Pid, tz, openErr)
+	}
 	log.Printf("实例 #%d 已启动（pid %d，时区 %q，端口 %d）", in.No, cmd.Process.Pid, tz, in.Port)
 	go a.watch(id, cmd, logf)
 	if masked && state == "on" && pr != nil && pr.Error == "" {
@@ -365,6 +430,15 @@ func (a *App) Stop(id string) {
 	}
 	a.mu.Lock()
 	r := a.rtLocked(id)
+	if r.Starting && r.cmd == nil { // 还在备代理、探出口，浏览器没起来：叫停这次启动（Launch 在下一个检查点收手）
+		r.gen++
+		r.Starting, r.active, r.Cut, r.Step = false, false, "", 0
+		a.saveLocked("runtime")
+		a.bumpLocked("state", id)
+		a.mu.Unlock()
+		_ = a.applyConfig()
+		return
+	}
 	cmd, done := r.cmd, r.done
 	a.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
@@ -438,6 +512,21 @@ func (a *App) Delete(id string) error {
 	}
 	a.Instances = keep
 	delete(a.rt, id)
+	// 别处指着这个实例的东西一起清掉：扩展的“指定实例”范围、上次出口的记录
+	for _, x := range a.Exts {
+		if contains(x.InstanceIDs, id) {
+			x.InstanceIDs = without(x.InstanceIDs, id)
+			if x.InstanceIDs == nil {
+				x.InstanceIDs = []string{}
+			}
+			x.UpdatedAt = now()
+			a.saveLocked("extensions")
+		}
+	}
+	if _, ok := a.lastExit[id]; ok {
+		delete(a.lastExit, id)
+		_ = writeJSON(a.p("state", "lastexit.json"), a.lastExit)
+	}
 	a.saveLocked("instances", "runtime")
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
