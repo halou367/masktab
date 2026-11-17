@@ -24,7 +24,10 @@ const until = async (fn, ms = 8000) => { const t0 = Date.now(); for (;;) { const
 
 // 核心服务
 const dataDir = mkdtempSync(path.join(tmpdir(), 'mt-e2e-'));
-const core = spawn(coreBin, ['-data', dataDir, '-host', 'android', '-mihomo', path.join(dataDir, 'no-mihomo'), '-kernel-name', 'test', '-kernel-version', '0'],
+// 代理内核：环境变量 MASKTAB_MIHOMO 给了就用真的（CI 里是冒烟测试下载好的那一份）；没给就没有代理内核——
+// 这时伪装实例按硬规则 R-1 不让开，原因要写在工具栏上（决策 F-HEAL：以前只进日志，界面上什么都看不出来）。
+const MIHOMO = process.env.MASKTAB_MIHOMO && existsSync(process.env.MASKTAB_MIHOMO) ? path.resolve(process.env.MASKTAB_MIHOMO) : '';
+const core = spawn(coreBin, ['-data', dataDir, '-host', 'android', '-mihomo', MIHOMO || path.join(dataDir, 'no-mihomo'), '-kernel-name', 'test', '-kernel-version', '0'],
   { stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, MASKTAB_VAULT_KEY: randomBytes(32).toString('base64') } });
 const lock = path.join(dataDir, 'state', 'running.lock');
 if (!await until(async () => existsSync(lock), 15000)) { console.log('核心服务没有起来'); process.exit(1); }
@@ -69,10 +72,13 @@ const swErr = [];
 sw.on('console', (m) => { if (m.type() === 'error') swErr.push(m.text()); });
 const title = await until(async () => { const t = await sw.evaluate(() => chrome.action.getTitle({})); return /^#\d+/.test(t) ? t : null; }, 10000);
 check(`后台连上核心服务，工具栏提示以“#${me.no}”开头`, !!title && title.startsWith('#' + me.no), String(title));
-const badge = await sw.evaluate(() => chrome.action.getBadgeText({}));
-check('直连实例：角标是空的', badge === '', badge);
-const drawn = await until(async () => sw.evaluate(() => globalThis.lastIcon || null), 5000);
-check(`工具栏头像上写的是整个编号“${me.no}”（以前只写第一位）`, drawn?.text === String(me.no) && drawn?.kind === 'direct', JSON.stringify(drawn));
+if (MIHOMO) await until(async () => { const i = (await api('GET', '/api/state')).instances.find((x) => x.id === me.id); return i?.rt.running && !i.rt.error; }, 20000);
+const want = MIHOMO ? { badge: '', kind: 'direct' } : { badge: '!', kind: 'error' };
+const badge = await until(async () => { const b = await sw.evaluate(() => chrome.action.getBadgeText({})); return b === want.badge ? [b] : null; }, 8000) || [await sw.evaluate(() => chrome.action.getBadgeText({}))];
+check(MIHOMO ? '直连实例：角标是空的' : '没有代理内核：实例没让开，角标是“!”', badge[0] === want.badge, badge[0]);
+if (!MIHOMO) { const t = await sw.evaluate(() => chrome.action.getTitle({})); check('没有代理内核：工具栏提示里写着原因和去哪里重试', /代理内核没准备好/.test(t) && /组件与更新/.test(t), t); }
+const drawn = await until(async () => { const d = await sw.evaluate(() => globalThis.lastIcon || null); return d?.kind === want.kind ? d : null; }, 5000) || await sw.evaluate(() => globalThis.lastIcon || null);
+check(`工具栏头像上写的是整个编号“${me.no}”（以前只写第一位）`, drawn?.text === String(me.no) && drawn?.kind === want.kind, JSON.stringify(drawn));
 
 const page = await ctx.newPage();
 const perr = [];

@@ -225,7 +225,9 @@ jobs:
           mkdir -p /tmp/pw && cd /tmp/pw && npm init -y > /dev/null && npm i playwright@1.65.1 > /dev/null && npx playwright install --with-deps chromium firefox > /dev/null
           node "$GITHUB_WORKSPACE/scripts/rec-test.mjs" "$GITHUB_WORKSPACE/masktab" chromium "$GITHUB_WORKSPACE/shots/rec"
           node "$GITHUB_WORKSPACE/scripts/rec-test.mjs" "$GITHUB_WORKSPACE/masktab" firefox
-          node "$GITHUB_WORKSPACE/scripts/ext-e2e.mjs" "$GITHUB_WORKSPACE/masktab" "$GITHUB_WORKSPACE/shots/ext"
+          # 两遍：有代理内核（实例正常开着，工具栏是“直连”）、没有代理内核（实例不让开，工具栏上写着原因）
+          MASKTAB_MIHOMO="$GITHUB_WORKSPACE/smoke-data/core/mihomo" node "$GITHUB_WORKSPACE/scripts/ext-e2e.mjs" "$GITHUB_WORKSPACE/masktab" "$GITHUB_WORKSPACE/shots/ext"
+          node "$GITHUB_WORKSPACE/scripts/ext-e2e.mjs" "$GITHUB_WORKSPACE/masktab"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
