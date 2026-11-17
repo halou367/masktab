@@ -63,9 +63,12 @@ switch ($cmd) {
   'build' {
     Stop-Dev
     $env:GOCACHE = "$dev\gocache"; $env:GOMODCACHE = "$dev\gomod"; $env:GOFLAGS = '-buildvcs=false'; $env:GOPROXY = 'https://goproxy.cn,https://proxy.golang.org,direct'
-    # Source comes as a tarball from api.github.com: plain "git fetch" from github.com is unreliable on some networks.
+    # Source comes as a tarball: plain "git fetch" from github.com is unreliable on some networks.
+    # codeload first (no rate limit); api.github.com as the fallback (60 anonymous requests per hour, a busy test session runs out).
     $tgz = "$dev\src.tgz"; $ok = $false
-    for ($i = 0; $i -lt 4 -and -not $ok; $i++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 40 "https://api.github.com/repos/halou367/masktab/tarball/$a1" -OutFile $tgz; $ok = $true } catch { Start-Sleep 2 } }
+    foreach ($u in "https://codeload.github.com/halou367/masktab/tar.gz/$a1", "https://api.github.com/repos/halou367/masktab/tarball/$a1") {
+      for ($i = 0; $i -lt 2 -and -not $ok; $i++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 40 $u -OutFile $tgz; $ok = $true } catch { Start-Sleep 2 } }
+    }
     if (-not $ok) { 'DOWNLOAD FAILED'; exit 1 }
     Remove-Item "$dev\src.new", "$dev\src.old" -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory "$dev\src.new" | Out-Null
     & tar -xzf $tgz -C "$dev\src.new" --strip-components=1; if ($LASTEXITCODE -ne 0) { 'UNPACK FAILED'; exit 1 }
