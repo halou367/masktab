@@ -49,6 +49,8 @@ var (
 	pSetCapture               = user32.NewProc("SetCapture")
 	pReleaseCapture           = user32.NewProc("ReleaseCapture")
 	pGetCursorPos             = user32.NewProc("GetCursorPos")
+	pGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
+	pGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
 	pTrackMouseEvent          = user32.NewProc("TrackMouseEvent")
 	pLoadCursorW              = user32.NewProc("LoadCursorW")
 	pSetWinEventHook          = user32.NewProc("SetWinEventHook")
@@ -319,4 +321,14 @@ func setCalm(h uintptr, on bool) {
 		v = 1
 	}
 	_, _, _ = pDwmSetWindowAttribute.Call(h, 3 /* DWMWA_TRANSITIONS_FORCEDISABLED */, uintptr(unsafe.Pointer(&v)), 4)
+}
+
+// primaryDown 报告鼠标主键（平常是左键；系统里设了“左右键互换”时是右键）现在是不是真的按着。
+func primaryDown() bool {
+	vk := uintptr(1) // VK_LBUTTON
+	if swapped, _, _ := pGetSystemMetrics.Call(23 /* SM_SWAPBUTTON */); swapped != 0 {
+		vk = 2 // VK_RBUTTON
+	}
+	r, _, _ := pGetAsyncKeyState.Call(vk)
+	return r&0x8000 != 0
 }

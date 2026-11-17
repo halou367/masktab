@@ -85,6 +85,7 @@ type mgr struct {
 	drag struct {
 		on     bool
 		test   bool   // 这次拖动是测试脚本发消息模拟的（不是真鼠标）
+		lost   bool   // 系统说“抓着鼠标”被收走了，但当时手上有事没能当场收尾：下一次定时器来收（dragWatch）
 		tab    bool   // 抓的是标签（可以拖出去、并进别的组）；不是的话抓的是栏的空白处（只是挪窗口）
 		out    bool   // 窗口已经跟着鼠标在动了
 		g      *group // 跟着鼠标动的是哪一组
@@ -971,7 +972,7 @@ func (m *mgr) endDrag(commit bool) {
 		}
 		return Rect{}
 	}())
-	d.on, d.g, d.target, d.test = false, nil, nil, false
+	d.on, d.g, d.target, d.test, d.lost = false, nil, nil, false, false
 	_, _, _ = pReleaseCapture.Call()
 	if m.alive(t) {
 		t.drop = false
@@ -984,6 +985,22 @@ func (m *mgr) endDrag(commit bool) {
 		g.rect = Rect{} // 让 place 按窗口的实际位置重新摆一次
 	}
 	m.sync()
+}
+
+// dragWatch 是拖动的兜底，每 10 毫秒看一次：记着“正拖着”，可鼠标主键其实已经没按着了（或者系统早说过鼠标被收走了）——
+// 那就是“松手”那条消息没到我们这儿，当场收尾。
+// 不兜底的后果（需求方 2026-11-18：“点击后鼠标移开，就会把实例拽出来……我只是单击”）：点一下标签换实例，松手的消息丢了，
+// 程序以为还按着，鼠标一离开实例栏就把这个实例“拖”出去单独成一组。松手的消息会丢，是因为换实例的那一下前台窗口换了、
+// 上面还盖着一层正在淡出的画面，系统可能把我们“抓着鼠标”收回去，松手就落到别的窗口上。
+// 测试脚本模拟的拖动不看（它本来就没有真的按着鼠标）。
+func (m *mgr) dragWatch() {
+	d := &m.drag
+	if !d.on || d.test || (!d.lost && primaryDown()) {
+		return
+	}
+	m.note("drag watchdog: button up without WM_LBUTTONUP (lost=%v out=%v)", d.lost, d.out)
+	m.endDrag(d.out && !d.lost) // 窗口已经跟着鼠标在走了：按“在这儿松手”算；还没拖出去：就当只是点了一下
+	m.snapshot()
 }
 
 // ---------- 自动收起（decisions UI-17） ----------
@@ -1199,8 +1216,11 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		switch ms {
 		case wmTimer, wmApp:
 			if ms == wmTimer && wp == 2 {
-				if m.st.Compact && !m.off && m.enter() {
-					m.hoverTick()
+				if !m.off && m.enter() {
+					m.dragWatch()
+					if m.st.Compact {
+						m.hoverTick()
+					}
 					m.leave()
 				}
 				return 0
@@ -1239,9 +1259,13 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		return 0
 	case wmCaptureChange:
 		// 拖到一半鼠标被别的窗口抢走了。模拟的拖动不看这个：没有真的按着鼠标，换前台窗口时系统就会把“抓着鼠标”收回去
-		if m.drag.on && !m.drag.test && lp != hwnd && m.enter() {
-			m.endDrag(false)
-			m.leave()
+		if m.drag.on && !m.drag.test && lp != hwnd {
+			if m.enter() {
+				m.endDrag(false)
+				m.leave()
+			} else { // 手上正有事（这条通知是在处理别的消息的半路上送来的）：记下来，定时器来收，不能当没发生
+				m.drag.lost = true
+			}
 		}
 		return 0
 	case wmMouseMove, wmLButtonDown, wmLButtonDbl, wmLButtonUp, wmMButtonUp:
@@ -1258,7 +1282,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		case wp&mkTest != 0: // 测试脚本：当作鼠标就在这儿，先展开
 			g.pin = time.Now().Add(6 * time.Second)
 			g.setOpen(true)
-		case !g.open:
+		case !g.open && !m.drag.on: // 正拖着的时候不走这里：松手、移动都要交给下面的拖动处理，不能在这儿吃掉
 			// 真鼠标到了收着的色条上：当场展开，不等（需求方：要零延迟、跟手）。
 			// 没动鼠标就直接按下去了（鼠标本来就停在这儿）：马上展开（不放过渡），按的是哪一段色条就当作点了哪个标签的正中间
 			// （色条是一段挨一段排的，和展开后的标签左右对不上，所以要换算）
@@ -1301,6 +1325,13 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 	}
 	switch ms {
 	case wmMouseMove:
+		if m.drag.on && !m.drag.test && wp&mkTest == 0 && wp&1 /* MK_LBUTTON */ == 0 {
+			// 记着“正拖着”，这条移动消息却说主键没按着：松手的消息丢了。收尾，这一下按普通的移动算
+			m.note("drag: move without button (out=%v)", m.drag.out)
+			m.endDrag(m.drag.out)
+			m.snapshot()
+			return 0
+		}
 		if m.drag.on {
 			if m.drag.test && wp&mkTest == 0 { // 模拟拖动的时候真鼠标正好路过：不理
 				return 0
@@ -1313,6 +1344,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 	case wmLButtonDown:
 		g.click(x, y, sx, sy)
 		m.drag.test = m.drag.on && wp&mkTest != 0
+		m.dragWatch() // 换实例要花点时间：这时候手可能已经松开了，那就只是点了一下，不算开始拖
 		m.snapshot()
 	case wmLButtonDbl:
 		if kind, _ := g.lay.Hit(x, y); kind == HitNone {
@@ -1323,6 +1355,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		} else {
 			g.click(x, y, sx, sy)
 			m.drag.test = m.drag.on && wp&mkTest != 0
+			m.dragWatch()
 		}
 		m.snapshot()
 	case wmLButtonUp:
