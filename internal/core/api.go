@@ -991,7 +991,9 @@ func (a *App) AddExtension(store, path, fromInst string) (*model.GlobalExtension
 	if x == nil {
 		x = &model.GlobalExtension{ID: newID(), ExtID: info.ExtID, Enabled: true, Scope: "all", InstanceIDs: []string{}, Data: a.Settings.NewExtData}
 		a.Exts = append(a.Exts, x)
-	} else if x.Version != info.Version {
+	} else if x.Version != info.Version && !a.anyRunningLocked() {
+		// 换了版本：旧版本的文件可能正被开着的实例用着（浏览器是按需从这个目录读的，删了那个实例里的扩展当场就坏），
+		// 有实例开着就先留着，下次启动核心服务时清（sweepExtDirs）。
 		_ = os.RemoveAll(a.p("extensions", x.ExtID, x.Version))
 	}
 	x.Name, x.Version, x.Source, x.Warn, x.UpdatedAt = info.Name, info.Version, source, info.Warn, now()
@@ -1059,6 +1061,6 @@ func (a *App) DeleteExtension(id string) error {
 	a.markExtChangedLocked()
 	a.saveLocked("extensions")
 	a.bumpLocked("state", "")
-	// 扩展文件可能正被运行中的实例使用，留到下次启动清理；主数据保留，重新安装后可继续用。
+	// 扩展文件可能正被运行中的实例使用，留到下次启动核心服务时清（sweepExtDirs）；主数据保留，重新安装后可继续用。
 	return nil
 }

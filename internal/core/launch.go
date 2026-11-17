@@ -599,6 +599,47 @@ func (a *App) extsForLocked(in *model.Instance) (dirs []string, hash string, sha
 	return dirs, hex.EncodeToString(h[:]), shared
 }
 
+// anyRunningLocked 报告有没有实例开着（或正在启动）。
+func (a *App) anyRunningLocked() bool {
+	for _, r := range a.rt {
+		if r != nil && (r.Running || r.Starting) {
+			return true
+		}
+	}
+	return false
+}
+
+// sweepExtDirs 删掉扩展库目录里已经没有扩展在用的东西：换掉的旧版本、移除了的扩展、装到一半留下的临时目录。
+// 这些当时可能正被开着的实例用着，所以不当场删，留到这里——核心服务刚启动、还没有实例在跑的时候。
+func (a *App) sweepExtDirs() {
+	keep := map[string]bool{}
+	for _, x := range a.Exts {
+		keep[x.ExtID+"/"+x.Version] = true
+	}
+	ids, _ := os.ReadDir(a.p("extensions"))
+	for _, id := range ids {
+		if !id.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(id.Name(), "incoming-") {
+			_ = os.RemoveAll(a.p("extensions", id.Name()))
+			continue
+		}
+		vers, _ := os.ReadDir(a.p("extensions", id.Name()))
+		left := 0
+		for _, v := range vers {
+			if keep[id.Name()+"/"+v.Name()] {
+				left++
+				continue
+			}
+			_ = os.RemoveAll(a.p("extensions", id.Name(), v.Name()))
+		}
+		if left == 0 {
+			_ = os.Remove(a.p("extensions", id.Name()))
+		}
+	}
+}
+
 // markExtChanged 扩展库变化后，给集合哈希已不同的运行中实例打"需重启"标记（F-EXT-8）。
 func (a *App) markExtChangedLocked() {
 	for _, in := range a.Instances {

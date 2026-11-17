@@ -4,7 +4,7 @@
 // 电脑的工具栏弹窗用它；手机的头像菜单浮在网页上，由 app 原生画（同样的内容、同样的接口，见 decisions UI-2）。
 import { api, shownExit, fmtBytes, letterOf as letter } from './api.js';
 import { h, icon, flag, run, delayText, delayCls, cname, ringEl, cfDot } from './ui.js';
-import { disguise, exitQ, cfRep } from './common.js';
+import { disguise, exitQ, cfRep, restartText, restartPath } from './common.js';
 import { siteIcon, uniqSites } from './sites.js';
 
 // 安卓版（docs/android.md）复用这个文件：手机上头像写编号（与工具栏的彩色编号圆点一致），不显示键盘快捷键。
@@ -51,6 +51,10 @@ export function menuView(st, nav) {
       rt.starting && stepLine(me, st.launchSteps),
       sites.length > 0 && h('div', { class: 'sites', title: '记住了账号的站点' }, sites.slice(0, 8).map((s) => siteIcon(s, 15)), sites.length > 8 && h('span', { class: 'sub' }, `+${sites.length - 8}`))),
     on && h('span', { class: 'rep', title: `纯净度 ${q2.score ?? '未知'} · CF 信誉 ${cf.text}` }, ringEl(q2.score, 36), cfDot(cf.st, 'CF'))));
+  // 有要重启才生效的改动（加了扩展、改了指纹…）：写在首页最上面，旁边就是“立即重启”（决策 UI-19）。
+  // 以前只在“节点与出口”里提示，工具栏按钮上虽然有个 ↻，点开却找不到在哪重启（需求方 2026-11-17）。
+  if (rt.running && rt.needRestart?.length) kids.push(h('div', { class: 'warn need' }, icon('refresh', 20), h('span', { class: 'tx' }, restartText(rt)),
+    h('button', { class: 'lk', onclick: () => run(() => api('POST', restartPath(st, me)), '正在重启…') }, '立即重启')));
   const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic, 22), h('span', { class: 'grow' }, label), k != null && k !== '' && h('span', { class: 'k' }, k), h('span', { class: 'chev' }, icon('chevR', 20)));
   // 四个入口包在一起：手机上还是一行一个；电脑弹窗里排成两列（弹窗最高 600，省下的高度给下面的实例列表，决策 UI-13）
   kids.push(h('div', { class: 'mis' }, mi('key', '账号管理', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),

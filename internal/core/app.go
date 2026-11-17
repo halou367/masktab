@@ -239,8 +239,10 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	load("exits.json", &we)
 	a.Exits = we.Items
 	var wx fileWrap[[]*model.GlobalExtension]
-	load("extensions.json", &wx)
-	a.Exts = wx.Items
+	if readJSON(a.p("config", "extensions.json"), &wx) { // 读不出来（文件坏了 / 没有）就不清：清单都没有，不能凭它删文件
+		a.Exts = wx.Items
+		a.sweepExtDirs()
+	}
 	readJSON(a.p("state", "scan.json"), &a.scan)
 	readJSON(a.p("state", "lastexit.json"), &a.lastExit)
 	if a.lastExit == nil {

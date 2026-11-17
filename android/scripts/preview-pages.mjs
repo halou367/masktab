@@ -406,7 +406,7 @@ if (want('newtab')) {
 // 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点页比内容。
 // 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹页里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
 if (desk && want('desk')) {
-  let deskTheme = fixture.settings?.theme, deskMany = false, deskUpd = null;
+  let deskTheme = fixture.settings?.theme, deskMany = false, deskUpd = null, deskNeed = false;
   const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const dsrv = http.createServer((q, r) => {
@@ -414,7 +414,8 @@ if (desk && want('desk')) {
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
     if (u.pathname.startsWith('/api/')) {
       const many = deskMany ? [...fixture.instances, ...Array.from({ length: deskMany === true ? 7 : deskMany }, (_, k) => ({ ...fixture.instances[k % 2 ? 0 : 2], id: 'x' + k, no: 21 + k, name: `user${k}@example.com`, color: ['#8e24aa', '#00897b', '#e8710a'][k % 3] }))] : fixture.instances;
-      const st = { ...fixture, instances: many, ...(deskUpd ? { update: deskUpd } : {}), settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
+      const need = (i) => (deskNeed && i.rt.running ? { ...i, rt: { ...i.rt, needRestart: ['extensions'] } } : i); // 加过扩展：开着的实例都要重启
+      const st = { ...fixture, me: need(fixture.me), instances: many.map(need), ...(deskUpd ? { update: deskUpd } : {}), settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
       r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : { ok: true })); return;
     }
     const f = path.join(desk, decodeURIComponent(u.pathname));
@@ -431,6 +432,37 @@ if (desk && want('desk')) {
   await dp.waitForTimeout(600);
   check('电脑版：弹窗首页是头像菜单（大头像、纯净度圆环、其它实例）', await dp.evaluate(() => document.body.classList.contains('menu') && !!document.querySelector('.amenu .hero .ring') && document.querySelectorAll('.amenu .ai').length === 2), {});
   await dp.screenshot({ path: path.join(out, 'desk-menu.png'), fullPage: true });
+  // 有要重启才生效的改动（决策 UI-19，需求方 2026-11-17：“重启在节点里面，还得进去一层，不知道的话找不到”）：
+  // 弹窗首页、扩展页、新标签页上都写着“需重启”，旁边就是重启按钮；平时（没有这种改动）这几处什么都不多出来。
+  {
+    const none = await dp.evaluate(() => document.querySelectorAll('.warn.need').length);
+    deskNeed = true;
+    const c4 = await br.newContext({ viewport: { width: 380, height: 600 }, deviceScaleFactor: 2, locale: 'zh-CN' });
+    await c4.addInitScript(mock, fixture);
+    const p4 = await c4.newPage(); p4.on('pageerror', (e) => errors.push(`电脑弹窗 需重启: ${e.message}`));
+    await p4.goto(dbase + 'popup.html'); await p4.waitForTimeout(600);
+    const m = await p4.evaluate(() => { const w = document.querySelector('.amenu .warn.need'), b = w?.getBoundingClientRect(); return w ? { text: w.textContent, top: Math.round(b.top), bottom: Math.round(b.bottom), hero: Math.round(document.querySelector('.amenu .hero').getBoundingClientRect().bottom), mis: Math.round(document.querySelector('.amenu .mis').getBoundingClientRect().top), page: document.documentElement.scrollHeight } : null; });
+    check('电脑弹窗：首页最上面（头像下面、四个入口上面）写着“需重启：扩展有增删”和“立即重启”；平时没有这一行', none === 0 && !!m && /需重启：扩展有增删/.test(m.text) && /立即重启/.test(m.text) && m.top >= m.hero - 1 && m.bottom <= m.mis + 1 && m.page <= 600, { none, m });
+    await p4.screenshot({ path: path.join(out, 'desk-menu-need.png') });
+    const [rq] = await Promise.all([p4.waitForRequest((r) => r.method() === 'POST' && /\/api\/instances\/p2\/restart$/.test(r.url()), { timeout: 3000 }).catch(() => null), p4.click('.amenu .warn.need .lk')]);
+    check('电脑弹窗：点“立即重启”重启的是当前实例', !!rq, {});
+    const a4 = await c4.newPage(); a4.on('pageerror', (e) => errors.push(`电脑扩展页 需重启: ${e.message}`));
+    await a4.setViewportSize({ width: 1280, height: 820 });
+    await a4.goto(dbase + 'app.html#extensions'); await a4.waitForTimeout(600);
+    const xt = await a4.evaluate(() => document.querySelector('.warn.need')?.textContent || '');
+    const hits = []; a4.on('request', (r) => { const k = /\/api\/instances\/([^/]+)\/restart$/.exec(r.url()); if (k && r.method() === 'POST') hits.push(k[1]); });
+    await a4.screenshot({ path: path.join(out, 'desk-ext-need.png') });
+    await a4.evaluate(() => document.querySelector('.warn.need .lk').click()); await a4.waitForTimeout(500); // 这一页跟着状态不停重画，用 click() 会一直等“元素稳定”
+    check('电脑扩展页：最上面写着哪几个开着的实例要重启，点“全部重启”把它们都重启，自己所在的那个放最后', /#1、#2、#14 开着，重启后才会用上这里的改动/.test(xt) && /全部重启/.test(xt) && hits.length === 3 && hits[2] === 'p2', { xt, hits });
+    const n4 = await c4.newPage(); n4.on('pageerror', (e) => errors.push(`电脑新标签页 需重启: ${e.message}`));
+    await n4.setViewportSize({ width: 1280, height: 820 });
+    await n4.goto(dbase + 'newtab.html'); await n4.waitForTimeout(600);
+    const nt = await n4.evaluate(() => document.querySelector('.nswarn.need')?.textContent || '');
+    await n4.screenshot({ path: path.join(out, 'desk-newtab-need.png') });
+    const [rq2] = await Promise.all([n4.waitForRequest((r) => r.method() === 'POST' && /\/api\/instances\/p2\/restart$/.test(r.url()), { timeout: 3000 }).catch(() => null), n4.click('.nswarn.need')]);
+    check('电脑新标签页：有一行“需重启：扩展有增删 立即重启”，点了重启当前实例', /需重启：扩展有增删/.test(nt) && /立即重启/.test(nt) && !!rq2, { nt });
+    await c4.close(); deskNeed = false;
+  }
   // 没设“外观”时跟着浏览器的深浅色（需求方 2026-11-16：浅色的浏览器里弹窗还是深色的）
   for (const scheme of ['light', 'dark']) {
     deskTheme = undefined; deskMany = true;

@@ -7,7 +7,7 @@
 //   host.openUpdate()  去“组件与更新”（有新版本时搜索框下面有一行提示）
 import { api } from './api.js';
 import { h, icon, flag, avatar, delayText, delayCls, ringEl, ask, confirmDlg, toast, applyTheme } from './ui.js';
-import { shownExit, mismatch, disguise, exitQ, cfRep, TYPE_NAME } from './common.js';
+import { shownExit, mismatch, disguise, exitQ, cfRep, TYPE_NAME, restartText, restartPath } from './common.js';
 import { siteIcon, siteName, uniqSites } from './sites.js';
 
 // 还没有书签时先放几个查出口和指纹的网站（只是默认值，删掉或加了自己的就不再出现）
@@ -31,6 +31,11 @@ export async function renderNtp(root, st, me, host) {
   if (up?.available && st.settings?.updateSkip !== up.latest && host.openUpdate) {
     kids.push(h('button', { class: 'nswarn out upd', 'aria-label': '有新版本', onclick: () => host.openUpdate() }, icon('update', 16), `MaskTab 有新版本 ${up.latest}`, h('span', { class: 'grow' }), up.phase === 'ready' ? '已下载，去安装' : '去更新', icon('chevR', 16)));
   }
+  // 有要重启才生效的改动（加了扩展、改了指纹…）：一行提示，点了就重启这个实例（决策 UI-19）。
+  // 电脑上“出口时区变了”那种是断着网的，在下面的卡片里用红色的那一行说（也是点了就重启）。
+  if (me.rt?.running && me.rt.needRestart?.length && !(st.host !== 'android' && me.rt.needRestart.includes('timezone'))) {
+    kids.push(h('button', { class: 'nswarn out fix need', 'aria-label': '需重启，点这里立即重启', onclick: () => restartMe(st, me) }, icon('refresh', 16), h('span', {}, restartText(me.rt)), '立即重启'));
+  }
   if (!hide.has('card') && me.kind !== 'normal') kids.push(...statCard(st, me, host));
   if (!hide.has('bookmarks')) kids.push(bookmarks(st, host));
   if (!hide.has('recent')) {
@@ -41,6 +46,8 @@ export async function renderNtp(root, st, me, host) {
   if (!hide.has('accounts')) { const a = accounts(me); if (a) kids.push(a); }
   root.replaceChildren(h('div', { class: 'ntp' }, kids.filter(Boolean)));
 }
+
+const restartMe = (st, me) => { toast('正在重启…'); api('POST', restartPath(st, me)).catch((e) => toast(e.message, true)); };
 
 // 伪装概况卡。出口类型只画图标（住宅 / 机房 / 手机，悬停有字），不再写字（决策 UI-9）。
 const TYPE_IC = { res: 'home', dc: 'dc', mobile: 'phone' };
@@ -67,7 +74,7 @@ function statCard(st, me, host) {
   const tzCut = st.host !== 'android' && rt.needRestart?.includes('timezone');
   const why = tzCut ? '出口时区变了，重启这个实例后才能上网' : rt.error || (rt.cut && !/^(启动中|正在确认出口)$/.test(rt.cut) ? rt.cut : '');
   const down = on && rt.running && why
-    && h('button', { class: 'nswarn out fix bad', 'aria-label': '断网中，去设置节点', onclick: () => host.openNode() }, icon('warn', 16), h('span', {}, tzCut ? why : '断网中（没有直连）：' + why), tzCut ? '去重启' : '去改', icon('chevR', 16));
+    && h('button', { class: 'nswarn out fix bad', 'aria-label': tzCut ? '断网中，点这里立即重启' : '断网中，去设置节点', onclick: () => (tzCut ? restartMe(st, me) : host.openNode()) }, icon('warn', 16), h('span', {}, tzCut ? why : '断网中（没有直连）：' + why), tzCut ? '立即重启' : '去改', !tzCut && icon('chevR', 16));
   return [inst, down, stat, !on && h('div', { class: 'nswarn out' }, icon('warn', 16), '直连中，网站看到真实 IP')];
 }
 
