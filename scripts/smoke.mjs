@@ -303,11 +303,11 @@ try {
         if (!o) return { skip: '鼠标移到色条上以后栏没展开（测试机上鼠标可能动不了）：' + JSON.stringify({ at: [bx, by], band: b.g.band, rect: b.g.rect, trace: tail((await bar()).all, 6), dragging: (await bar()).all.dragging, steps }) };
         const i = o.g.tabs.findIndex((n) => n !== o.g.activeNo), slot = o.g.slots[i], want = o.g.tabs[i];
         const cx = o.g.rect.L + Math.round((slot.L + slot.R) / 2), cy = o.g.rect.T + Math.round((slot.T + slot.B) / 2);
-        await mouse('click', `[W.M]::SetCursorPos(${cx},${cy}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 350; [W.M]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds ${hold}; [W.M]::mouse_event(4,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 300; for ($i = 1; $i -le 16; $i++) { [W.M]::SetCursorPos(${cx},${cy} + $i * 25); [W.M]::mouse_event(1,0,1,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 35 }; Start-Sleep -Milliseconds 1500`);
+        await mouse('click', `[W.M]::SetCursorPos(${cx},${cy}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 350; [W.M]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds ${hold}; [W.M]::mouse_event(4,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds ${hold % 2 ? 300 : 0}; for ($i = 1; $i -le 16; $i++) { [W.M]::SetCursorPos(${cx},${cy} + $i * 25); [W.M]::mouse_event(1,0,1,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 35 }; Start-Sleep -Milliseconds 1500`);
         const a = await bar();
         return { want, activeNo: a.g.activeNo, groups: (a.all.groups || []).length, dragging: a.all.dragging, at: [cx, cy], steps: [...steps], trace: tail(a.all) };
       };
-      for (const hold of [25, 120, 60, 25]) {
+      for (const hold of [30, 120, 60, 25]) { // 双数：松手后马上移开（需求方机器上这样点老版本一下就出毛病）；单数：停 0.3 秒再移开
         const r = await clickAway(hold), what = `（按下 ${hold} 毫秒就松）`;
         if (r.skip) { rec('warn', NAME + what, '查不了：' + r.skip); continue; }
         if (r.groups === 1 && !r.dragging && r.activeNo !== r.want) { rec('warn', NAME + what, '点了以后没换到那个实例（这一下可能没点着），查不了：' + JSON.stringify(r)); continue; }
@@ -317,6 +317,55 @@ try {
         if (!good) break; // 已经被拖散了，后面那一遍没法接着做
       }
       await desktopShot('6a-after-click.png');
+      // 真鼠标按住标签拖出去、再拖回来（2026-11-18 在需求方机器上试出来的：窗口出了栏只跟了一小段就停，松手后程序还以为在拖）。
+      // 拖出去：另一个实例的标签，按住 600 毫秒，往右下拖 (60, 300)，松手 → 应当成两组，窗口跟到了鼠标松手的地方。
+      // 拖回来：按住它的标签拖到原来那一组的栏上松手 → 应当又并成一组。
+      const grp = async (no) => { const x = await api('GET', '/api/debug/tabbar'); return { all: x, g: (x.groups || []).find((q) => (q.tabs || []).includes(no)) }; };
+      const dragTab = async (no, hold, dest) => {
+        let { g } = await grp(no);
+        if (!g) return { skip: `没有哪一组有 #${no}` };
+        steps.length = 0;
+        await mouse('away', `[W.M]::SetCursorPos(${g.rect.L + 320},${g.rect.T + 300}); [W.M]::mouse_event(1,1,1,0,[UIntPtr]::Zero)`);
+        for (const t0 = Date.now(); Date.now() - t0 < 9000; await sleep(150)) { ({ g } = await grp(no)); if (g && g.open === false && g.band) break; }
+        if (!g || g.open !== false) return { skip: '鼠标移开以后栏没收起' };
+        const bx = Math.round((g.band.L + g.band.R) / 2), by = Math.round((g.band.T + g.band.B) / 2) + 1;
+        await mouse('hover', `[W.M]::SetCursorPos(${bx},${by - 1}); Start-Sleep -Milliseconds 60; [W.M]::SetCursorPos(${bx},${by}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 60; [W.M]::mouse_event(1,-1,0,0,[UIntPtr]::Zero)`);
+        let o = null;
+        for (const t0 = Date.now(); Date.now() - t0 < 4000; await sleep(150)) { ({ g } = await grp(no)); if (g && g.open === true && (g.slots || []).length >= g.tabs.length) { o = g; break; } }
+        if (!o) return { skip: '鼠标移到色条上以后栏没展开' };
+        const slot = o.slots[o.tabs.indexOf(no)];
+        const cx = o.rect.L + Math.round((slot.L + slot.R) / 2), cy = o.rect.T + Math.round((slot.T + slot.B) / 2), [tx, ty] = dest(cx, cy);
+        const glide = Array.from({ length: 16 }, (_, k) => `[W.M]::SetCursorPos(${Math.round(cx + (tx - cx) * (k + 1) / 16)},${Math.round(cy + (ty - cy) * (k + 1) / 16)}); [W.M]::mouse_event(1,0,1,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 35`).join('; ');
+        await mouse('drag', `[W.M]::SetCursorPos(${cx},${cy}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 300; [W.M]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds ${hold}; ${glide}; Start-Sleep -Milliseconds 350; [W.M]::mouse_event(4,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 1500`);
+        const a = await api('GET', '/api/debug/tabbar');
+        return { all: a, from: [cx, cy], to: [tx, ty], grab: [cx - o.rect.L, cy - o.rect.T], steps: [...steps], trace: tail(a, 8) };
+      };
+      const b0 = await bar();
+      if ((b0.all.groups || []).length !== 1 || (b0.g.tabs || []).length < 2) rec('warn', '真鼠标按住标签拖出去、再拖回来', '查不了：没有两个实例并在一组');
+      else {
+        const stay = b0.g.activeNo, no = b0.g.tabs.find((n) => n !== stay), NAME2 = '真鼠标按住标签往外拖：实例单独成一组，窗口一直跟着鼠标';
+        const out = await dragTab(no, 600, (x, y) => [x + 60, y + 300]);
+        if (out.skip) rec('warn', NAME2, '查不了：' + out.skip);
+        else {
+          const g = (out.all.groups || []).find((q) => q.tabs.includes(no)) || {}, groups = (out.all.groups || []).length;
+          // 松手时标签上被抓住的那一点应当还在鼠标底下：栏的左上角 ≈ 松手的位置 − 抓的那一点（一组只有一个实例时标签在最左边，横向不比）
+          const dy = g.rect ? Math.abs(g.rect.T + out.grab[1] - out.to[1]) : 999;
+          const good = groups === 2 && out.all.dragging === false && dy <= 12;
+          const info = JSON.stringify({ groups, dragging: out.all.dragging, bar: g.rect, to: out.to, grab: out.grab, offBy: dy, ...(good ? {} : { steps: out.steps, trace: out.trace }) });
+          if (!good) await desktopShot('6a-drag-out.png');
+          rec(good ? 'ok' : 'fail', NAME2, info);
+          if (groups === 2) {
+            const home = (out.all.groups || []).find((q) => q.tabs.includes(stay));
+            const back = await dragTab(no, 300, () => [home.rect.L + 520, home.rect.T + 5]);
+            if (back.skip) rec('warn', '真鼠标把拖出去的实例拖回原来那条栏上：又并成一组', '查不了：' + back.skip);
+            else {
+              const ok2 = (back.all.groups || []).length === 1 && back.all.dragging === false && (back.all.groups[0].tabs || []).length === 2;
+              if (!ok2) await desktopShot('6a-drag-back.png');
+              rec(ok2 ? 'ok' : 'fail', '真鼠标把拖出去的实例拖回原来那条栏上：又并成一组', JSON.stringify({ groups: (back.all.groups || []).length, dragging: back.all.dragging, ...(ok2 ? {} : { steps: back.steps, trace: back.trace }) }));
+            }
+          }
+        }
+      }
     } catch (e) { rec('warn', '单击标签后移开鼠标不会把实例拖出去', '检查没跑起来：' + e.message); }
     await api('PATCH', '/api/settings', { mergeWindows: false }); await sleep(3000);
   }
