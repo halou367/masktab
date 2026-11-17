@@ -579,3 +579,23 @@ html.pc .ct > .ib { width: 34px; height: 34px; }
 :is(.iprow button.d.pg, .librow button.ld, .librow button.lsp):hover { background: var(--st2); }
 .librow button.lsp { background: none; border: 0; padding: 2px 4px; border-radius: 6px; cursor: pointer; font: inherit; color: var(--acc); display: inline-flex; align-items: center; }
 .librow button.lsp.good { color: var(--good); } .librow button.lsp.mid { color: var(--mid); } .librow button.lsp.bad { color: var(--bad); }
+
+/* 出口类型标签（decisions N-5）：SSTP 蓝、SOCKS5 / HTTP 一类黄、ProxyIP 用默认的强调色 */
+.tag.xt-sstp { background: #22384a; color: #a8d1f5; }
+.tag.xt-socks5, .tag.xt-http, .tag.xt-https, .tag.xt-turn { background: #3d3520; color: #f3d48a; }
+:root[data-theme="light"] .tag.xt-sstp { background: #d6e8f8; color: #0b4a7a; }
+:root[data-theme="light"] :is(.tag.xt-socks5, .tag.xt-http, .tag.xt-https, .tag.xt-turn) { background: #f6ebc8; color: #6b5200; }
+/* VPN Gate 源：左边竖排几面国旗；标题后面的小字；副标题里的换行 */
+.flags { display: flex; flex-direction: column; gap: 2px; align-items: center; }
+.flags .flag { width: 20px; height: 14px; border-radius: 2px; }
+.row .t .host { color: var(--on3); font-size: 12px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.row .t .host.np { font-family: inherit; }
+.row .t .ipf { flex: none; } /* IP 写全，放不下时先截后面的主机名 */
+.row .s .brk { flex-basis: 100%; height: 0; }
+/* 出口国家下拉顶上的“出口类型”分段 */
+.ddm .mhd { padding: 6px 10px 4px; font-size: 12px; color: var(--on3); }
+.ddm .seg.xt { display: flex; margin: 2px 4px 6px; border-radius: 18px; box-shadow: inset 0 0 0 1px var(--div); }
+.ddm .seg.xt button { flex: 1; height: 34px; padding: 0 8px; font-size: 12.5px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; white-space: nowrap; }
+.ddm .seg.xt button + button { box-shadow: inset 1px 0 0 var(--div); }
+.ddm .seg.xt button i { font-style: normal; font-size: 11px; opacity: .75; }
+.ddm .seg.xt button:disabled { opacity: .4; cursor: default; }

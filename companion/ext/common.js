@@ -23,7 +23,7 @@ export const restartPath = (st, inst) => (st?.host === 'android' && inst.rt?.nee
 // 核心服务给的提示有两种是代号（界面上各自有专门的展示），其余是直接能读的句子。
 export function noticeText(n, cname = (c) => c) {
   if (!n) return '';
-  if (n.startsWith('noexit:')) return `${cname(n.slice(7))}无可用出口`;
+  if (n.startsWith('noexit:')) return n.length > 7 ? `${cname(n.slice(7))}无可用出口` : '所选类型里没有可用的出口';
   if (n.startsWith('noentry:')) return `${cname(n.slice(8))}没有可用的入口，已跟随出口`;
   if (n === 'switched') return '线路不通，已自动换了一条';
   return n;

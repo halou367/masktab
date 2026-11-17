@@ -1,5 +1,5 @@
 import { api, fmtBytes, noticeText } from './api.js';
-import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, cfDot, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan, avatar } from './ui.js';
+import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, cfDot, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan, avatar, typeTag, XT_NAME, XT_ORDER } from './ui.js';
 import { disguise, cfRep, restartText, restartPath } from './common.js';
 
 // 节点面板（电脑和手机共用，决策 D-4）：节点与出口、指纹与伪装，以及几个占满页面的列表（订阅线路、出口国家、出口、入口）。
@@ -24,6 +24,7 @@ let view = '';          // '' = 节点与出口 | fp = 指纹与伪装 | sub = �
 let fpDirect = false;   // 直接打开的“指纹与伪装”（不是从节点页点进去的）：返回交给外壳
 let flt = '';           // 列表里按国家筛选：'' 全部 | 国家代码 | '~dead' 不通
 let kindFlt = '';       // 入口列表按类型筛选：'' | cf（优选）| proxy（反代）
+let typeFlt = '';       // 出口列表按出口类型筛选：'' | proxyip | sstp | socks5 | …（decisions N-5）
 let resOnly = false;    // 出口列表只看住宅
 let sortBy = 'delay';   // delay | score | speed
 let fresh = false, autoScanned = false, told = 0;
@@ -32,7 +33,7 @@ const load = () => host.load();
 const render = () => host.render();
 const patch = (body) => run(async () => { await api('PATCH', `/api/instances/${cur().id}`, body); await load(); });
 const stop = (fn) => (ev) => { ev.stopPropagation(); fn(ev); };
-const go = (v) => () => { view = v; flt = ''; kindFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; fresh = true; render(); };
+const go = (v) => () => { view = v; flt = ''; kindFlt = ''; typeFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; fresh = true; render(); };
 const home = () => { if (view === 'fp' && fpDirect) { host.back?.(); return; } view = ''; fresh = true; render(); };
 
 // ---------- 小工具 ----------
@@ -47,7 +48,7 @@ const isET = (sub) => sub?.kind === 'edgetunnel';
 const fmtM = (v) => (v >= 100 ? String(Math.round(v)) : v.toFixed(1));
 const spCls = (v) => (v >= 30 ? 'good' : v >= 8 ? 'mid' : 'bad');
 const pipIdOf = (px) => (px.exitId ? (px.exitIp ? `${px.exitId}|${px.exitIp}` : px.exitId) : '');
-const pipName = (p) => (p.type === 'proxyip' ? p.value.replace(/:443$/, '') : `${p.type}://${p.value.replace(/^.*@/, '')}`);
+const pipName = (p) => (p.type === 'proxyip' ? p.value.replace(/:443$/, '') : p.value.replace(/^.*@/, '')); // 全局出口：类型由前面的标签说，这里只写主机:端口（不带账号）
 const ago = (t) => { if (!t) return '未拉取'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? '刚刚更新' : m < 60 ? `${m} 分钟前更新` : m < 1440 ? `${Math.round(m / 60)} 小时前更新` : `${Math.round(m / 1440)} 天前更新`; };
 const utc = (tz) => { try { return new Intl.DateTimeFormat('en', { timeZone: tz, timeZoneName: 'shortOffset' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName').value.replace('GMT', 'UTC'); } catch { return ''; } };
 // 地址里的端口用小一号的字（和演示一致）
@@ -144,22 +145,42 @@ function head(sub, title, n, rows, key) {
 }
 
 // 出口国家（首页的下拉栏）：有哪些国家可选。出口（反代）在这个国家的算一个；没有反代、但有入口的出口落在这个国家的也能选。
-function regionRows(sub) {
+// typ：只算这一类出口（decisions N-5）；限了类型时只看出口列表，入口决定的出口不算（那是服务端默认的出口，不属于任何一类）。
+function regionRows(sub, typ = '') {
   const reg = new Map(), get = (k) => reg.get(k) || reg.set(k, { n: 0, res: 0, ent: 0, best: 1e9 }).get(k);
-  for (const p of sub.pips || []) { if (!(p.delay > 0)) continue; const k = pcc(p); if (!k) continue; const r = get(k); r.n++; r.best = Math.min(r.best, p.delay); if (ipq(p.cf?.ip)?.type === 'res') r.res++; }
-  for (const n of sub.nodes) { if (!(n.delay > 0)) continue; const k = ecc(n); if (!k) continue; const r = get(k); r.ent++; if (!r.n) r.best = Math.min(r.best, n.delay); }
+  for (const p of sub.pips || []) { if (!(p.delay > 0) || (typ && p.type !== typ)) continue; const k = pcc(p); if (!k) continue; const r = get(k); r.n++; r.best = Math.min(r.best, p.delay); if (ipq(p.cf?.ip || p.exit?.ip)?.type === 'res') r.res++; }
+  if (!typ) for (const n of sub.nodes) { if (!(n.delay > 0)) continue; const k = ecc(n); if (!k) continue; const r = get(k); r.ent++; if (!r.n) r.best = Math.min(r.best, n.delay); }
   return [...reg.entries()].sort((a, b) => a[1].best - b[1].best);
+}
+// 出口列表里有哪几类、各几个能用的（下拉顶上的分段、出口列表的筛选芯片用）。ProxyIP、SSTP、SOCKS5 一直在；HTTP 之类有才出现。
+function typeCounts(sub, aliveOnly = true) {
+  const m = new Map(XT_ORDER.slice(0, 3).map((t) => [t, 0]));
+  for (const p of sub.pips || []) if (!aliveOnly || p.delay > 0) m.set(p.type, (m.get(p.type) || 0) + 1);
+  return [...m.entries()].sort((a, b) => XT_ORDER.indexOf(a[0]) - XT_ORDER.indexOf(b[0]));
 }
 const cntEl = (ic, v, tip) => h('span', { class: 'cnt2', title: tip }, icon(ic, 15), v);
 const dEl = (d) => h('span', { class: 'd ' + delayCls(d), title: '最低延迟' }, delayText(d));
 const anyFlag = () => h('span', { class: 'flag q' }, icon('globe', 16));
 // 出口国家的下拉栏：每项 = 国旗、国名、住宅出口数、出口数、最低延迟；第一项“不限”。
+// edgetunnel 时顶上是“出口类型”分段（全部 / ProxyIP / SSTP / SOCKS5，各带能用的个数，decisions N-5）：切换类型后国家列表按这一类重算；
+// 选了国家才算数（类型和国家一起交给核心服务，自动选择只在这个国家、这一类里挑）。
 async function pickRegion(anchor, me, sub) {
-  const et = isET(sub), cur = (me.proxy.region || '').toUpperCase(), rows = regionRows(sub), alive = sub.nodes.filter((n) => n.delay > 0);
-  const best = alive.length ? Math.min(...alive.map((n) => n.delay)) : 0;
-  const v = await dropdown(anchor, [['', '不限', [cntEl('enter', alive.length, '入口'), dEl(best)], anyFlag()],
-    ...rows.map(([k, r]) => [k, cname(k), [et && r.n ? cntEl('home', r.res, '住宅出口') : null, et && r.n ? cntEl('swap', r.n, '出口') : cntEl('enter', r.ent, '入口'), dEl(r.best)], flag(k)])], cur);
-  if (v != null && v !== cur) patch({ proxy: { region: v, exitMode: 'auto', state: 'on' } });
+  const et = isET(sub), cur = (me.proxy.region || '').toUpperCase(), curT = et ? me.proxy.exitType || '' : '';
+  let typ = curT;
+  for (;;) {
+    const rows = regionRows(sub, typ), alive = sub.nodes.filter((n) => n.delay > 0), pool = (sub.pips || []).filter((p) => p.delay > 0 && (!typ || p.type === typ));
+    const best = typ ? (pool.length ? Math.min(...pool.map((p) => p.delay)) : 0) : alive.length ? Math.min(...alive.map((n) => n.delay)) : 0;
+    const tc = typeCounts(sub), all = (sub.pips || []).filter((p) => p.delay > 0).length;
+    const head = et && ((pick) => [h('div', { class: 'mhd' }, '出口类型'),
+      h('div', { class: 'seg xt', role: 'tablist' }, [['', '全部', all], ...tc.map(([t, n]) => [t, XT_NAME[t] || t, n])].map(([t, name, n]) =>
+        h('button', { class: typ === t ? 'on' : '', role: 'tab', 'aria-selected': typ === t ? 'true' : 'false', title: t ? `只用 ${name} 出口（${n} 个能用）` : '不限类型', onclick: (ev) => { ev.stopPropagation(); if (t !== typ) pick({ t }); } }, name, h('i', {}, n)))),
+      h('div', { class: 'mhd' }, '国家')]);
+    const v = await dropdown(anchor, [['', '不限', typ ? [cntEl('swap', pool.length, '出口'), dEl(best)] : [cntEl('enter', alive.length, '入口'), dEl(best)], anyFlag()],
+      ...rows.map(([k, r]) => [k, cname(k), [et && r.n ? cntEl('home', r.res, '住宅出口') : null, et && r.n ? cntEl('swap', r.n, '出口') : cntEl('enter', r.ent, '入口'), dEl(r.best)], flag(k)])], typ === curT ? cur : null, { head });
+    if (v && typeof v === 'object') { typ = v.t; continue; } // 换了类型：按这一类重画
+    if (v != null && (v !== cur || typ !== curT)) patch({ proxy: { region: v, exitType: typ, exitMode: 'auto', state: 'on' } });
+    return;
+  }
 }
 // 入口国家的下拉栏（只有 edgetunnel）：第一项“跟随出口”（默认）；其余是有可用入口的国家。
 function entryRegions(sub) {
@@ -198,7 +219,7 @@ async function customAddr(me, sub, what) {
 
 // 出口列表（反代）。点一行 = 就用这个 IP（手动）。
 function exitView(me, sub) {
-  const all = sub.pips || [], curId = pipIdOf(me.proxy);
+  const pips = sub.pips || [], curId = pipIdOf(me.proxy), all = typeFlt ? pips.filter((p) => p.type === typeFlt) : pips;
   const ipOf = (p) => p.cf?.ip || p.exit?.ip, rows = filtered(all, pcc, ipOf);
   sortsNow = ['delay', 'score', 'speed'];
   const tipOf = (p) => [`${p.type === 'proxyip' ? p.value : p.type + '://' + p.value.replace(/^.*@/, '')}${p.label ? '   ' + p.label : ''}`,
@@ -209,21 +230,25 @@ function exitView(me, sub) {
     p.err ? `不通：${p.err}` : null, p.derived ? '来自订阅里的入口地址' : null].filter(Boolean).join('\n');
   const pickIt = (id) => { view = ''; patch({ proxy: { pipId: id, exitMode: 'manual', state: 'on' } }); };
   const resChip = h('button', { class: 'chip ico' + (resOnly ? ' on' : ''), title: '只看住宅', 'aria-label': '只看住宅', 'aria-pressed': resOnly ? 'true' : 'false', onclick: () => { resOnly = !resOnly; render(); } }, icon('home', 17));
-  return [head(sub, '出口 ProxyIP', `${all.filter((p) => p.delay > 0).length} / ${all.length}`, rows, (p) => p.key),
-    chips(all, pcc, resChip),
+  // 类型芯片（decisions N-5）：和国家下拉一起筛；VPN Gate 源里的每一台都在 SSTP 里
+  const tChip = (t, name, n) => h('button', { class: 'chip' + (typeFlt === t ? ' on' : ''), title: t ? `只看 ${name}` : '全部类型', 'aria-pressed': typeFlt === t ? 'true' : 'false', onclick: () => { typeFlt = t; flt = ''; render(); } }, name, n != null && h('i', {}, n));
+  const tChips = [tChip('', '全部类型'), ...typeCounts(sub, false).filter(([t, n]) => n > 0 || t === typeFlt).map(([t, n]) => tChip(t, XT_NAME[t] || t, n))];
+  return [head(sub, '出口', `${all.filter((p) => p.delay > 0).length} / ${all.length}`, rows, (p) => (p.type === 'proxyip' ? p.key : p.type + '|' + p.value)),
+    chips(all, pcc, [resChip, tChips]),
     h('div', { class: 'ls', role: 'listbox' },
       rows.map((p) => { const on = p.id === curId; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (p.delay < 0 ? ' dead' : ''), role: 'option', 'aria-selected': on ? 'true' : 'false', title: tipOf(p), onclick: () => pickIt(p.id) },
         flagOf(pcc(p), guessCC(p.label)),
         // 两行（演示定稿）：上面是写全的地址；下面是类型图标、纯净度（短条 + 分数）、城市 · 运营商。不通的下面写原因。
         h('span', { class: 'grow' },
-          isV6(pipName(p)) ? ipSpan(pipName(p), 'ip mono') : h('span', { class: 'ip mono' }, ipText(pipName(p))),
+          p.type !== 'proxyip' && ipOf(p) ? h('span', { class: 'ip mono' }, ipOf(p), h('small', {}, ' ' + p.value.replace(/^.*@/, '').replace(/\.opengw\.net(?=:|$)/, '').replace(/:\d+$/, ''))) // 全局出口测出了 IP：写 IP，后面小字是主机名
+            : isV6(pipName(p)) ? ipSpan(pipName(p), 'ip mono') : h('span', { class: 'ip mono' }, ipText(pipName(p))),
           h('span', { class: 'l2' }, p.delay < 0 ? h('span', { class: 'bad el' }, p.err || '不通')
-            : [p.type === 'proxyip' ? h('span', { class: 'cfm cf', title: '反代：只有 Cloudflare 的网站从它出去' }, '反代') : h('span', { class: 'cfm cf', title: '全局出口：所有网站都从它出去' }, p.type), tyIcon(ipOf(p), 15), pbar(scoreOf(ipOf(p))), scoreOf(ipOf(p)) >= 0 && h('b', { class: scoreCls(scoreOf(ipOf(p))) }, scoreOf(ipOf(p))), h('span', { class: 'el' }, where(p.cf) || p.label || '')])),
-        p.type === 'proxyip' ? speedCell(sub, p, p.key) : h('span', { class: 'sp' }),
+            : [typeTag(p.type, p.type === 'proxyip' ? '反代' : null), tyIcon(ipOf(p), 15), pbar(scoreOf(ipOf(p))), scoreOf(ipOf(p)) >= 0 && h('b', { class: scoreCls(scoreOf(ipOf(p))) }, scoreOf(ipOf(p))), h('span', { class: 'el' }, where(p.cf) || p.label || '')])),
+        speedCell(sub, p, p.type === 'proxyip' ? p.key : p.type + '|' + p.value),
         dlyBtn(sub, p, p.type === 'proxyip' ? p.key : p.type + '|' + p.value)); }),
-      !flt && !resOnly && h('button', { class: 'iprow r t' + (!curId ? ' on' : ''), role: 'option', title: '不指定出口：CF 网站从哪里出去由服务端决定', onclick: () => pickIt('') },
+      !flt && !resOnly && !typeFlt && h('button', { class: 'iprow r t' + (!curId ? ' on' : ''), role: 'option', title: '不指定出口：CF 网站从哪里出去由服务端决定', onclick: () => pickIt('') },
         h('span', { class: 'flag q' }, icon('none', 16)), h('span', { class: 'grow' }, h('span', { class: 'ip' }, '不指定'), h('span', { class: 'l2' }, '由服务端决定'))),
-      !rows.length && (flt || resOnly) && h('div', { class: 'empty' }, '没有')),
+      !rows.length && (flt || resOnly || typeFlt) && h('div', { class: 'empty' }, '没有')),
     h('div', { class: 'pad-fab' }), h('button', { class: 'fab', title: '添加地址', 'aria-label': '添加地址', onclick: addAddr }, icon('add', 26))];
 }
 
@@ -369,15 +394,17 @@ function mainView(me, sub) {
     // 出口（edgetunnel）/ 节点（通用订阅）
     const entry = sub.nodes.find((n) => n.id === (et ? px.addressId : px.nodeKey)) || null;
     const curId = pipIdOf(px), pip = et && curId ? (sub.pips || []).find((x) => x.id === curId) || null : null;
-    const pool = et ? (sub.pips || []).filter((x) => x.delay > 0 && (!region || pcc(x) === region)).length : 0;
+    const pool = et ? (sub.pips || []).filter((x) => x.delay > 0 && (!region || pcc(x) === region) && (!px.exitType || x.type === px.exitType)).length : 0;
     const ents = sub.nodes.filter((n) => n.delay > 0 && (!region || ecc(n) === region)).length;
     const canNext = pool > 1 || (pool === 0 && ents > 1 && (!et || entryAuto));
     const toAuto = () => patch({ proxy: { exitMode: 'auto', region: (pip && pcc(pip)) || (!et && entry && ecc(entry)) || region, state: 'on' } });
     const nextBtn = exitAuto && h('button', { class: 'lk', disabled: !canNext, title: '在这个国家里换一个出口', onclick: stop(() => run(async () => { await api('POST', `/api/instances/${me.id}/next`); await load(); }, '正在换…')) }, '换一个');
-    kids.push(sec(et ? '出口 ProxyIP' : '节点', nextBtn || null));
-    kids.push(row({ ic: 'tune', t: '自动选择', s: exitAuto ? '只挑国家，不通自动换' : '固定一个，不自动换', trail: sw(exitAuto, '出口自动选择', (v) => (v ? toAuto() : patch({ proxy: { exitMode: 'manual' } }))) }));
+    kids.push(sec(et ? '出口' : '节点', nextBtn || null));
+    kids.push(row({ ic: 'tune', t: '自动选择', s: exitAuto ? (et ? '只挑国家和类型，不通自动换' : '只挑国家，不通自动换') : '固定一个，不自动换', trail: sw(exitAuto, '出口自动选择', (v) => (v ? toAuto() : patch({ proxy: { exitMode: 'manual' } }))) }));
     if (exitAuto) {
-      kids.push(row({ ic: 'flagI', t: '出口国家', trail: region ? [flag(region), cname(region)] : '不限', drop: true, aria: '出口国家', onclick: (ev) => pickRegion(ev.currentTarget, me, sub) }));
+      const xt = et ? px.exitType || '' : '', inT = xt ? (sub.pips || []).filter((x) => x.delay > 0 && x.type === xt && (!region || pcc(x) === region)) : [];
+      const resT = inT.filter((x) => ipq(x.cf?.ip || x.exit?.ip)?.type === 'res').length;
+      kids.push(row({ ic: 'flagI', t: '出口国家', s: xt ? [typeTag(xt), `${inT.length} 个可用${resT ? ` · 住宅 ${resT}` : ''}`] : null, trail: region ? [flag(region), cname(region)] : '不限', drop: true, aria: '出口国家', onclick: (ev) => pickRegion(ev.currentTarget, me, sub) }));
     } else if (et) {
       // 手动：从列表里选，或者填一个自定义的。正在用的那一行换底色，并写出用的是哪个（写全，不截断）。
       const own = !!pip && !pip.derived, live = (sub.pips || []).filter((x) => x.delay > 0).length;

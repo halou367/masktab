@@ -164,7 +164,7 @@ func (a *App) pipsLocked(sub *model.Subscription) []pipRef {
 		out = append(out, p)
 	}
 	for _, e := range a.Exits {
-		if e.Type == "proxyip" && e.Expand {
+		if expands(e) {
 			for _, ip := range e.Resolved {
 				add(pipRef{ID: e.ID + "|" + ip, Type: e.Type, Value: exitValue(e, ip), Label: e.Label})
 			}
@@ -660,7 +660,7 @@ func (a *App) pipCandsLocked(sub *model.Subscription, me *model.Instance) []cand
 	var out []cand
 	for _, p := range a.pipsLocked(sub) {
 		sc := a.scanLocked(p.Name)
-		c := cand{ID: p.ID, Key: p.key(), Delay: sc.Delay, Derived: p.Derived, Used: used[p.ID]}
+		c := cand{ID: p.ID, Key: p.key(), Delay: sc.Delay, Derived: p.Derived, Used: used[p.ID], Type: p.Type}
 		if sc.CF != nil {
 			c.Country = sc.CF.Country
 		}
@@ -758,12 +758,19 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	cur, region, url := currentNode(in, sub), in.Proxy.Region, a.Settings.DelayURL
 	entryRegion := in.Proxy.EntryRegion
 	curPip := pipID(in)
-	// 第一步：出口。选了国家、开着自动 → 先在这个国家里定反代。
+	exitType := ""
+	if isET && exitAuto {
+		exitType = in.Proxy.ExitType
+	}
+	// 第一步：出口。选了国家（或出口类型）、开着自动 → 先在这个国家、这一类里定反代。
 	newPip, pipOK := curPip, false
 	var pipKeyOf string // 定下来的反代是哪台机器（地址:端口）
 	if isET {
 		ps := a.pipCandsLocked(sub, in)
-		if exitAuto && region != "" {
+		if exitAuto {
+			ps = ofType(ps, exitType)
+		}
+		if exitAuto && (region != "" || exitType != "") {
 			newPip, pipOK = pickExit(ps, region, curPip, exclude)
 			if !pipOK {
 				newPip = curPip
@@ -884,20 +891,21 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 		changed = true
 	}
 	if isET && exitAuto {
-		if !pipOK { // 所选国家里没有反代（或没选国家）：反代配成和入口同国
+		if !pipOK && exitType == "" { // 所选国家里没有反代（或没选国家）：反代配成和入口同国
 			entry, _ := findCand(a.entryCandsLocked(nodes), currentNode(in, sub))
 			if region == "" || strings.EqualFold(entry.Country, region) {
 				newPip = pickPip(a.pipCandsLocked(sub, in), entry, curPip)
 				pipOK = region != "" && entry.alive()
 			}
 		}
+		// 限了出口类型、这一类里没有能用的：不换成别的类型（用户要的就是这一类），留着当前的，界面上提示“无可用出口”
 		if newPip != pipID(in) {
 			setPip(in, newPip)
 			changed = true
 		}
 	}
-	if region != "" && ((isET && exitAuto && !pipOK) || (!isET && !ok)) {
-		r.Notice = "noexit:" + strings.ToUpper(region) // 界面上显示成"<国家>无可用出口"
+	if (region != "" || exitType != "") && ((isET && exitAuto && !pipOK) || (!isET && !ok)) {
+		r.Notice = "noexit:" + strings.ToUpper(region) // 界面上显示成"<国家>无可用出口"（只限了类型时国家是空的）
 	} else if noEntry != "" {
 		r.Notice = "noentry:" + strings.ToUpper(noEntry) // 界面上显示成"<国家>没有可用的入口，已跟随出口"
 	}
@@ -935,7 +943,7 @@ func (a *App) NextExit(id string) error {
 	region := in.Proxy.Region
 	done := false
 	if isET {
-		ps := a.pipCandsLocked(sub, in)
+		ps := ofType(a.pipCandsLocked(sub, in), in.Proxy.ExitType)
 		cur := pipID(in)
 		country := region
 		if p, ok := findCand(ps, cur); ok && country == "" {

@@ -300,6 +300,7 @@ type proxyPatch struct {
 	NodeID                                                                       *string // 手动选入口（入口列表里一行的 id）：关闭"自动"
 	PipID                                                                        *string // 手动选反代（反代列表里一行的 id；空 = 不指定）：关闭"自动"
 	Region                                                                       *string // 选出口地区（国家代码；空 = 不限）：打开"自动"
+	ExitType                                                                     *string // 出口自动时限定的类型（proxyip | sstp | socks5 | …；空 = 全部）
 	EntryRegion                                                                  *string // 入口自动时先在哪个国家里挑（国家代码；空 = 跟随出口）
 	Auto                                                                         *bool
 	ExitMode, EntryMode                                                          *string // auto | manual：出口、入口各自的开关。只有这两个字段（和旧的 auto）会改模式
@@ -475,7 +476,10 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 		if pp.EntryRegion != nil {
 			in.Proxy.EntryRegion = strings.ToUpper(strings.TrimSpace(*pp.EntryRegion))
 		}
-		if pp.NodeID != nil || pp.PipID != nil || pp.Region != nil || pp.EntryRegion != nil || pp.ExitMode != nil || pp.EntryMode != nil {
+		if pp.ExitType != nil {
+			in.Proxy.ExitType = strings.ToLower(strings.TrimSpace(*pp.ExitType))
+		}
+		if pp.ExitType != nil || pp.NodeID != nil || pp.PipID != nil || pp.Region != nil || pp.EntryRegion != nil || pp.ExitMode != nil || pp.EntryMode != nil {
 			r.seenExit = nil // "换一个"的轮转从头算
 		}
 		in.Proxy.Auto = in.Proxy.ExitAuto()
@@ -495,7 +499,7 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 			}
 		}
 		if sub := a.subLocked(in.Proxy.SubscriptionID); sub != nil {
-			if e := a.exitLocked(in.Proxy.ExitID); e != nil && e.Type == "proxyip" && e.Expand && in.Proxy.ExitIP == "" && len(e.Resolved) > 0 {
+			if e := a.exitLocked(in.Proxy.ExitID); e != nil && expands(e) && in.Proxy.ExitIP == "" && len(e.Resolved) > 0 {
 				in.Proxy.ExitIP = e.Resolved[0]
 			}
 			keepExit := in.Proxy.ExitID

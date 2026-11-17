@@ -142,6 +142,42 @@ func Download(ctx context.Context, server string, port int, useTLS bool, limit t
 	}
 	defer c.Close()
 	defer resp.Body.Close()
+	return measure(ctx, resp.Body, func() { _ = c.SetReadDeadline(time.Now().Add(3 * time.Second)) }, limit, tick)
+}
+
+// DownloadVia 和 Download 一样测下载，只是经一个现成的 HTTP 客户端（全局出口：经代理内核的测速通道）去拿测速端点。
+// hc 不要设 Timeout（会把正在下载的连接掐断），超时由 ctx 和 limit 管。
+func DownloadVia(ctx context.Context, hc *http.Client, limit time.Duration, tick func(peak float64)) (peak, avg float64, err error) {
+	ctx, cancel := context.WithTimeout(ctx, limit+12*time.Second)
+	defer cancel()
+	var resp *http.Response
+	for _, size := range []string{"50000000", "20000000", "10000000"} {
+		req, e := http.NewRequestWithContext(ctx, "GET", "https://"+SpeedHost+"/__down?bytes="+size, nil)
+		if e != nil {
+			return 0, 0, e
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		if resp, err = hc.Do(req); err != nil {
+			return 0, 0, err
+		}
+		if resp.StatusCode == 200 {
+			break
+		}
+		resp.Body.Close()
+		err = fmt.Errorf("测速端点拒绝了（HTTP %d）", resp.StatusCode)
+		if resp.StatusCode != 403 {
+			return 0, 0, err
+		}
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	return measure(ctx, resp.Body, nil, limit, tick)
+}
+
+// measure 读 body 最多 limit 时长，算峰值（任意连续 1 秒内的最高速率）和平均速率（Mbps）。arm 在每次读之前调用（设读超时）。
+func measure(ctx context.Context, body io.Reader, arm func(), limit time.Duration, tick func(peak float64)) (peak, avg float64, err error) {
 	const step = 250 * time.Millisecond
 	var total int64
 	var marks []int64 // 每个 step 结束时的累计字节数
@@ -150,8 +186,10 @@ func Download(ctx context.Context, server string, port int, useTLS bool, limit t
 	buf := make([]byte, 64<<10)
 	mbps := func(bytes int64, d time.Duration) float64 { return float64(bytes) * 8 / d.Seconds() / 1e6 }
 	for {
-		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
-		n, rerr := resp.Body.Read(buf)
+		if arm != nil {
+			arm()
+		}
+		n, rerr := body.Read(buf)
 		total += int64(n)
 		now := time.Now()
 		for !now.Before(next) {

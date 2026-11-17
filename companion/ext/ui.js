@@ -243,6 +243,11 @@ export function ipSpan(s, cls = 'mono', ...more) {
 }
 // 分数的颜色：≥ 80 绿、≥ 50 黄、其余红。
 export const scoreCls = (s) => (s >= 80 ? 'good' : s >= 50 ? 'mid' : 'bad');
+// 出口类型（decisions N-5）：名字、排列顺序、标签（各类一种颜色）。ProxyIP 只管 Cloudflare 的网站；其余是全局出口，所有网站都从它出去。
+export const XT_NAME = { proxyip: 'ProxyIP', sstp: 'SSTP', socks5: 'SOCKS5', http: 'HTTP', https: 'HTTPS', turn: 'TURN' };
+export const XT_ORDER = ['proxyip', 'sstp', 'socks5', 'http', 'https', 'turn'];
+export const xtTip = (t) => (t === 'proxyip' ? 'ProxyIP：只有 Cloudflare 的网站从它出去' : `${XT_NAME[t] || t}：全局出口，所有网站都从它出去`);
+export const typeTag = (t, text, tip) => h('span', { class: 'tag xt-' + t, title: tip || xtTip(t) }, text || XT_NAME[t] || t);
 // 圆环（纯净度、伪装度）：size 像素，中间写数字；sub = 数字下面的小字（大圆环才有）。value 为空 = 不知道（灰色空环）。
 export function ringEl(value, size = 44, sub) {
   const NS = 'http://www.w3.org/2000/svg', known = value != null && value >= 0, v = known ? Math.max(0, Math.min(100, value)) : 0;
@@ -282,9 +287,11 @@ const anchorNow = () => (pressed && pressed.isConnected && Date.now() - pressedA
 /** 下拉栏（决策 UI-9）：从 anchor 下面长出来，下面放不下就往上开。opts = [[值, 名称, 右边的东西?, 左边的东西?]]。
     返回选中的值；点外面 / 系统返回键 = null。选中的那一项整行换底色，不放单选圈。
     盒子有圆角所以自己不滚（决策 UI-7）：比屏幕还长时由外面那层透明遮罩滚。left = 和 anchor 左对齐（默认右对齐）。 */
-export function dropdown(anchor, opts, cur, { left = false } = {}) {
+// head(pick)：可选，画在列表上面的东西（如“出口类型”分段）；里面调 pick(值) 等于选了这一项（关掉并返回这个值）。
+export function dropdown(anchor, opts, cur, { left = false, head = null } = {}) {
   return new Promise((res) => {
-    const box = h('div', { class: 'ddm', role: 'listbox' }, opts.map(([v, t, end, lead]) => h('button', { class: 'opt rp' + (v === cur ? ' on' : ''), role: 'option', 'aria-selected': v === cur ? 'true' : 'false', onclick: () => { o.close(); res(v); } },
+    const pick = (v) => { o.close(); res(v); };
+    const box = h('div', { class: 'ddm', role: 'listbox' }, head && head(pick), opts.map(([v, t, end, lead]) => h('button', { class: 'opt rp' + (v === cur ? ' on' : ''), role: 'option', 'aria-selected': v === cur ? 'true' : 'false', onclick: () => { o.close(); res(v); } },
       lead, h('span', { class: 'grow' + (t instanceof Node ? '' : ' el') }, t), end != null && end !== false && h('span', { class: 'end' }, end))));
     const o = overlay(box, false, ' dd'); // dd：透明遮罩，不压暗状态栏
     o.sc.addEventListener('dismiss', () => res(null));

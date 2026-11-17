@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/halou367/masktab/internal/netx"
 	"log"
 	"net"
@@ -509,13 +510,27 @@ func (a *App) speedRun(ctx context.Context, subID string, job *speedJob) {
 				break
 			}
 		}
+		var g *pipRef // 全局出口（SSTP / SOCKS5 等）：不能直连测，经代理内核的测速通道测（decisions N-5）
+		if t == nil {
+			for _, p := range a.pipsLocked(sub) {
+				if p.Type != "proxyip" && p.key() == key {
+					p := p
+					g = &p
+					t = &target{key: key, pip: p.Name}
+					break
+				}
+			}
+			if g != nil {
+				a.viaLocked(sub, a.nodesLocked(sub))
+			}
+		}
 		a.bumpLocked("state", "")
 		a.mu.Unlock()
 		if t == nil {
 			continue
 		}
 		last := time.Now()
-		peak, avg, err := cfprobe.Download(ctx, t.server, t.port, useTLS, speedLimit, func(p float64) {
+		tick := func(p float64) {
 			a.mu.Lock()
 			job.now = p
 			if time.Since(last) > 400*time.Millisecond {
@@ -523,7 +538,21 @@ func (a *App) speedRun(ctx context.Context, subID string, job *speedJob) {
 				a.bumpLocked("state", "")
 			}
 			a.mu.Unlock()
-		})
+		}
+		var peak, avg float64
+		var err error
+		if g != nil {
+			if !a.coreOK {
+				err = errors.New("代理内核没有就绪")
+			} else if err = a.applyConfig(); err == nil {
+				err = a.viaScan(g.Name, func(port int, _ string) error {
+					peak, avg, err = cfprobe.DownloadVia(ctx, probe.StreamClient(port), speedLimit, tick)
+					return err
+				})
+			}
+		} else {
+			peak, avg, err = cfprobe.Download(ctx, t.server, t.port, useTLS, speedLimit, tick)
+		}
 		a.mu.Lock()
 		job.cur = ""
 		if ctx.Err() == nil { // 被停掉的不记结果

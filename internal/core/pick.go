@@ -20,6 +20,21 @@ type cand struct {
 	CFCountry string // 仅入口：不指定反代时，Cloudflare 站点看到的出口所在国家
 	Derived   bool   // 仅反代：来自入口地址列表（不是用户自己加进反代列表的）
 	Used      bool   // 仅反代：已被别的实例占用
+	Type      string // 仅反代：出口类型 proxyip | sstp | socks5 | http | https | turn
+}
+
+// ofType 只留 typ 这一类出口（空 = 全部）。出口国家下拉里选了“出口类型”时，自动选择只在这一类里挑（decisions N-5）。
+func ofType(ps []cand, typ string) []cand {
+	if typ == "" {
+		return ps
+	}
+	var out []cand
+	for _, p := range ps {
+		if strings.EqualFold(p.Type, typ) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (c cand) alive() bool { return c.Delay > 0 }

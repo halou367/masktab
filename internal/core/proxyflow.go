@@ -13,6 +13,7 @@ import (
 	"github.com/halou367/masktab/internal/probe"
 	"github.com/halou367/masktab/internal/proxy"
 	"github.com/halou367/masktab/internal/subscription"
+	"github.com/halou367/masktab/internal/vpngate"
 )
 
 // noECH 在订阅关闭了 ECH 时，返回去掉 ech-opts 的出站副本；否则原样返回。
@@ -48,6 +49,12 @@ func nodeName(sub *model.Subscription, key string) string {
 // IPv4、IPv4:端口、[IPv6]、[IPv6]:端口（IPv6 一律带方括号，否则带端口时分不清哪一段是端口）。
 // 展开的域名取选中的那一项（item，来自 Resolved）；端口依次取：这一项自带的、域名里 .tp端口 的约定、条目写的。
 func exitValue(e *model.ExitEntry, item string) string {
+	if e.Source == vgSource { // VPN Gate 源：每一项是“主机:端口”，账号是公开的 vpn / vpn；源本身不是地址
+		if item == "" {
+			return ""
+		}
+		return vpngate.Auth + "@" + item
+	}
 	if e.Type != "proxyip" {
 		return e.Value
 	}
@@ -441,11 +448,7 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	latc := make(chan int, 1)
 	if state == "on" && want.want != "REJECT" {
 		go func() {
-			d, err := a.core.Delay(want.want, url, 6000)
-			if err != nil {
-				d = -1
-			}
-			latc <- d
+			latc <- a.lineDelay(want.want, url)
 		}()
 	} else {
 		latc <- 0
@@ -632,7 +635,7 @@ func (a *App) fillProxyLocked(in *model.Instance, sub *model.Subscription) {
 	pick:
 		for _, e := range a.Exits {
 			ips := []string{""}
-			if e.Type == "proxyip" && e.Expand {
+			if expands(e) {
 				ips = e.Resolved
 			}
 			for _, ip := range ips {

@@ -1,5 +1,5 @@
 import { api, shownExit } from './api.js';
-import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, ask, confirmDlg, isV6, ipSpan, delayText, delayCls, pbar, scoreCls } from './ui.js';
+import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, dropdown, ask, confirmDlg, isV6, ipSpan, delayText, delayCls, pbar, scoreCls, typeTag } from './ui.js';
 import { disguise } from './common.js';
 import { face } from './menu.js';
 
@@ -242,11 +242,12 @@ export function exitsView(c) {
   const orgOf = (i) => (i?.org || '').replace(/^AS\d+\s*/, '').replace(/,?\s+(Inc|LLC|Ltd|Co|Corp|Limited|Corporation|Company)\b\.?.*$/i, '');
   const fmtM = (v) => (v >= 100 ? String(Math.round(v)) : v.toFixed(1));
   const exitRow = (e) => {
+    if (e.source === 'vpngate') return vgLibRow(e);
     const xs = probes(e), b = best(xs), alive = xs.filter((x) => x.delay > 0).length, dead = xs.length > 0 && !alive;
     const info = b?.info, ccode = (info?.country || '').toUpperCase(), q = info?.ip && st.ipq?.[info.ip], ty = TY[q?.type];
     const lead = ccode ? (() => { const f = flag(ccode); f.title = cname(ccode); return f; })() : icon(isGlobalT(e.type) ? 'globe' : 'swap', 24);
     const kindT = isGlobalT(e.type) ? e.type + ' · 全局' : b?.kind === 'cf' ? '优选' : b?.kind === 'proxy' || (b && !b.colo) ? '反代' : 'proxyip';
-    const sub2 = [h('span', { class: 'tag g' }, kindT),
+    const sub2 = [isGlobalT(e.type) ? typeTag(e.type) : h('span', { class: 'tag g' }, kindT),
       ty && h('span', { class: 'lty', title: ty[1] }, icon(ty[0], 15), ty[1]),
       q && q.score >= 0 && [pbar(q.score), h('b', { class: scoreCls(q.score) }, q.score)],
       info ? h('span', { class: 'el' }, [ccode && cname(ccode), info.city, orgOf(info)].filter(Boolean).join(' · ')) : b?.colo ? h('span', {}, '机房 ' + b.colo) : null,
@@ -259,9 +260,9 @@ export function exitsView(c) {
     const one = b || xs[0], subOf = one?.sub, keysOf = () => (xs.length > 1 ? xs.map((x) => x.pkey) : one ? [one.pkey] : []);
     const stopEv = (fn) => (ev) => { ev.stopPropagation(); fn(); };
     const pingIt = () => act(() => api('POST', `/api/subscriptions/${subOf.id}/ping`, { keys: keysOf() }));
-    const speedIt = () => act(() => api('POST', `/api/subscriptions/${subOf.id}/speed`, { keys: (b ? [b] : xs).filter((x) => !x.g).map((x) => x.pkey) }));
+    const speedIt = () => act(() => api('POST', `/api/subscriptions/${subOf.id}/speed`, { keys: (b ? [b] : xs).map((x) => x.pkey) })); // 全局出口经代理内核测（decisions N-5）
     const trail = subOf && [
-      !one.g && (one.speedState === 'run' || one.speedState === 'wait' ? h('span', { class: 'lsp mono' }, one.speedState === 'run' ? (one.speed ? fmtM(one.speed) + 'M' : '…') : '···')
+      (one.speedState === 'run' || one.speedState === 'wait' ? h('span', { class: 'lsp mono' }, one.speedState === 'run' ? (one.speed ? fmtM(one.speed) + 'M' : '…') : '···')
         : b?.speed > 0 ? h('button', { class: 'lsp mono ' + (b.speed >= 30 ? 'good' : b.speed >= 8 ? 'mid' : 'bad'), title: `下载峰值 ${b.speed} Mbps。点击重测`, onclick: stopEv(speedIt) }, fmtM(b.speed) + 'M')
           : b && h('button', { class: 'lsp', title: '测下载峰值', 'aria-label': '测下载峰值', onclick: stopEv(speedIt) }, icon('dl', 16))),
       h('button', { class: 'ld mono ' + delayCls(b ? b.delay : one.delay), title: (b ? `延迟 ${b.delay} ms` : one.err || '还没测') + '。点击重测延迟', onclick: stopEv(pingIt) }, delayText(b ? b.delay : one.delay))];
@@ -277,10 +278,11 @@ export function exitsView(c) {
     } });
   };
   const importAddr = async () => {
-    const v = await ask('导入地址', { multiline: true, ok: '导入', note: '是优选还是反代不用区分，探测后自动识别；域名默认展开为 IP（IPv4、IPv6、TXT 记录里的都算），每 3 小时重新解析。',
-      placeholder: '每行一条，可多行粘贴（CSV 也行）：\n104.16.1.1:443 #备注\n7.cf.3666888.xyz\nhttps://example.com/ip.txt\nsocks5://user:pass@1.2.3.4:1080\nsstp://vpn:vpn@xxx.opengw.net:443（全局出口：所有网站都从它出去）' });
+    const v = await ask('导入地址', { multiline: true, ok: '导入', note: '是优选还是反代不用区分，探测后自动识别；域名默认展开为 IP（IPv4、IPv6、TXT 记录里的都算），每 3 小时重新解析。只写 vpngate：加 VPN Gate 的公共 SSTP 服务器（一整个源）。',
+      placeholder: '每行一条，可多行粘贴（CSV 也行）：\n104.16.1.1:443 #备注\n7.cf.3666888.xyz\nhttps://example.com/ip.txt\nsocks5://user:pass@1.2.3.4:1080\nsstp://user:pass@host:443（全局出口：所有网站都从它出去）\nvpngate（VPN Gate 源）' });
     if (v && v.trim()) act(async () => { const r = await api('POST', '/api/exits', { text: v }); toast(r.added ? `新增 ${r.added} 条，正在探测…` : '没有新地址'); });
   };
+  if (route2() === 'vg') { const e = st.exits.find((x) => x.source === 'vpngate'); if (e) return vgView(c, e); }
   return [appBar('订阅与地址库', c.back),
     sec('订阅', String(st.subscriptions.length)),
     st.subscriptions.map(subRow),
@@ -288,7 +290,123 @@ export function exitsView(c) {
     custom.length > 0 && [sec('自定义地址', String(custom.length)), custom.map((n) => row({ ic: 'bolt', t: ipSpan(`${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port}`), s: n.label || null, trail: ibtn('del', '删除', () => act(async () => { const r = await api('DELETE', `/api/addresses/${n.id}`); if (r?.changed) toast(`有 ${r.changed} 个实例把它当入口，已换成延迟最低的`); })) }))],
     sec('地址库（优选 IP / 反代 / 全局代理）', String(st.exits.length)),
     st.exits.map(exitRow),
-    row({ ic: 'add', t: '导入地址', s: 'IP、域名、列表网址、socks5:// http:// https:// sstp://', onclick: importAddr })];
+    row({ ic: 'add', t: '导入地址', s: 'IP、域名、列表网址、socks5:// sstp://，或输入 vpngate', onclick: importAddr })];
+
+  // ---------- VPN Gate 源（decisions N-5）：一行代表整个源，像展开的域名；点开按国家列出每一台 ----------
+  function vgLibRow(e) {
+    const xs = vgList(st, e), alive = xs.filter((x) => x.delay > 0), res = xs.filter((x) => x.q?.type === 'res').length, byC = vgCountries(xs);
+    const best = alive.slice().sort((a, b) => a.delay - b.delay)[0], fast = Math.max(0, ...xs.map((x) => x.p?.speed || 0));
+    const lead = byC.length ? h('span', { class: 'flags' }, byC.slice(0, 3).map(([k]) => { const f = flag(k); f.title = cname(k); return f; })) : icon('shield', 24);
+    const pingAll = (ev) => { ev.stopPropagation(); vgBySub(xs, (sid, keys) => act(() => api('POST', `/api/subscriptions/${sid}/ping`, { keys }))); };
+    return row({ ic: lead, t: [h('span', {}, 'VPN Gate'), h('span', { class: 'host np' }, '· 公共 SSTP')], cls: 'librow' + (xs.length && !alive.length && xs.some((x) => x.delay < 0) ? ' dead' : ''), chev: true,
+      title: '点开看每一台。列表来自 vpngate.net，账号是公开的 vpn / vpn',
+      s: [typeTag('sstp', 'SSTP 源', 'VPN Gate 的公共 SSTP 服务器：每一台都是全局出口，所有网站都从它出去'),
+        res > 0 && h('span', { class: 'lty', title: '住宅' }, icon('home', 15), '住宅 ' + res),
+        byC.length > 0 && h('span', { class: 'el' }, byC.slice(0, 4).map(([k, n]) => `${cname(k)} ${n}`).join(' · ') + (byC.length > 4 ? ' …' : '')),
+        h('span', { class: 'brk' }),
+        xs.length ? h('span', {}, `${xs.length} 台 · ${alive.length} 台通${e.refreshHours ? ` · 每 ${e.refreshHours} 小时刷新列表` : ''}`) : !e.resolveError && h('span', { class: 'na' }, '正在拉取列表…'),
+        e.resolveError && h('span', { class: 'bad' }, e.resolveError)],
+      trail: [fast > 0 && h('span', { class: 'lsp mono ' + (fast >= 30 ? 'good' : fast >= 8 ? 'mid' : 'bad'), title: `最快的一台下载峰值 ${fast} Mbps` }, fmtM(fast) + 'M'),
+        h('button', { class: 'ld mono ' + delayCls(best ? best.delay : xs.length && xs.every((x) => x.delay < 0) ? -1 : 0), title: (best ? `最低延迟 ${best.delay} ms` : '还没测') + '。点击重测全部', onclick: pingAll }, delayText(best ? best.delay : xs.length && xs.every((x) => x.delay < 0) ? -1 : 0))],
+      onclick: () => c.open('exits/vg') });
+  }
+}
+
+// 地址库子页：exits/vg（两端的路由都是“页/子页”，页面是同一个 exitsView）。
+const route2 = () => (location.hash.slice(1).split('/')[1] || '');
+
+// VPN Gate 源里的每一台：配上探测结果（几个订阅里都测过时取延迟最低的那次）和 vpngate.net 给的说明。
+function vgList(st, e) {
+  const srv = new Map((e.servers || []).map((s) => [`${s.host}:${s.port}`, s]));
+  return (e.resolved || []).map((item) => {
+    // 同一台可能在几个订阅里各测过一次（经不同的 Worker）：延迟取最低的那条当代表，下载取各订阅里测到的最高值，
+    // 有一个订阅正在测就显示“测着”。以前只看延迟最低的那条，点下载测出来的值记在另一个订阅上，行上一直看不到。
+    let best = null, top = 0, busy = '';
+    for (const sub of st.subscriptions) for (const p of sub.pips || []) if (p.id === e.id + '|' + item || (p.type === 'sstp' && p.value.endsWith('@' + item))) {
+      if (!best || (p.delay > 0 && (best.p.delay <= 0 || p.delay < best.p.delay))) best = { p, sub };
+      top = Math.max(top, p.speed || 0);
+      if (p.speedState === 'run' || p.speedState === 'wait') busy = busy === 'run' ? busy : p.speedState;
+    }
+    const s = srv.get(item) || { host: item.replace(/:\d+$/, ''), port: +item.split(':').pop() };
+    const p = best ? { ...best.p, speed: busy === 'run' ? best.p.speed : top || best.p.speed, speedState: busy || best.p.speedState } : null, info = p?.exit || p?.cf || null;
+    return { id: e.id + '|' + item, item, s, p, sub: best?.sub || null, info, cc: (info?.country || s.cc || '').toUpperCase(), delay: p ? p.delay : 0, key: p ? p.type + '|' + p.value : '', q: (info?.ip && st.ipq?.[info.ip]) || null };
+  });
+}
+// 按每一台自己的订阅分组发请求（同一台在几个订阅里都有时，行上显示的是 vgList 挑出来的那个订阅的结果）
+const vgBySub = (xs, fn) => { const m = new Map(); for (const x of xs) if (x.sub && x.key) { if (!m.has(x.sub.id)) m.set(x.sub.id, []); m.get(x.sub.id).push(x.key); } for (const [sid, keys] of m) fn(sid, keys); return m.size > 0; };
+const vgCountries = (xs) => { const m = new Map(); for (const x of xs) if (x.cc) m.set(x.cc, (m.get(x.cc) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]); };
+const fmtM = (v) => (v >= 100 ? String(Math.round(v)) : v.toFixed(1));
+const orgOf = (i) => (i?.org || '').replace(/^AS\d+\s*/, '').replace(/,?\s+(Inc|LLC|Ltd|Co|Corp|Limited|Corporation|Company)\b\.?.*$/i, '');
+const TYQ = { res: ['home', '住宅'], dc: ['dc', '机房'], mobile: ['phone', '手机流量'] };
+let vgF = { cc: '', res: false, alive: false, sort: 'delay' }; // VPN Gate 页的筛选（只在这一页里有效）
+
+// VPN Gate 展开页：按国家分组，每一台一行（UI-22 的统一行：点延迟单测，点下载测峰值）。
+function vgView(c, e) {
+  const { st, act } = c, back = c.back ? (c.back.fn || c.back) : () => c.open('exits'); // 手机：返回栈里退一步；电脑：回地址库
+  const all = vgList(st, e), alive = all.filter((x) => x.delay > 0);
+  const me = st.me, curPip = me?.proxy?.exitId ? (me.proxy.exitIp ? `${me.proxy.exitId}|${me.proxy.exitIp}` : me.proxy.exitId) : '';
+  const subOf = all.find((x) => x.sub)?.sub;
+  // 每一台交给它行上显示的那个订阅去测（vgBySub）：测完的数就落在这一行看得到的地方
+  const ping = (xs) => vgBySub(xs, (sid, keys) => act(() => api('POST', `/api/subscriptions/${sid}/ping`, { keys })));
+  const speed = (xs) => vgBySub(xs, (sid, keys) => act(() => api('POST', `/api/subscriptions/${sid}/speed`, { keys })));
+  const sc = (x) => (x.q && x.q.score >= 0 ? x.q.score : -1), sp = (x) => x.p?.speed || 0, rk = (x) => (x.delay > 0 ? x.delay : x.delay === 0 ? 1e6 : 2e6);
+  const sorter = { delay: (a, b) => rk(a) - rk(b), speed: (a, b) => sp(b) - sp(a) || rk(a) - rk(b), score: (a, b) => (b.delay > 0) - (a.delay > 0) || sc(b) - sc(a) || rk(a) - rk(b) }[vgF.sort] || ((a, b) => rk(a) - rk(b));
+  const shown = all.filter((x) => (!vgF.cc || x.cc === vgF.cc) && (!vgF.res || x.q?.type === 'res') && (!vgF.alive || x.delay > 0));
+  const byC = vgCountries(all), groups = new Map();
+  for (const x of shown.slice().sort(sorter)) { const k = x.cc || '~'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); }
+  const order = [...groups.keys()].sort((a, b) => (a === '~') - (b === '~') || (byC.find(([k]) => k === b)?.[1] || 0) - (byC.find(([k]) => k === a)?.[1] || 0));
+  const more = async () => {
+    const v = await choose('VPN Gate', [['refresh', '立即刷新列表'], ['hours', '刷新列表的间隔'], ['del', '删除这个源']], null);
+    if (v === 'refresh') act(async () => { const r = await api('POST', `/api/exits/${e.id}/resolve`); toast(r?.error ? r.error : `列表里有 ${r?.count ?? 0} 台，正在测…`); });
+    else if (v === 'hours') { const n = await choose('刷新列表的间隔', [0, 1, 3, 6, 12, 24].map((x) => [x, x ? `${x} 小时` : '不刷新']), e.refreshHours); if (n != null) act(() => api('PATCH', `/api/exits/${e.id}`, { refreshHours: n })); }
+    else if (v === 'del' && await confirmDlg('删除 VPN Gate 源？', '列表里的服务器都会从地址库里去掉；正在用其中一台的实例会换成别的出口。', '删除', true)) {
+      act(async () => { const r = await api('DELETE', `/api/exits/${e.id}`); if (r?.changed) toast(`有 ${r.changed} 个实例在用它，已换成别的`); back(); });
+    }
+  };
+  const pickC = async (ev) => {
+    const v = await dropdown(ev.currentTarget, [['', '全部', all.length, h('span', { class: 'flag q' }, icon('globe', 16))], ...byC.map(([k, n]) => [k, cname(k), n, flag(k)])], vgF.cc, { left: true });
+    if (v != null) { vgF = { ...vgF, cc: v }; c.render(); }
+  };
+  const SORTN = { delay: '延迟', speed: '下载', score: '纯净度' };
+  const resN = all.filter((x) => x.q?.type === 'res').length;
+  const todo = alive.filter((x) => !(sp(x) > 0)).sort((a, b) => a.delay - b.delay).slice(0, 8);
+  const rowOf = (x) => {
+    const dead = x.delay < 0, ty = TYQ[x.q?.type], on = x.id === curPip;
+    const ip = x.s.ip || x.info?.ip || x.s.host, hostShort = x.s.host.replace(/\.opengw\.net$/, '');
+    const f = x.cc ? flag(x.cc) : icon('globe', 22); if (x.cc) f.title = cname(x.cc);
+    const st2 = x.p?.speedState;
+    const tip = [`sstp://${x.s.host}:${x.s.port}`, x.s.ip && `列表里的 IP：${x.s.ip}`, x.info?.ip && x.info.ip !== x.s.ip && `出口 IP：${x.info.ip}`,
+      x.s.speed > 0 && `vpngate.net 测的线路速度 ${(x.s.speed / 1e6).toFixed(0)} Mbps`, x.s.sessions > 0 && `在线 ${x.s.sessions} 人`, x.s.uptime > 0 && `已运行 ${Math.round(x.s.uptime / 86400000)} 天`,
+      dead && `不通：${x.p?.err || '超时'}`].filter(Boolean).join('\n');
+    return row({ ic: f, t: [ipSpan(ip, 'mono ipf'), h('span', { class: 'host' }, hostShort)], cls: 'librow' + (dead ? ' dead' : '') + (on ? ' on' : ''), title: tip,
+      s: [typeTag('sstp'), ty && h('span', { class: 'lty', title: ty[1] }, icon(ty[0], 15), ty[1]), x.q && x.q.score >= 0 && [pbar(x.q.score), h('b', { class: scoreCls(x.q.score) }, x.q.score)],
+        dead ? h('span', { class: 'bad el' }, x.p?.err || '不通') : h('span', { class: 'el' }, [x.info?.city, orgOf(x.info)].filter(Boolean).join(' · ') || (x.delay === 0 ? '还没测' : ''))],
+      trail: x.p && [!dead && (st2 === 'run' || st2 === 'wait' ? h('span', { class: 'lsp mono' }, st2 === 'run' ? (x.p.speed ? fmtM(x.p.speed) + 'M' : '…') : '···')
+        : sp(x) > 0 ? h('button', { class: 'lsp mono ' + (sp(x) >= 30 ? 'good' : sp(x) >= 8 ? 'mid' : 'bad'), title: `下载峰值 ${sp(x)} Mbps。点击重测`, onclick: (ev) => { ev.stopPropagation(); speed([x]); } }, fmtM(sp(x)) + 'M')
+          : x.delay > 0 && h('button', { class: 'lsp', title: '测下载峰值', 'aria-label': '测下载峰值', onclick: (ev) => { ev.stopPropagation(); speed([x]); } }, icon('dl', 16))),
+        h('button', { class: 'ld mono ' + delayCls(x.delay), title: (x.delay > 0 ? `延迟 ${x.delay} ms` : x.p.err || '还没测') + '。点击重测延迟', onclick: (ev) => { ev.stopPropagation(); ping([x]); } }, delayText(x.delay))],
+      onclick: async () => {
+        const v = await choose(hostShort, [me && x.sub && me.proxy?.subscriptionId === x.sub.id && ['use', `#${me.no} 用这一台出口`], ['ping', '重测延迟'], x.delay > 0 && ['speed', '测下载峰值'], ['copy', '复制地址']].filter(Boolean), null);
+        if (v === 'use') act(() => api('PATCH', `/api/instances/${me.id}`, { proxy: { pipId: x.id, exitMode: 'manual', state: 'on' } }), '已换出口');
+        else if (v === 'ping') ping([x]);
+        else if (v === 'speed') speed([x]);
+        else if (v === 'copy') navigator.clipboard?.writeText(`sstp://${x.s.host}:${x.s.port}`).then(() => toast('已复制'), () => toast('复制失败', true));
+      } });
+  };
+  return [appBar(['VPN Gate', h('span', { class: 'cnt' }, `${alive.length} / ${all.length}`)], { fn: back, title: '返回' },
+    h('button', { class: 'ib', title: todo.length ? `批量测下载（延迟最低的 ${todo.length} 台）` : '都测过了', 'aria-label': '批量测下载', disabled: !todo.length, onclick: () => speed(todo) }, icon('dl', 22)),
+    h('button', { class: 'ib', title: '测全部延迟', 'aria-label': '测全部延迟', disabled: !subOf, onclick: () => ping(all) }, icon('bolt', 22)),
+    ibtn('more', '更多', more)),
+    h('div', { class: 'chips' },
+      h('button', { class: 'chip ddc' + (vgF.cc ? ' on' : ''), title: '按国家筛选', 'aria-label': '按国家筛选', onclick: pickC }, vgF.cc ? [flag(vgF.cc), h('i', {}, byC.find(([k]) => k === vgF.cc)?.[1] || 0)] : ['全部 ', h('i', {}, all.length)], icon('chevD', 18)),
+      resN > 0 && h('button', { class: 'chip ico' + (vgF.res ? ' on' : ''), title: '只看住宅', 'aria-label': '只看住宅', 'aria-pressed': vgF.res ? 'true' : 'false', onclick: () => { vgF = { ...vgF, res: !vgF.res }; c.render(); } }, icon('home', 17), h('i', {}, resN)),
+      h('button', { class: 'chip' + (vgF.alive ? ' on' : ''), title: '只看通的', 'aria-pressed': vgF.alive ? 'true' : 'false', onclick: () => { vgF = { ...vgF, alive: !vgF.alive }; c.render(); } }, '只看通的'),
+      h('button', { class: 'sortb', title: '排序', 'aria-label': '排序', onclick: async (ev) => { const v = await dropdown(ev.currentTarget, Object.entries(SORTN), vgF.sort); if (v) { vgF = { ...vgF, sort: v }; c.render(); } } }, icon('sort', 18), SORTN[vgF.sort])),
+    e.resolveError && h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, e.resolveError)),
+    !all.length && h('div', { class: 'empty' }, e.resolveError ? '没有拉到列表' : '正在拉取列表…'),
+    order.map((k) => { const xs = groups.get(k), n = all.filter((x) => (x.cc || '~') === k); return [sec([k !== '~' && flag(k), k === '~' ? '未知国家' : cname(k)], `${n.filter((x) => x.delay > 0).length} / ${n.length} 通`, true), xs.map(rowOf)]; }),
+    all.length > 0 && !shown.length && h('div', { class: 'empty' }, '没有'),
+    h('div', { class: 'foot noic' }, `点延迟只重测那一台，点下载图标测峰值。列表${e.refreshHours ? `每 ${e.refreshHours} 小时` : ''}从 vpngate.net 更新，不通的自动淘汰；⋮ 里可以改间隔、删除这个源。`)];
 }
 
 // ---------- 诊断 ----------

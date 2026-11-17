@@ -91,10 +91,7 @@ func (a *App) afterLaunch(id string) {
 	if !a.coreOK || state != "on" || want.want == "REJECT" {
 		return
 	}
-	lat := -1
-	if d, err := a.core.Delay(want.want, url, 6000); err == nil {
-		lat = d
-	}
+	lat := a.lineDelay(want.want, url)
 	a.mu.Lock()
 	if r.Probe == pr { // 期间没有别的流程换过线路
 		r.Latency = lat
@@ -124,11 +121,7 @@ func (a *App) verifyLaunch(id string) {
 	start := time.Now()
 	latc := make(chan int, 1)
 	go func() {
-		d, err := a.core.Delay(want.want, url, 6000)
-		if err != nil {
-			d = -1
-		}
-		latc <- d
+		latc <- a.lineDelay(want.want, url)
 	}()
 	pr := probe.Run(pport, eps)
 	lat := <-latc
@@ -161,4 +154,16 @@ func probeIPsText(pr *model.ExitProbe) string {
 		s += ip
 	}
 	return s
+}
+
+// lineDelay 测实例当前线路的延迟（毫秒，不通是 -1）。第一次不通再测一次：全局出口（SSTP 等）每条新连接都要现建隧道，
+// 偶尔一次建不起来（真机实测 2026-11-18：连测 6 次有 1 次 12 秒没响应，其余 1.5 ~ 2 秒）。以前一次失败就在面板上写“不通”，
+// 网页其实开得好好的。
+func (a *App) lineDelay(group, url string) int {
+	for try := 0; try < 2; try++ {
+		if d, err := a.core.Delay(group, url, 6000); err == nil {
+			return d
+		}
+	}
+	return -1
 }

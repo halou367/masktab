@@ -84,6 +84,18 @@ func Client(port int, timeout time.Duration) *http.Client {
 	}}
 }
 
+// StreamClient 同 Client，但不设总超时（用来测下载：总超时会把还在下载的连接掐断）。
+func StreamClient(port int) *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		Proxy:                 nil,
+		DisableKeepAlives:     true,
+		ResponseHeaderTimeout: 15 * time.Second,
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return DialSocks5(ctx, port, addr)
+		},
+	}}
+}
+
 func get(hc *http.Client, url string) (string, error) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")

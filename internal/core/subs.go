@@ -275,6 +275,21 @@ func (a *App) afterSubChanged(id string) error {
 //
 // 文本里可以夹着"地址列表的网址"（https://…/ip.txt 这类）：把它拉下来，里面的地址一起导入（只在导入时拉这一次）。
 func (a *App) ImportExits(text string) (int, error) {
+	if isVPNGateText(text) { // VPN Gate 源（decisions N-5）：加一条源，拉列表、测一遍
+		a.mu.Lock()
+		id, added := a.addVPNGateLocked()
+		a.saveLocked("exits")
+		a.bumpLocked("state", "")
+		a.mu.Unlock()
+		go func() {
+			a.ResolveExit(id)
+			a.rescanET()
+		}()
+		if !added {
+			return 0, nil
+		}
+		return 1, nil
+	}
 	parsed := exits.ParseLines(text)
 	var ferr error
 	for i, u := range exits.ListURLs(text) {
@@ -373,9 +388,13 @@ func (a *App) rescanET() {
 func (a *App) ResolveExit(id string) (changed bool) {
 	a.mu.Lock()
 	e := a.exitLocked(id)
-	if e == nil || e.Type != "proxyip" || !e.Expand {
+	if e == nil || !expands(e) {
 		a.mu.Unlock()
 		return false
+	}
+	if e.Source == vgSource {
+		a.mu.Unlock()
+		return a.resolveVPNGate(id)
 	}
 	host, _ := exits.SplitHostPort(e.Value)
 	a.mu.Unlock()
@@ -435,7 +454,7 @@ func (a *App) refreshExits(minAge time.Duration) {
 	a.mu.Lock()
 	var due []string
 	for _, e := range a.Exits {
-		if e.Type != "proxyip" || !e.Expand {
+		if !expands(e) {
 			continue
 		}
 		age := time.Since(time.UnixMilli(e.ResolvedAt))

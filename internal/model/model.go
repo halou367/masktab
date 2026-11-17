@@ -27,6 +27,7 @@ type InstProxy struct {
 	ExitMode       string `json:"exitMode,omitempty"`    // 出口：auto = 只定国家，程序在这个国家里挑，不通自动换 | manual = 钉死 ExitID，不通也不换
 	EntryMode      string `json:"entryMode,omitempty"`   // 入口：auto = 跟着出口（同一台机器能当入口就用它，否则挑延迟最低的）| manual = 钉死 AddressID
 	Region         string `json:"region,omitempty"`      // 出口自动时限定的国家（国家代码，如 KR）；空 = 不限
+	ExitType       string `json:"exitType,omitempty"`    // 出口自动时限定的类型：proxyip | sstp | socks5 | http | https | turn；空 = 全部
 	EntryRegion    string `json:"entryRegion,omitempty"` // 入口自动时先在哪个国家里挑（国家代码）；空 = 跟随出口。只对 edgetunnel 有意义
 	Profile        string `json:"profile,omitempty"`     // 用订阅里的哪一套连接参数（Subscription.Profiles 的 key）；空 = 自动分配
 	AddressMode    string `json:"addressMode"`           // same-as-exit | custom
@@ -129,6 +130,22 @@ type ExitEntry struct {
 	// ResolveError：最近一次解析失败的原因；成功后清空。失败时 Resolved 保留上一次的结果。
 	ResolveError  string `json:"resolveError,omitempty"`
 	UsableAsEntry *bool  `json:"usableAsEntry,omitempty"`
+	// Source：不是一个地址，而是一个“源”。vpngate = VPN Gate 的公共 SSTP 服务器列表（Type 是 sstp、Value 是 "vpngate"）：
+	// 像域名展开成 IP 一样，按 RefreshHours 从 vpngate.net 拉一次列表，Resolved 里是每台的“主机:端口”，Servers 是对应的说明。
+	Source  string     `json:"source,omitempty"`
+	Servers []VGServer `json:"servers,omitempty"`
+}
+
+// VGServer 是 VPN Gate 列表里一台服务器的说明（只给界面看；连接用 Resolved 里的“主机:端口”）。
+type VGServer struct {
+	Host     string `json:"host"`               // 完整域名
+	IP       string `json:"ip"`                 // 列表里写的 IP
+	Port     int    `json:"port"`               // SSTP 端口
+	CC       string `json:"cc,omitempty"`       // 国家代码
+	Ping     int    `json:"ping,omitempty"`     // VPN Gate 从日本测的延迟（毫秒）
+	Speed    int64  `json:"speed,omitempty"`    // VPN Gate 测的线路速度（bit/s）
+	Sessions int    `json:"sessions,omitempty"` // 在线会话数
+	Uptime   int64  `json:"uptime,omitempty"`   // 已运行时长（毫秒）
 }
 
 type IPInfo struct {

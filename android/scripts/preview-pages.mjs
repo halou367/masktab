@@ -14,7 +14,7 @@ const [dir, out, desk] = process.argv.slice(2).filter((a) => !a.startsWith('--')
 // 分段跑（--only=段名,段名）：整套要两分多钟，改哪一块就只跑哪一段；scripts/check.sh pages 会把各段分给几个进程同时跑。
 // 段名见下面每一段开头的 want('…')；不带 --only 就全跑。新加的检查放进合适的段，或者新开一段（记得写进 scripts/check.sh 的 PAGE_SECTIONS）。
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean);
-const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'update', 'safe', 'import', 'a11y', 'heal', 'fp'];
+const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'fp'];
 for (const s of ONLY) if (!SECTIONS.includes(s)) { console.error(`没有这一段：${s}（有：${SECTIONS.join(' ')}）`); process.exit(2); }
 const took = []; let cur = null;
 const want = (name) => { const t = Date.now(); if (cur) took.push(`${cur.name} ${((t - cur.t) / 1000).toFixed(0)}s`); cur = null; const ok = !ONLY.length || ONLY.includes(name); if (ok) cur = { name, t }; return ok; };
@@ -81,7 +81,7 @@ const mock = (state) => {
     // 改线路的请求照着记到状态里（只记模式、国家、选了哪个；代理开关不记，后面的检查要它一直开着），这样能看到“自动 / 手动”两种排法
     if (m === 'PATCH' && /^\/api\/instances\//.test(p) && b && b.proxy) {
       const px = state.me.proxy, q = b.proxy;
-      for (const f of ['exitMode', 'entryMode', 'region', 'entryRegion']) if (q[f] != null) px[f] = q[f];
+      for (const f of ['exitMode', 'entryMode', 'region', 'entryRegion', 'exitType']) if (q[f] != null) px[f] = q[f];
       if (q.pipId != null) px.exitId = q.pipId;
       if (q.nodeId != null) px.addressId = q.nodeId;
       const it = state.instances.find((x) => x.id === state.me.id); if (it) it.proxy = px;
@@ -301,7 +301,7 @@ if (want('flow')) {
     tinted: [...document.querySelectorAll('.ls .iprow.on')].every((e) => getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'),
     cut: [...document.querySelectorAll('.ls .iprow .ip')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.innerText) }));
   let sl = await sel();
-  check('节点页 → 出口列表（ProxyIP）：选中的一行换底色、没有单选圈、IP 没被截断', i.title === '出口 ProxyIP' && sl.rows >= 3 && sl.on === 1 && sl.tinted && sl.radio === 0 && sl.cut.length === 0, { ...i, sl });
+  check('节点页 → 出口列表（ProxyIP）：选中的一行换底色、没有单选圈、IP 没被截断', i.title === '出口' && sl.rows >= 3 && sl.on === 1 && sl.tinted && sl.radio === 0 && sl.cut.length === 0, { ...i, sl });
   await pg.screenshot({ path: path.join(out, 'flow-exit.png') });
   await pg.locator('.chips .chip.ddc').click();
   await pg.waitForTimeout(300);
@@ -967,6 +967,92 @@ if (want('heal')) {
     check('电脑：本窗口自己的节点页和以前一样（没有“改的是谁”那一行、没有返回）', r.on === '节点与出口' && !r.who && r.back === 0, r);
     await c.close(); hs.close(); hs.closeAllConnections?.();
   }
+}
+// VPN Gate 源与出口类型（decisions N-5）：地址库里一行代表整个源；点开按国家列出每一台；出口国家下拉顶上有“出口类型”；出口列表有类型芯片
+if (want('sstp')) {
+  const vg = JSON.parse(JSON.stringify(fixture)), s0 = vg.subscriptions[0], SID = s0.id;
+  const VGS = [['vpn339013576', '153.134.150.194', 1835, 'JP', 'Tokyo', 'NTT Docomo Business', 213, 9, 'res', 88], ['vpn219650000', '116.67.212.245', 443, 'JP', 'Osaka', 'Sony Network', 278, 0, 'res', 91],
+    ['vpn854514241', '175.210.118.154', 995, 'KR', 'Seoul', 'SK Broadband', 162, 21, 'res', 79], ['vpn578518022', '222.101.108.188', 1443, 'KR', 'Incheon', 'Korea Telecom', -1, 0, 'res', 74],
+    ['vpn129127207', '35.239.129.173', 443, 'US', 'Council Bluffs', 'Google Cloud', 356, 31, 'dc', 34]];
+  vg.exits = [{ id: 'vg1', updatedAt: 1, type: 'sstp', value: 'vpngate', label: 'VPN Gate', source: 'vpngate', expand: true, refreshHours: 3, resolvedAt: 1,
+    resolved: VGS.map((x) => `${x[0]}.opengw.net:${x[2]}`), servers: VGS.map((x) => ({ host: x[0] + '.opengw.net', ip: x[1], port: x[2], cc: x[3], speed: 30e6, sessions: 12 })) },
+  { id: 'k1', updatedAt: 1, type: 'socks5', value: 'u:p@198.51.100.23:1080', expand: false, refreshHours: 3, resolved: [] }];
+  for (const x of VGS) {
+    const info = { ip: x[1], country: x[3], city: x[4], org: x[5] };
+    s0.pips.push({ id: `vg1|${x[0]}.opengw.net:${x[2]}`, type: 'sstp', value: `vpn:vpn@${x[0]}.opengw.net:${x[2]}`, label: 'VPN Gate', key: `sstp|vpn:vpn@${x[0]}.opengw.net:${x[2]}`, delay: x[6], cf: info, exit: info, speed: x[7], err: x[6] < 0 ? '超时' : '' });
+    vg.ipq[x[1]] = { type: x[8], score: x[9] };
+  }
+  s0.pips.push({ id: 'k1', type: 'socks5', value: 'u:p@198.51.100.23:1080', label: '', key: 'socks5|u:p@198.51.100.23:1080', delay: 240, cf: { ip: '198.51.100.23', country: 'US', city: 'Dallas', org: 'AT&T' }, exit: { ip: '198.51.100.23', country: 'US', city: 'Dallas', org: 'AT&T' }, speed: 14 });
+  vg.ipq['198.51.100.23'] = { type: 'res', score: 81 };
+  const c = await mkctx(vg), pg = await c.newPage(); watch(pg, 'sstp');
+  const calls = () => pg.evaluate(() => window.__calls.splice(0).filter((x) => x.m && x.m !== 'GET').map((x) => `${x.m} ${x.p}${x.b ? ' ' + JSON.stringify(x.b) : ''}`));
+  const wide = () => pg.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
+  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(700);
+  let r = await pg.evaluate(() => { const e = [...document.querySelectorAll('.librow')].find((x) => /VPN Gate/.test(x.innerText)); return e ? { t: e.innerText.replace(/\s+/g, ' '), flags: e.querySelectorAll('.flags .flag').length, ld: e.querySelector('button.ld')?.innerText } : null; });
+  check('地址库：VPN Gate 一行代表整个源（几面国旗、SSTP 源、住宅数、各国台数、几台通、最佳延迟、最快下载）', !!r && r.flags === 3 && /SSTP 源/.test(r.t) && /住宅 4/.test(r.t) && /日本 2/.test(r.t) && /韩国 2/.test(r.t) && /5 台 · 4 台通/.test(r.t) && /每 3 小时刷新列表/.test(r.t) && r.ld === '162 ms' && /31\.0M/.test(r.t) && !(await wide()), r);
+  r = await pg.evaluate(() => [...document.querySelectorAll('.librow')].map((x) => x.innerText.replace(/\s+/g, ' ')).find((t) => /198\.51\.100\.23/.test(t)) || '');
+  check('地址库：SOCKS5 的行带类型标签', /SOCKS5/.test(r) && /Dallas/.test(r), r);
+  await pg.screenshot({ path: path.join(out, 'sstp-lib.png'), fullPage: true });
+  await pg.locator('.librow', { hasText: 'VPN Gate' }).click(); await pg.waitForTimeout(400);
+  r = await pg.evaluate(() => ({ hash: location.hash.slice(1), h1: document.querySelector('.appbar h1')?.innerText.replace(/\s+/g, ' '), secs: [...document.querySelectorAll('.sec')].map((e) => e.innerText.replace(/\s+/g, ' ')),
+    rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')), chips: [...document.querySelectorAll('.chips .chip')].map((e) => e.innerText.replace(/\s+/g, ' ')) }));
+  check('VPN Gate 展开：按国家分组（日本 / 韩国 / 美国，各写几台通），每台写 IP、主机名、住宅 / 机房、纯净度、城市和运营商、下载、延迟', r.hash === 'exits/vg' && /VPN Gate 4 \/ 5/.test(r.h1) && r.secs.some((t) => /日本 2 \/ 2 通/.test(t)) && r.secs.some((t) => /韩国 1 \/ 2 通/.test(t))
+    && r.rows.length === 5 && /153\.134\.150\.194/.test(r.rows.join()) && /vpn339013576/.test(r.rows.join()) && /住宅/.test(r.rows.join()) && /机房/.test(r.rows.join()) && /Tokyo · NTT Docomo Business/.test(r.rows.join()) && /9\.0M/.test(r.rows.join()) && /超时/.test(r.rows.join()) && r.chips.length >= 3 && !(await wide()), r);
+  await pg.screenshot({ path: path.join(out, 'sstp-vg.png'), fullPage: true });
+  await calls();
+  await pg.locator('.librow', { hasText: 'vpn854514241' }).locator('button.ld').click(); await pg.waitForTimeout(300);
+  await pg.locator('.librow', { hasText: 'vpn219650000' }).locator('button.lsp').click(); await pg.waitForTimeout(300);
+  let cs = await calls();
+  check('VPN Gate 展开：点延迟只测那一台、点下载图标测那一台的峰值（统一行组件，UI-22）', cs.includes(`POST /api/subscriptions/${SID}/ping {"keys":["sstp|vpn:vpn@vpn854514241.opengw.net:995"]}`) && cs.includes(`POST /api/subscriptions/${SID}/speed {"keys":["sstp|vpn:vpn@vpn219650000.opengw.net:443"]}`), cs);
+  await pg.locator('.chips .chip', { hasText: '只看通的' }).click(); await pg.waitForTimeout(300);
+  r = await pg.evaluate(() => document.querySelectorAll('.librow').length);
+  check('VPN Gate 展开：“只看通的”去掉不通的那台', r === 4, r);
+  await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(700);
+  await pg.locator('button.row[aria-label="出口国家"]').click(); await pg.waitForTimeout(400);
+  const ddNow = () => pg.evaluate(() => ({ seg: [...document.querySelectorAll('.ddm .seg.xt button')].map((e) => e.innerText.replace(/\s+/g, ' ')), on: document.querySelector('.ddm .seg.xt button.on')?.innerText.replace(/\s+/g, ' '),
+    opts: [...document.querySelectorAll('.ddm .opt')].map((e) => e.innerText.replace(/\s+/g, ' ')), inside: (() => { const b = document.querySelector('.ddm')?.getBoundingClientRect(); return !!b && b.left >= 0 && b.right <= innerWidth + 1; })() }));
+  let d = await ddNow();
+  check('出口国家下拉：顶上是“出口类型”分段（全部 / ProxyIP / SSTP / SOCKS5，各带能用的个数）', d.seg.length === 4 && /^全部/.test(d.seg[0]) && /ProxyIP 3/.test(d.seg[1]) && /SSTP 4/.test(d.seg[2]) && /SOCKS5 1/.test(d.seg[3]) && /^全部/.test(d.on) && d.inside, d);
+  await pg.locator('.ddm .seg.xt button', { hasText: 'SSTP' }).click(); await pg.waitForTimeout(400);
+  d = await ddNow();
+  check('切到 SSTP：国家列表按 SSTP 重算（只剩日本、韩国、美国，住宅数和台数是 SSTP 的）', /^SSTP/.test(d.on) && d.opts.length === 4 && d.opts.some((t) => /韩国/.test(t)) && !d.opts.some((t) => /香港/.test(t)) && d.opts.some((t) => /日本 2 2 213 ms/.test(t)), d);
+  await pg.screenshot({ path: path.join(out, 'sstp-region.png') });
+  await calls();
+  await pg.locator('.ddm .opt', { hasText: '韩国' }).click(); await pg.waitForTimeout(500);
+  cs = await calls();
+  check('选韩国：类型和国家一起交给核心服务（自动选择只在韩国的 SSTP 里挑）', cs.some((x) => x.startsWith('PATCH /api/instances/') && x.includes('"region":"KR"') && x.includes('"exitType":"sstp"') && x.includes('"exitMode":"auto"')), cs);
+  r = await pg.evaluate(() => document.querySelector('button.row[aria-label="出口国家"]')?.innerText.replace(/\s+/g, ' '));
+  check('出口国家一行：写着 SSTP 和这一类在这个国家里能用的个数', /SSTP/.test(r) && /1 个可用/.test(r) && /住宅 1/.test(r) && /韩国/.test(r), r);
+  // 手动选出口：类型芯片和国家下拉一起筛
+  await pg.locator('button.sw[aria-label="出口自动选择"]').click(); await pg.waitForTimeout(500);
+  await pg.locator('button.row[aria-label="选出口"]').click(); await pg.waitForTimeout(400);
+  r = await pg.evaluate(() => ({ title: document.querySelector('.appbar h1')?.innerText.replace(/\s+/g, ' '), chips: [...document.querySelectorAll('.chips .chip')].map((e) => e.innerText.replace(/\s+/g, ' ')), n: document.querySelectorAll('.ls .iprow').length }));
+  check('出口列表：有类型芯片（全部类型 / ProxyIP / SSTP / SOCKS5）', /^出口/.test(r.title) && r.chips.includes('全部类型') && r.chips.some((t) => /^SSTP 5/.test(t)) && r.chips.some((t) => /^SOCKS5 1/.test(t)) && r.chips.some((t) => /^ProxyIP 3/.test(t)), r);
+  await pg.screenshot({ path: path.join(out, 'sstp-exit.png') });
+  await pg.locator('.chips .chip', { hasText: /^SSTP/ }).click(); await pg.waitForTimeout(300);
+  r = await pg.evaluate(() => [...document.querySelectorAll('.ls .iprow')].map((e) => e.innerText.replace(/\s+/g, ' ')));
+  check('出口列表：点 SSTP 只剩 SSTP 的（VPN Gate 的每一台都在）', r.length === 5 && r.every((t) => /vpn\d+/.test(t)) && r.filter((t) => /SSTP/.test(t)).length === 4 && !r.some((t) => /反代|SOCKS5|不指定/.test(t)), r);
+  await c.close();
+}
+// 同一台 VPN Gate 服务器在两个订阅里都测过（经不同的 Worker）：行上显示延迟低的那条，点延迟 / 下载要交给那个订阅；
+// 下载取两边测到的最高值（2026-11-18 真机发现：测速结果记在另一个订阅上，行上一直看不到）
+if (want('sstp')) {
+  const vg = JSON.parse(JSON.stringify(fixture)), s0 = vg.subscriptions[0];
+  const s1 = JSON.parse(JSON.stringify(s0)); s1.id = 'sub-two'; s1.name = 'two'; s1.pips = []; vg.subscriptions = [s0, s1];
+  const H = 'vpn188345165.opengw.net:1448', info = { ip: '111.217.31.206', country: 'JP', city: 'Nishinomiya', org: 'Sony Network' };
+  vg.exits = [{ id: 'vg1', updatedAt: 1, type: 'sstp', value: 'vpngate', label: 'VPN Gate', source: 'vpngate', expand: true, refreshHours: 3, resolvedAt: 1, resolved: [H], servers: [{ host: 'vpn188345165.opengw.net', ip: info.ip, port: 1448, cc: 'JP' }] }];
+  const pip = (delay, speed) => ({ id: 'vg1|' + H, type: 'sstp', value: 'vpn:vpn@' + H, label: 'VPN Gate', key: 'sstp|vpn:vpn@' + H, delay, cf: info, exit: info, ...(speed ? { speed } : {}) });
+  s0.pips.push(pip(246, 5.4)); s1.pips.push(pip(91));
+  const c = await mkctx(vg), pg = await c.newPage(); watch(pg, 'sstp2');
+  await pg.goto(base + 'app.html#exits/vg'); await pg.waitForTimeout(700);
+  let r = await pg.evaluate(() => document.querySelector('.librow')?.innerText.replace(/\s+/g, ' '));
+  check('VPN Gate 两个订阅都测过同一台：延迟显示低的 91 ms，下载显示另一个订阅测到的 5.4M', /91 ms/.test(r) && /5\.4M/.test(r), r);
+  await pg.evaluate(() => window.__calls.splice(0));
+  await pg.locator('.librow button.ld').click(); await pg.waitForTimeout(300);
+  await pg.locator('.librow button.lsp').click(); await pg.waitForTimeout(300);
+  const cs = await pg.evaluate(() => window.__calls.splice(0).filter((x) => x.m && x.m !== 'GET').map((x) => `${x.m} ${x.p}`));
+  check('VPN Gate 两个订阅：点延迟、点下载都交给行上显示的那个订阅（延迟低的 two）', cs.includes('POST /api/subscriptions/sub-two/ping') && cs.includes('POST /api/subscriptions/sub-two/speed'), cs);
+  await c.close();
 }
 console.log(flow.join('\n'));
 
