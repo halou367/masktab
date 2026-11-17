@@ -1262,15 +1262,26 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 			g.setOpen(true)
 		case !g.open:
 			// 真鼠标在收着的色条上。只是路过：展开由 hoverTick 管（停一小会儿才展开）。
-			// 没等展开就按下去了：马上展开（不放过渡），按的是哪一段色条就当作点了哪个标签（色条和标签左右位置一样）
+			// 没等展开就按下去了：马上展开（不放过渡），按的是哪一段色条就当作点了哪个标签的正中间
+			// （色条是一段挨一段排的，和展开后的标签左右对不上，所以要换算）
 			if ms != wmLButtonDown {
 				return 0
 			}
+			on := -1
+			for i, t := range g.tabs {
+				if t.ID == g.active {
+					on = i
+				}
+			}
+			hit := StripHit(g.lay, on, x, g.scale)
 			g.nearAt, g.awayAt = time.Time{}, time.Time{}
 			g.open = true
 			g.rect = Rect{}
 			g.place()
-			if len(g.lay.Slots) > 0 {
+			if hit >= 0 && hit < len(g.lay.Slots) {
+				tab := g.lay.Slots[hit].Tab
+				x, y = (tab.L+tab.R)/2, (tab.T+tab.B)/2
+			} else if len(g.lay.Slots) > 0 {
 				y = (g.lay.Slots[0].Tab.T + g.lay.Slots[0].Tab.B) / 2
 			}
 		}

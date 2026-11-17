@@ -261,12 +261,21 @@ func mix(a, b [3]int, t float64) [3]int {
 	return [3]int{int(lerp(float64(a[0]), float64(b[0]), t) + 0.5), int(lerp(float64(a[1]), float64(b[1]), t) + 0.5), int(lerp(float64(a[2]), float64(b[2]), t) + 0.5)}
 }
 
-// MorphRect 是一个标签在 e 这一刻占的位置：e = 0 是色条里它的那一段（StripRect），e = 1 是展开后的标签。
-// 当前的左右不变，只往下长；别的同时往两边长到标签那么宽。
-func MorphRect(tab Rect, active bool, scale, e float64) Rect {
-	s := StripRect(tab, active, scale)
+// MorphRect 是一个标签在 e 这一刻占的位置：e = 0 是色条里它的那一段 strip（见 Strip），e = 1 是展开后的标签 tab。
+// 四条边各自匀着过去：往下长的同时滑到标签的位置、长到标签那么宽。
+func MorphRect(tab, strip Rect, e float64) Rect {
 	at := func(a, b int) int { return int(lerp(float64(a), float64(b), e) + 0.5) }
-	return Rect{at(s.L, tab.L), at(s.T, tab.T), at(s.R, tab.R), at(s.B, tab.B)}
+	return Rect{at(strip.L, tab.L), at(strip.T, tab.T), at(strip.R, tab.R), at(strip.B, tab.B)}
+}
+
+// ActiveOf 返回当前实例是第几个标签；没有返回 -1。
+func ActiveOf(tabs []TabPaint) int {
+	for i, t := range tabs {
+		if t.Active {
+			return i
+		}
+	}
+	return -1
 }
 
 // InkAlpha 是 e 这一刻字、×、＋ 有多实：前一半不出现（标签还太扁），后一半渐渐出来。
@@ -308,12 +317,13 @@ func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlu
 		}
 	}
 	ink := InkAlpha(e)
+	strip := Strip(l, ActiveOf(tabs), scale)
 	for i, s := range l.Slots {
 		if i >= len(tabs) {
 			break
 		}
 		t := tabs[i]
-		r := MorphRect(s.Tab, t.Active, scale, e)
+		r := MorphRect(s.Tab, strip[i], e)
 		rad := math.Min(lerp(2.5, 7, e)*scale, float64(r.H())/2)
 		c.RoundRect(r, rad, mix(t.StripColor(lk), t.Fill(lk), e))
 		if ink > 0 && s.Close.W() > 0 && (t.Active || t.Hover) {

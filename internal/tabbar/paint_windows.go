@@ -202,6 +202,7 @@ func (g *group) frame(sf *surface, e float64) {
 		copy(sf.keep, c.Pix)
 		g.m.fonts(g.scale)
 		var boxes []Rect
+		strip := Strip(g.lay, ActiveOf(paints), g.scale)
 		for i, s := range g.lay.Slots {
 			if i >= len(g.tabs) {
 				break
@@ -212,7 +213,7 @@ func (g *group) frame(sf *surface, e float64) {
 			}
 			_, _, _ = pSelectObject.Call(sf.mem, f)
 			_, _, _ = pSetTextColor.Call(sf.mem, rgb(paints[i].Ink(lk)))
-			r := MorphRect(s.Tab, paints[i].Active, g.scale, e)
+			r := MorphRect(s.Tab, strip[i], e)
 			tr := rect32{int32(r.L + px(11, g.scale)), int32(r.T), int32(r.R - px(8, g.scale)), int32(r.B)}
 			if s.Close.W() > 0 && (paints[i].Active || paints[i].Hover) {
 				tr.R = int32(s.Close.L - px(2, g.scale))

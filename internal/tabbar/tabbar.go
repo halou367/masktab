@@ -208,7 +208,7 @@ func Filled(win, vis, work Rect, scale float64) Rect {
 // ---------- 自动收起（decisions UI-17）：平时是窗口顶上的一条色条，鼠标放上去才展开 ----------
 //
 // 收起：每个实例一小段颜色，画在窗口最上面 5 像素里（那里本来只是标题栏的底色），不出窗口的边。
-// 一样粗；当前的那段是实例自己的颜色、和标签一样宽，别的暗一些灰一些、短一些（见 StripRect、StripColor）。
+// 一样粗、段与段之间的缝一样宽；当前的那段是实例自己的颜色、和标签一样宽，别的暗一些灰一些、短一些（见 Strip、StripColor）。
 // 接鼠标的那一条比看得见的色条高：还包括窗口上沿外面的 4 像素（看不见）。这一条是实例栏自己的窗口：
 // 鼠标到了上面不会变成“改窗口大小”的箭头，也拖不到窗口，只管展开。
 // 展开：整条栏盖在浏览器自己那排标签页上，鼠标离开就收回去。右上角三个窗口按钮不盖。
@@ -220,19 +220,44 @@ const (
 	openDY  = 6   // 展开时标签比平时靠下这么多：stripUp，再加 2（和浏览器的标签页一样从窗口的第 7 个像素开始）
 )
 
-// stripShort 是色条里没选中的那一段有多长（占它那个标签的宽的几成，居中）。
+// stripShort 是色条里没选中的那一段有多长（占标签的宽的几成）。
 const stripShort = 0.55
 
-// StripRect 是收起时一个实例在色条里的那一段（相对实例栏左上角）。tab 是展开后它的标签。
-// 都一样粗、都在窗口里面；当前的和标签一样宽，别的短、居中。
-func StripRect(tab Rect, active bool, scale float64) Rect {
-	r := Rect{tab.L, px(stripUp, scale), tab.R, px(StripH, scale)}
-	if !active {
-		w := int(float64(tab.W())*stripShort + 0.5)
-		r.L = tab.L + (tab.W()-w)/2
-		r.R = r.L + w
+// Strip 是收起时的色条：每个实例一段（相对实例栏左上角），从第一个标签的左边起一段挨一段排，**段与段之间的缝都一样宽**（和标签之间的缝一样）。
+// 都一样粗、都在窗口里面；当前的（active，没有就传 -1）和标签一样宽，别的短。所以除了第一段，色条和展开后的标签左右对不上，展开时各自滑过去。
+func Strip(l Layout, active int, scale float64) []Rect {
+	out := make([]Rect, len(l.Slots))
+	if len(out) == 0 {
+		return out
 	}
-	return r
+	gap, x := stripGap(l, scale), l.Slots[0].Tab.L
+	for i, s := range l.Slots {
+		w := s.Tab.W()
+		if i != active {
+			w = int(float64(w)*stripShort + 0.5)
+		}
+		out[i] = Rect{x, px(stripUp, scale), x + w, px(StripH, scale)}
+		x += w + gap
+	}
+	return out
+}
+
+func stripGap(l Layout, scale float64) int {
+	if len(l.Slots) > 1 {
+		return l.Slots[1].Tab.L - l.Slots[0].Tab.R
+	}
+	return px(tabGap, scale)
+}
+
+// StripHit 报告收起时横坐标 x（相对实例栏左边）落在色条的第几段上；缝算给近的那一段，色条以外返回 -1。
+func StripHit(l Layout, active, x int, scale float64) int {
+	half := (stripGap(l, scale) + 1) / 2
+	for i, r := range Strip(l, active, scale) {
+		if x >= r.L-half && x < r.R+half {
+			return i
+		}
+	}
+	return -1
 }
 
 // CompactRect 是自动收起时实例栏的范围：左边和窗口对齐，右边让出窗口按钮，上面比窗口高出 stripUp（接鼠标用，不画东西）。
@@ -267,15 +292,15 @@ func LayCompact(width, n int, scale float64) Layout {
 	return Lay(width, n, scale).Down(px(openDY, scale))
 }
 
-// Band 是收起时“鼠标放上去就展开”的那一条（相对实例栏左上角）：从第一个标签左边一点到 ＋ 的位置，
-// 上下是窗口上沿外面 stripUp 加色条的高。
+// Band 是收起时“鼠标放上去就展开”的那一条（相对实例栏左上角）：左右是整条色条再各放宽 4 像素，
+// 上下是窗口上沿外面 stripUp 加色条的高。色条有多长和哪个是当前的无关（标签都一样宽）。没有实例时是 ＋ 的位置。
 // 段与段之间的缝也算（画的时候这一条整个都接鼠标），不然鼠标正好落在缝里就漏到下面的窗口上去了。
 func Band(l Layout, scale float64) Rect {
-	left := l.Plus.L
-	if len(l.Slots) > 0 {
-		left = l.Slots[0].Tab.L
+	if len(l.Slots) == 0 {
+		return Rect{l.Plus.L, 0, l.Plus.R, px(StripH, scale)}
 	}
-	return Rect{max(0, left-px(4, scale)), 0, l.Plus.R, px(StripH, scale)}
+	st := Strip(l, 0, scale)
+	return Rect{max(0, st[0].L-px(4, scale)), 0, st[len(st)-1].R + px(4, scale), px(StripH, scale)}
 }
 
 // Reach 报告鼠标是不是在收起的色条上（该展开了）。
