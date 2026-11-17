@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/halou367/masktab/internal/kernel"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/probe"
+	"github.com/halou367/masktab/internal/tabbar"
 )
 
 // Serve 启动本地接口（硬规则 R-4：只监听 127.0.0.1；校验令牌；带 Origin 的请求必须来自伴随扩展）。
@@ -283,6 +285,7 @@ func (a *App) State(me string) map[string]any {
 		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts, "ipq": a.ipqViewLocked(),
 		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version, "update": a.updateStateLocked(),
 		"host":        a.Host.Name,
+		"os":          runtime.GOOS,
 		"kernel":      map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": a.kernelVersion(), "path": a.kernelExe},
 		"core":        map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
 		"net":         a.netInfoLocked(),
@@ -828,6 +831,8 @@ func (a *App) routes(mux *http.ServeMux) {
 		a.healed(changed)
 		reply(w, map[string]any{"changed": len(changed)}, nil)
 	})
+	// 合并窗口的现状（实例栏在哪、哪个窗口显示着）：诊断和实机测试用
+	mux.HandleFunc("GET /api/debug/tabbar", func(w http.ResponseWriter, r *http.Request) { reply(w, tabbar.Debug(), nil) })
 	mux.HandleFunc("PATCH /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		s := a.Settings
@@ -842,6 +847,7 @@ func (a *App) routes(mux *http.ServeMux) {
 		a.saveLocked("settings")
 		a.bumpLocked("state", "")
 		a.mu.Unlock()
+		tabbar.Poke()
 		if bindChanged { // 换了绑定网卡：重新识别并重载 mihomo 配置
 			a.refreshBind()
 			reply(w, nil, a.applyConfig())

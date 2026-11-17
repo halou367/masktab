@@ -23,6 +23,7 @@ import (
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/probe"
 	"github.com/halou367/masktab/internal/proxy"
+	"github.com/halou367/masktab/internal/tabbar"
 )
 
 // Start 打开普通窗口 #0，并恢复上次未正常关闭的实例（F-INST-1、F-SESSION）。
@@ -86,6 +87,7 @@ func (a *App) Launch(id string) error {
 	if r.Running || r.Starting {
 		a.bumpLocked("focus", id)
 		a.mu.Unlock()
+		tabbar.Focus(id) // 合并窗口：它的窗口可能正藏着，切过去
 		return nil
 	}
 	// 这两种情况窗口确实开不了（没有浏览器；没有代理内核时伪装实例一出网就是真实 IP，硬规则 R-1）。
@@ -556,6 +558,7 @@ func (a *App) Shutdown() {
 }
 
 func (a *App) shutdown() {
+	tabbar.Release() // 合并窗口：藏着的窗口先放出来，之后不再管
 	a.mu.Lock()
 	a.quitting = true
 	var ids []string

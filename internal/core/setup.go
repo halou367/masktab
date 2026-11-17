@@ -193,6 +193,7 @@ func (a *App) ensureKernel(onDownload func()) error {
 		close(a.kernelUp)
 		go a.exitRefreshLoop()
 		go a.taskbarLoop()
+		go a.mergeLoop()
 	}
 	return nil
 }

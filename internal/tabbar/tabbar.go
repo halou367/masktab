@@ -1,0 +1,220 @@
+// Package tabbar：把各实例的窗口“合并”成一个（Windows）。
+//
+// 做法（decisions UI-15）：每个实例仍然是自己的浏览器进程、自己的窗口，隔离一点不动；
+// 我们只在当前那个窗口的正上方贴一条彩色的实例栏，点哪个实例就把它的窗口摆到同一个位置显示出来、把别的藏起来。
+// 看起来是一个窗口、上面多了一排彩色标签。
+//
+// 这个包不知道“实例”“代理”是什么：核心服务通过 Host 告诉它有哪些标签、对应哪个进程，它只管窗口。
+// 与平台无关的部分（排版、摆放的计算）在这个文件里，有测试；动窗口的部分在 bar_windows.go。
+package tabbar
+
+import "fmt"
+
+// Tab 是实例栏上的一个标签 = 一个正在运行的实例。
+type Tab struct {
+	ID    string
+	No    int
+	Name  string
+	Color [3]int // 实例的颜色
+	Pid   int    // 这个实例的浏览器主进程
+}
+
+// Item 是“＋”菜单里的一项。
+type Item struct {
+	Key   string // 选中后原样交给 Host.Pick
+	Label string
+}
+
+// State 是核心服务这一刻的情况。
+type State struct {
+	Enabled bool
+	Dark    bool
+	Tabs    []Tab  // 按显示顺序
+	Menu    []Item // “＋”菜单：还没打开的实例、新建
+}
+
+// Host 由核心服务实现。
+type Host interface {
+	State() State
+	Close(id string) // 点了标签上的 ×：关闭这个实例
+	Pick(key string) // 选了“＋”菜单里的一项
+	Logf(format string, args ...any)
+}
+
+// Label 是标签上的字。
+func (t Tab) Label() string {
+	switch {
+	case t.No == 0 && t.Name == "":
+		return "普通窗口"
+	case t.Name == "":
+		return fmt.Sprintf("#%d", t.No)
+	}
+	return fmt.Sprintf("#%d %s", t.No, t.Name)
+}
+
+// Rect 是屏幕上的一块（像素）。
+type Rect struct{ L, T, R, B int }
+
+func (r Rect) W() int               { return r.R - r.L }
+func (r Rect) H() int               { return r.B - r.T }
+func (r Rect) Has(x, y int) bool    { return x >= r.L && x < r.R && y >= r.T && y < r.B }
+func (r Rect) Move(dx, dy int) Rect { return Rect{r.L + dx, r.T + dy, r.R + dx, r.B + dy} }
+
+// 实例栏的尺寸（100% 缩放下的像素；乘以缩放比例后使用）。
+const (
+	BarH    = 34  // 栏高
+	tabH    = 26  // 标签高
+	tabMaxW = 190 // 标签最宽
+	tabMinW = 44  // 再窄就只剩编号
+	tabGap  = 4
+	padX    = 8  // 栏左右留白
+	plusW   = 28 // “＋”
+	closeW  = 18 // “×”的点击范围
+	// 栏的下沿压住窗口上沿多少：盖住窗口顶上那一条边线和圆角缺口，两者看起来连成一体
+	Overlap = 1
+)
+
+// Slot 是一个标签占的位置（相对实例栏左上角）。
+type Slot struct {
+	Tab   Rect
+	Close Rect // “×”；标签太窄时为空
+}
+
+// Layout 是一排标签的排版结果。
+type Layout struct {
+	Slots []Slot
+	Plus  Rect
+}
+
+func px(v int, scale float64) int { return int(float64(v)*scale + 0.5) }
+
+// Lay 把 n 个标签排进宽 width 的实例栏：平分空间，最宽 tabMaxW，排不下就一起变窄。
+func Lay(width, n int, scale float64) Layout {
+	var l Layout
+	pad, gap, plus, h := px(padX, scale), px(tabGap, scale), px(plusW, scale), px(tabH, scale)
+	top := (px(BarH, scale) - h) / 2
+	if n <= 0 {
+		l.Plus = Rect{pad, top, pad + plus, top + h}
+		return l
+	}
+	room := width - 2*pad - plus - gap*n
+	w := room / n
+	if m := px(tabMaxW, scale); w > m {
+		w = m
+	}
+	if w < px(12, scale) {
+		w = px(12, scale)
+	}
+	x := pad
+	for i := 0; i < n; i++ {
+		s := Slot{Tab: Rect{x, top, x + w, top + h}}
+		if w >= px(tabMinW+closeW, scale) {
+			c := px(closeW, scale)
+			s.Close = Rect{x + w - c - px(4, scale), top + (h-c)/2, x + w - px(4, scale), top + (h-c)/2 + c}
+		}
+		l.Slots = append(l.Slots, s)
+		x += w + gap
+	}
+	l.Plus = Rect{x, top, x + plus, top + h}
+	return l
+}
+
+// 点到了什么。
+const (
+	HitNone  = iota // 空白处：拖动整个窗口
+	HitTab          // 标签
+	HitClose        // 标签上的 ×
+	HitPlus         // ＋
+)
+
+// Hit 返回 (x, y) 落在哪里；HitTab / HitClose 时 idx 是第几个标签。
+func (l Layout) Hit(x, y int) (kind, idx int) {
+	for i, s := range l.Slots {
+		if s.Close.W() > 0 && s.Close.Has(x, y) {
+			return HitClose, i
+		}
+		if s.Tab.Has(x, y) {
+			return HitTab, i
+		}
+	}
+	if l.Plus.Has(x, y) {
+		return HitPlus, -1
+	}
+	return HitNone, -1
+}
+
+// BarRect 是实例栏该在的位置：贴在窗口（看得见的那一圈 vis）正上方，同宽。
+func BarRect(vis Rect, scale float64) Rect {
+	h := px(BarH, scale)
+	return Rect{vis.L, vis.T - h + px(Overlap, scale), vis.R, vis.T + px(Overlap, scale)}
+}
+
+// Fit 给实例栏腾地方：窗口顶到了屏幕可用区域的上沿（贴边、被拖上去）时把它往下挪，挪了以后超出下沿就缩短。
+// win 是窗口的外框，vis 是其中看得见的那一圈（Windows 的窗口外面有一圈看不见的边），work 是屏幕可用区域。
+// 返回新的外框，以及是不是变了。
+func Fit(win, vis, work Rect, scale float64) (Rect, bool) {
+	need := work.T + px(BarH, scale) - px(Overlap, scale)
+	if vis.T >= need {
+		return win, false
+	}
+	d := need - vis.T
+	out := win.Move(0, d)
+	if over := vis.B + d - work.B; over > 0 {
+		out.B -= over
+		if out.H() < px(200, scale) {
+			out.B = out.T + px(200, scale)
+		}
+	}
+	return out, true
+}
+
+// Filled 给出“铺满屏幕”时窗口的外框：看得见的那一圈占满可用区域里实例栏下面的部分。
+// 浏览器自己的最大化不给实例栏留地方，所以合并窗口里的“最大化”是这个。
+func Filled(win, vis, work Rect, scale float64) Rect {
+	top := work.T + px(BarH, scale) - px(Overlap, scale)
+	return Rect{work.L - (vis.L - win.L), top - (vis.T - win.T), work.R + (win.R - vis.R), work.B + (win.B - vis.B)}
+}
+
+// Next 在当前标签没了以后选下一个：原来排在它后面的第一个还在的；没有就取它前面最近的。
+// order 是它没之前的顺序，alive 是现在还在的。
+func Next(order []string, gone string, alive map[string]bool) string {
+	at := -1
+	for i, id := range order {
+		if id == gone {
+			at = i
+		}
+	}
+	if at < 0 {
+		for _, id := range order {
+			if alive[id] {
+				return id
+			}
+		}
+		return ""
+	}
+	for i := at + 1; i < len(order); i++ {
+		if alive[order[i]] {
+			return order[i]
+		}
+	}
+	for i := at - 1; i >= 0; i-- {
+		if alive[order[i]] {
+			return order[i]
+		}
+	}
+	return ""
+}
+
+// Tint 把实例颜色 c 按比例 a（0 ~ 1）盖在底色 bg 上：没选中的标签用淡淡的实例色。
+func Tint(c, bg [3]int, a float64) [3]int {
+	var o [3]int
+	for i := range o {
+		o[i] = int(float64(c[i])*a + float64(bg[i])*(1-a) + 0.5)
+	}
+	return o
+}
+
+// OnDark 报告颜色 c 上面该不该用白字。
+func OnDark(c [3]int) bool {
+	return 299*c[0]+587*c[1]+114*c[2] < 150*1000
+}

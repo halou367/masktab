@@ -214,7 +214,9 @@ type Settings struct {
 	// 界面（2026-11-15，Chrome 风格界面，decisions UI-1）：两端共用
 	Theme     string     `json:"theme,omitempty"`     // 外观：空 / system = 跟随浏览器或系统的深浅色（默认）| dark 深色 | light 浅色
 	Bookmarks []Bookmark `json:"bookmarks,omitempty"` // 新标签页上的书签（全部实例共用）
-	NTPHide   []string   `json:"ntpHide,omitempty"`   // 新标签页上不显示的部分：card | bookmarks | recent | accounts
+	// 合并窗口（只有 Windows，decisions UI-15）：各实例的窗口叠在同一个位置，顶上一排彩色的实例标签，点哪个显示哪个
+	MergeWindows bool     `json:"mergeWindows,omitempty"`
+	NTPHide      []string `json:"ntpHide,omitempty"` // 新标签页上不显示的部分：card | bookmarks | recent | accounts
 	// 人机验证诊断（只有手机用，decisions A-9）：这里列出的伪装项暂时关掉，用来定位“验证过不去”是哪一项引起的。
 	// canvas | audio | hw | lang | tz | cfframe | block | ua | tp | fpp | sw；核心服务只存不解释，由 app 和内置扩展执行。
 	FPOff []string `json:"fpOff,omitempty"`
