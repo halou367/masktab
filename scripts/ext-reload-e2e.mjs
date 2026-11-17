@@ -131,7 +131,7 @@ try {
   st = await api('GET', '/api/state'); const ia = st.instances.find((i) => i.id === a.id);
   check(!!m5 && !(ia.rt.needRestart || []).includes('extensions') && ia.rt.pid !== pids[0], '重启实例一之后：manifest 里新加的那一段也生效了，“需重启”消失', JSON.stringify({ m: await pageMarks(a.id).catch(() => ''), need: ia.rt.needRestart }));
 
-  // 在 chrome://extensions 里打开“在无痕模式下启用”：扩展会重新加载一次，不该因为“没开开发者模式”被停用（需求方 2026-11-18 遇到：
+  // 在 chrome://extensions 里打开“在无痕模式下启用”：扩展会重新加载一次，不该因为“没开开发者模式”被停用（需求方 2026-11-17 遇到：
   // 伴随扩展被停用，还要自己开开发者模式、再把扩展打开）。伴随扩展和从文件夹加的扩展都查；重启实例以后也要还开着、还记着。
   const extState = async (id, turnOn) => {
     const c = await cdp(prof(id));

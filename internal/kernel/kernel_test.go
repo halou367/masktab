@@ -25,6 +25,20 @@ func TestArgs(t *testing.T) {
 			t.Errorf("缺少参数 %s", w)
 		}
 	}
+	// 不带这个参数的话，用户在扩展页点一下“在无痕模式下启用”，伴随扩展就被内核停用（见 commonArgs 里的说明）。
+	// 内核只认最后一个 --disable-features，所以两个适配器都只能有一个。
+	for _, k := range []string{"fingerprint-chromium", "ungoogled"} {
+		n, ok := 0, false
+		for _, x := range Get(k).Args(l) {
+			if strings.HasPrefix(x, "--disable-features=") {
+				n++
+				ok = ok || strings.Contains(","+strings.TrimPrefix(x, "--disable-features=")+",", ",ExtensionDisableUnsupportedDeveloper,")
+			}
+		}
+		if n != 1 || !ok {
+			t.Errorf("%s：--disable-features 应该正好有一个、里面有 ExtensionDisableUnsupportedDeveloper（有 %d 个，含=%v）", k, n, ok)
+		}
+	}
 	l.Normal = true
 	for _, x := range Get("fingerprint-chromium").Args(l) {
 		if strings.HasPrefix(x, "--fingerprint") || strings.HasPrefix(x, "--timezone") {

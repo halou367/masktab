@@ -90,9 +90,9 @@ func commonArgs(l Launch) []string {
 		fmt.Sprintf("--window-name=#%d", l.No),
 		// 没开“开发者模式”时，内核会把从文件夹加载的扩展停用（伴随扩展、本地扩展都是这样加载的）。刚启动时它不查，
 		// 可扩展一重新加载就查——在 chrome://extensions 里点一下“在无痕模式下启用”就会重新加载，于是伴随扩展被停用，
-		// 还要用户自己去开开发者模式、再把扩展打开；关掉内核重开也好不了（需求方 2026-11-18 遇到）。
+		// 还要用户自己去开开发者模式、再把扩展打开；关掉内核重开也好不了（需求方 2026-11-17 遇到，decisions U-2 补充）。
 		// 开发者模式是“受保护偏好”，从外面写不进去（decisions U-2），所以用内核自己的开关把这项检查关掉。
-		// 已经被这样停用的，带上这个参数重开就自己好了。实测见 /home/user/tools/extexp/incog.mjs 和冒烟（scripts/ext-reload-e2e.mjs）。
+		// 已经被这样停用的，带上这个参数重开就自己好了。每次冒烟都实测（scripts/ext-reload-e2e.mjs）。
 		// 注意：内核只认最后一个 --disable-features，以后要再关别的功能得写在同一个参数里（用逗号隔开）。
 		"--disable-features=ExtensionDisableUnsupportedDeveloper",
 	}
