@@ -24,7 +24,12 @@ const linuxOnly = process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu
 const KARGS = [...headless, ...linuxOnly, '--remote-debugging-port=0', '--remote-allow-origins=*'];
 
 // ---- 一个只回固定网页的本地站点（不依赖外网）----
-const site = http.createServer((q, s) => { s.setHeader('Content-Type', 'text/html; charset=utf-8'); s.end('<!doctype html><title>smoke</title><body>smoke'); });
+// /sub 是一份假订阅：两个连不上的节点（127.0.0.1:9），只用来检查“订阅 / 节点出问题时窗口照样能开”。
+const SUB = 'proxies:\n  - {name: smoke-dead-1, type: ss, server: 127.0.0.1, port: 9, cipher: aes-128-gcm, password: x}\n  - {name: smoke-dead-2, type: ss, server: 127.0.0.1, port: 10, cipher: aes-128-gcm, password: x}\n';
+const site = http.createServer((q, s) => {
+  if (q.url.startsWith('/sub')) { s.setHeader('Content-Type', 'text/yaml; charset=utf-8'); s.end(SUB); return; }
+  s.setHeader('Content-Type', 'text/html; charset=utf-8'); s.end('<!doctype html><title>smoke</title><body>smoke');
+});
 await new Promise((r) => site.listen(0, '127.0.0.1', r));
 const PAGE = `http://127.0.0.1:${site.address().port}/`;
 
@@ -143,6 +148,12 @@ async function waitRunning(id, ms = 60000) {
     await sleep(500);
   }
   return null;
+}
+// 等实例真的关掉：“关闭”的请求马上返回，内核要过几秒才退（无头模式下是 4 秒后被结束），这期间再点“打开”只会把还没关完的窗口切到前面。
+async function waitStopped(id, ms = 20000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { const i = await inst(id); if (!i || (!i.rt.running && !i.rt.starting)) return true; await sleep(300); }
+  return false;
 }
 function findKernel(dir) {
   const want = process.platform === 'win32' ? 'chrome.exe' : 'chrome';
@@ -281,6 +292,62 @@ try {
     const fa3 = (await evalPage(prof(a.id), PAGE, FP)).value;
     check(fa && fa3 && fa.canvas === fa3.canvas, '重启后指纹不变');
   }
+
+  // 6c. 订阅删了 / 节点不通，窗口照样能开，开着的窗口里能改（决策 F-HEAL）。
+  //     以前：订阅一删，用它的实例“没能打开”；节点面板又只在实例自己的窗口里，于是改不了也开不了。
+  //     这一段自己建的实例、订阅自己删掉，不留给后面的步骤。
+  try {
+    const s1 = await api('POST', '/api/subscriptions', { name: 'smoke-sub', url: PAGE + 'sub' });
+    check(s1.nodes === 2, '添加订阅（本地假订阅，两个连不上的节点）', JSON.stringify(s1));
+    const d = await api('POST', '/api/instances', {});
+    { const d0 = await inst(d.id); if (d0?.proxy.state !== 'on' || d0.proxy.subscriptionId !== s1.id) await api('PATCH', `/api/instances/${d.id}`, { proxy: { state: 'on', subscriptionId: s1.id } }); }
+    await api('POST', `/api/instances/${d.id}/launch`).catch(() => {});
+    let id1 = await waitRunning(d.id, 90000);
+    check(!!id1 && id1.proxy.state === 'on', '节点全都连不上：窗口照样打开，代理没有被改成直连', id1 ? `提示：${id1.rt.error || id1.rt.cut || '（无）'}` : '没能打开：' + ((await inst(d.id))?.rt?.error || ''));
+    check(!!id1 && !id1.rt.exit && !!(id1.rt.error || id1.rt.cut), '节点连不上时窗口是断着网的，界面上有原因', id1 ? JSON.stringify({ error: id1.rt.error, cut: id1.rt.cut }) : '');
+    await api('POST', `/api/instances/${d.id}/stop`); await waitStopped(d.id);
+    try { fs.rmSync(path.join(prof(d.id), 'DevToolsActivePort')); } catch {}
+    const del = await api('DELETE', `/api/subscriptions/${s1.id}`);
+    check(Array.isArray(del.moved) && del.moved.includes(d.no) && del.to === '', '删掉唯一的订阅：接口说清楚哪些实例受影响', JSON.stringify(del));
+    const afterDel = await inst(d.id);
+    check(afterDel?.proxy.state === 'on' && !afterDel.proxy.subscriptionId, '删订阅后实例的代理还开着（不回落直连），只是没有线路', JSON.stringify(afterDel?.proxy).slice(0, 200));
+    await api('POST', `/api/instances/${d.id}/launch`).catch(() => {});
+    id1 = await waitRunning(d.id, 90000);
+    check(!!id1, '订阅删光以后这个实例还能打开（以前是“没能打开”的死循环）', id1 ? `提示：${id1.rt.error}` : '没能打开：' + ((await inst(d.id))?.rt?.error || ''));
+    check(!!id1 && /订阅/.test(id1.rt.error || '') && !id1.rt.exit, '打开的窗口断着网，并写明是没有订阅', id1 ? id1.rt.error : '');
+    if (id1) {
+      await screenshot(prof(d.id), `chrome-extension://${COMPANION}/newtab.html`, '8-nosub-newtab.png');
+      await screenshot(prof(d.id), `chrome-extension://${COMPANION}/app.html#node`, '8-nosub-node.png');
+      // 从别的实例的窗口里改它（它不用开着）：实例管理 → 抽屉 → 节点与出口
+      await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#instances/${d.id}`, '8-nosub-drawer.png');
+      await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#node/${d.id}`, '8-nosub-node-from-other.png');
+    }
+    // 再加回订阅：没有线路的实例自动接上，不用一个一个去选
+    const s2 = await api('POST', '/api/subscriptions', { name: 'smoke-sub-2', url: PAGE + 'sub?2' });
+    const adopted = await inst(d.id);
+    check(s2.adopted >= 1 && adopted?.proxy.subscriptionId === s2.id, '重新添加订阅后，没有线路的实例自动接到新订阅上', JSON.stringify({ adopted: s2.adopted, sub: adopted?.proxy.subscriptionId }));
+    // 改订阅地址不换 id：用它的实例不用重选
+    await api('PATCH', `/api/subscriptions/${s2.id}`, { name: 'smoke-renamed', url: PAGE + 'sub?3' });
+    const st5 = await api('GET', '/api/state'); const sub5 = st5.subscriptions.find((x) => x.id === s2.id);
+    check(sub5?.name === 'smoke-renamed' && sub5.url.endsWith('sub?3') && st5.instances.find((x) => x.id === d.id)?.proxy.subscriptionId === s2.id, '订阅可以改名、改地址，id 不变，实例不用重选');
+    // 编号：改成别的号、和别人对调、整理成 1、2、3…
+    await api('PATCH', `/api/instances/${d.id}`, { no: 77 });
+    check((await inst(d.id))?.no === 77, '实例编号可以改');
+    const bNo = (await inst(b.id)).no;
+    await api('PATCH', `/api/instances/${d.id}`, { no: bNo });
+    check((await inst(d.id))?.no === bNo && (await inst(b.id))?.no === 77, '改成别人在用的编号：两个对调', `#${(await inst(d.id))?.no} / #${(await inst(b.id))?.no}`);
+    await api('POST', '/api/instances/renumber');
+    const nos = (await api('GET', '/api/state')).instances.filter((x) => x.no > 0).map((x) => x.no).sort((x, y) => x - y);
+    check(nos.every((n, k) => n === k + 1), '整理编号：重新排成 1、2、3…', nos.join(','));
+    const dNo = (await inst(d.id)).no;
+    await api('POST', `/api/instances/${d.id}/stop`).catch(() => {}); await waitStopped(d.id);
+    await api('DELETE', `/api/instances/${d.id}`);
+    await api('DELETE', `/api/subscriptions/${s2.id}`);
+    const fresh = await api('POST', '/api/instances', {});
+    check(fresh.no === dNo, '删掉一个实例后，新建的用回空出来的最小编号', `删的是 #${dNo}，新建的是 #${fresh.no}`);
+    await waitRunning(fresh.id, 30000); await api('POST', `/api/instances/${fresh.id}/stop`).catch(() => {}); await waitStopped(fresh.id);
+    await api('DELETE', `/api/instances/${fresh.id}`).catch(() => {});
+  } catch (e) { rec('fail', '订阅 / 节点出问题时仍能打开', e.message); }
 
   // 7. 清理
   for (const x of [a, b]) { await api('POST', `/api/instances/${x.id}/stop`).catch(() => {}); }

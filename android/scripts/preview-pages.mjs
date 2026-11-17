@@ -741,6 +741,156 @@ for (const w of [412, 320]) {
   check('新标签页的无障碍标签不和原生菜单项重名（伪装概况卡叫“伪装概况”）', hit.length === 0 && await pg.locator('[aria-label="伪装概况"]').count() === 1, hit);
   await pg.close();
 }
+// ---------- 订阅 / 节点没了也改得了（决策 F-HEAL，2026-11-17 用户反馈的死循环）----------
+// 以前：订阅删了 → 实例打不开 → 节点面板只在实例自己的窗口里 → 改不了。现在实例管理的抽屉里就能进这个实例的“节点与出口”，它不用开着。
+{
+  const NOSUB = '还没有订阅，添加订阅后才能上网';
+  const broken = (meId, withSub) => {
+    const s = JSON.parse(JSON.stringify(fixture));
+    if (!withSub) { s.subscriptions = []; s.settings.defaultSubscriptionId = ''; }
+    for (const i of s.instances) {
+      if (i.id === 'p1') continue; // #1 直连，好好地开着
+      if (!withSub) i.proxy = { state: 'on', auto: true, exitMode: 'auto', entryMode: 'auto', addressMode: 'custom' };
+      // #2 关着，上次没连上；#14 开着但断着网
+      i.rt = i.id === 'p2' ? { running: false, starting: false, error: withSub ? '' : NOSUB } : { ...i.rt, probe: null, latency: 0, cut: withSub ? '' : '还没有选订阅线路', error: withSub ? '' : NOSUB };
+      if (i.id === 'p2' && !withSub) i.rt.fixed = '订阅“机场”已删除，现在没有别的订阅：添加订阅后自动接上';
+    }
+    s.me = s.instances.find((x) => x.id === meId);
+    return s;
+  };
+  // 手机
+  {
+    const c = await mkctx(broken('p3', false));
+    const pg = await c.newPage(); watch(pg, 'heal-phone');
+    const calls = () => pg.evaluate(() => window.__calls.splice(0).filter((x) => x.m && x.m !== 'GET').map((x) => `${x.m} ${x.p}${x.b ? ' ' + JSON.stringify(x.b) : ''}`));
+    await pg.goto(base + 'app.html#instances'); await pg.waitForTimeout(700);
+    let r = await pg.evaluate(() => ({ warn: document.querySelector('.cardi[data-id="p2"] .cw')?.innerText || '', tidy: !!document.querySelector('.appbar button[title^="整理编号"]'), play: !!document.querySelector('.cardi[data-id="p2"] button[title="打开"]') }));
+    check('手机实例页：没订阅的实例卡片上写着原因，照样有“打开”，顶栏有“整理编号”', /订阅/.test(r.warn) && r.tidy && r.play, r);
+    await pg.screenshot({ path: path.join(out, 'heal-instances.png') });
+    await pg.locator('.cardi[data-id="p2"]').click(); await pg.waitForTimeout(300);
+    r = await pg.evaluate(() => { const d = document.querySelector('.drawer'); return { bad: d?.querySelector('.warn.bad')?.innerText || '', fixed: [...(d?.querySelectorAll('.warn:not(.bad)') || [])].map((e) => e.innerText).join('|'), row: d?.querySelector('button.row[aria-label="设置节点与出口"]')?.innerText || '', wide: d ? d.scrollWidth > d.clientWidth : true }; });
+    check('手机抽屉：有“节点与出口”一栏，写着没有订阅、程序替你改过什么，能点进去', /订阅/.test(r.bad) && /去改/.test(r.bad) && /已删除/.test(r.fixed) && /知道了/.test(r.fixed) && /还没有订阅/.test(r.row) && !r.wide, r);
+    await pg.screenshot({ path: path.join(out, 'heal-drawer.png') });
+    await pg.locator('.drawer button.row[aria-label="设置节点与出口"]').click(); await pg.waitForTimeout(500);
+    r = await pg.evaluate(() => ({ hash: location.hash.slice(1), h1: (document.querySelector('.appbar h1')?.childNodes[0]?.textContent || '').trim(), txt: document.getElementById('root').innerText.replace(/\s+/g, ' ').slice(0, 400), drawer: !!document.querySelector('.drawer'),
+      acts: [...document.querySelectorAll('.warn .lk')].map((e) => e.innerText), open: [...document.querySelectorAll('.row .btn')].map((e) => e.innerText) }));
+    check('手机：从抽屉进到 #2 的节点页（它没在运行），写明改的是谁、能直接打开、提示旁边有“添加订阅”', r.hash === 'node/p2' && r.h1 === '节点与出口' && !r.drawer && /#2 carol@proton\.me/.test(r.txt) && /没在运行/.test(r.txt) && r.acts.includes('添加订阅') && r.open.includes('打开'), r);
+    await pg.screenshot({ path: path.join(out, 'heal-node.png'), fullPage: true });
+    await calls();
+    await pg.locator('.row .btn', { hasText: '打开' }).click(); await pg.waitForTimeout(300);
+    let cs = await calls();
+    check('手机：在节点页点“打开”，打开的是 #2 不是本窗口这个', cs.includes('POST /api/instances/p2/launch'), cs);
+    await pg.locator('.warn .lk', { hasText: '知道了' }).click(); await pg.waitForTimeout(300);
+    cs = await calls();
+    check('手机：“知道了”收起程序改动的提示（发给 #2）', cs.includes('POST /api/instances/p2/ack'), cs);
+    await pg.locator('.sw[aria-label="关闭代理"], [role="switch"][aria-label="关闭代理"], button[aria-label="关闭代理"]').first().click(); await pg.waitForTimeout(300);
+    cs = await calls();
+    check('手机：节点页的开关改的是 #2 的代理', cs.some((x) => x.startsWith('PATCH /api/instances/p2 ') && /"state":"off"/.test(x)), cs);
+    await pg.evaluate(() => { location.hash = '__back'; }); await pg.waitForTimeout(400);
+    r = await pg.evaluate(() => ({ hash: location.hash.slice(1), drawer: !!document.querySelector('.drawer') }));
+    check('手机：系统返回键从 #2 的节点页回到它的抽屉', r.hash === 'instances/p2' && r.drawer, r);
+    // 改编号、整理编号
+    await calls();
+    await pg.locator('.drawer .dh button[title="改编号"]').click(); await pg.waitForTimeout(300);
+    await pg.locator('.dlg input').fill('7'); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(300);
+    cs = await calls();
+    check('手机抽屉：点编号能改（发 PATCH no）', cs.includes('PATCH /api/instances/p2 {"no":7}'), cs);
+    await pg.locator('.drawer .dh button[title="改编号"]').click(); await pg.waitForTimeout(300);
+    await pg.locator('.dlg input').fill('0'); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(300);
+    cs = await calls();
+    check('手机抽屉：编号填 0 不发请求', !cs.some((x) => x.startsWith('PATCH /api/instances/p2')), cs);
+    await pg.locator('.drawer button[title="收起"]').click(); await pg.waitForTimeout(300);
+    await pg.locator('.appbar button[title^="整理编号"]').click(); await pg.waitForTimeout(300);
+    const note = await pg.evaluate(() => document.querySelector('.dlg .note')?.innerText || '');
+    await pg.screenshot({ path: path.join(out, 'heal-renumber.png') });
+    await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(300);
+    cs = await calls();
+    check('手机实例页：“整理编号”先说清楚谁变成几号，确认后才发请求', /#14 → #3/.test(note) && cs.includes('POST /api/instances/renumber'), { note, cs });
+    // 本窗口这个实例断着网：新标签页最上面一行红的，点了去节点页
+    await pg.goto('about:blank'); await pg.goto(base + 'newtab.html#inst=p3'); await pg.waitForTimeout(700);
+    r = await pg.evaluate(() => { const b = document.querySelector('.nswarn.fix'); return { t: b?.innerText.replace(/\s+/g, ' ') || '', wide: document.documentElement.scrollWidth > innerWidth, w: b ? Math.round(b.getBoundingClientRect().width) : 0 }; });
+    check('手机新标签页：断着网时最上面写明原因，能点去改', /断网中（没有直连）：还没有订阅/.test(r.t) && /去改/.test(r.t) && !r.wide && r.w > 300, r);
+    await pg.screenshot({ path: path.join(out, 'heal-newtab.png') });
+    await c.close();
+  }
+  // 手机：订阅还在时，订阅那一页能改地址、删除前说清楚后果
+  {
+    const c = await mkctx(broken('p3', true));
+    const pg = await c.newPage(); watch(pg, 'heal-subs');
+    const calls = () => pg.evaluate(() => window.__calls.splice(0).filter((x) => x.m && x.m !== 'GET').map((x) => `${x.m} ${x.p}${x.b ? ' ' + JSON.stringify(x.b) : ''}`));
+    const SID = fixture.subscriptions[0].id;
+    await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(700);
+    const subRow = pg.locator('button.row', { hasText: fixture.subscriptions[0].name }).first();
+    await subRow.click(); await pg.waitForTimeout(300);
+    const opts = await pg.evaluate(() => [...document.querySelectorAll('.scrim .opt')].map((e) => e.innerText.trim()));
+    check('订阅的菜单里有“修改订阅地址”“改名”', opts.includes('修改订阅地址') && opts.includes('改名') && opts.includes('删除订阅'), opts);
+    await pg.locator('.scrim .opt', { hasText: '修改订阅地址' }).click(); await pg.waitForTimeout(300);
+    const pre = await pg.locator('.dlg input').inputValue();
+    await pg.screenshot({ path: path.join(out, 'heal-sub-url.png') });
+    await pg.locator('.dlg input').fill('https://new.example.com/sub?token=2'); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(300);
+    let cs = await calls();
+    check('修改订阅地址：输入框里先填着原地址，保存发 PATCH（订阅还是这一个）', pre === fixture.subscriptions[0].url && cs.includes(`PATCH /api/subscriptions/${SID} {"url":"https://new.example.com/sub?token=2"}`), { pre, cs });
+    await subRow.click(); await pg.waitForTimeout(300);
+    await pg.locator('.scrim .opt', { hasText: '删除订阅' }).click(); await pg.waitForTimeout(300);
+    const note = await pg.evaluate(() => document.querySelector('.dlg .note')?.innerText || '');
+    await pg.screenshot({ path: path.join(out, 'heal-sub-del.png') });
+    cs = await calls();
+    check('删除订阅前先问，写明哪些实例在用、删了以后会怎样（最后一个订阅：断网但窗口照样能开）', /#2、#14/.test(note) && /最后一个订阅/.test(note) && /照样能打开/.test(note) && !cs.some((x) => x.startsWith('DELETE')), { note, cs });
+    await pg.locator('.dlg .btn.danger').click(); await pg.waitForTimeout(300);
+    cs = await calls();
+    check('确认后才删订阅', cs.includes(`DELETE /api/subscriptions/${SID}`), cs);
+    await c.close();
+  }
+  // 电脑：本窗口是 #1（直连），去改关着的 #2
+  if (desk) {
+    const log = [];
+    const st = { ...broken('p1', false), host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
+    const hs = http.createServer((q, r) => {
+      const u = new URL(q.url, 'http://x');
+      if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: hs.address().port, token: 't', instanceId: 'p1', no: 1, color: st.me.color })); return; }
+      if (u.pathname.startsWith('/api/')) {
+        if (u.pathname === '/api/events') { setTimeout(() => { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ seq: st.seq })); }, 20000).unref(); return; } // 长轮询：没有新事件就挂着，页面不会一直重画
+        let b = ''; q.on('data', (d) => { b += d; }); q.on('end', () => { if (q.method !== 'GET') log.push(`${q.method} ${u.pathname}${b ? ' ' + b : ''}`);
+          r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: {} } : u.pathname === '/api/vault' ? { items: [], hasDefault: false } : { ok: true })); });
+        return;
+      }
+      const f = path.join(desk, decodeURIComponent(u.pathname));
+      if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); r.end(); return; }
+      r.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream' }); r.end(fs.readFileSync(f));
+    }).listen(0);
+    const hb = `http://127.0.0.1:${hs.address().port}/`;
+    const c = await br.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 1, locale: 'zh-CN' }); await c.addInitScript(mock, st);
+    const pg = await c.newPage(); pg.on('pageerror', (e) => errors.push(`电脑版 F-HEAL: ${e.message}`));
+    await pg.goto(hb + 'app.html#instances'); await pg.waitForTimeout(700);
+    let r = await pg.evaluate(() => ({ warn: document.querySelector('.cardi[data-id="p2"] .cw')?.innerText || '', tidy: [...document.querySelectorAll('.appbar .btn')].some((e) => e.innerText.includes('整理编号')), play: !!document.querySelector('.cardi[data-id="p2"] button[title="打开"]') }));
+    check('电脑实例页：没订阅的实例卡片上写着原因，照样有“打开”，顶栏有“整理编号”', /订阅/.test(r.warn) && r.tidy && r.play, r);
+    await pg.screenshot({ path: path.join(out, 'heal-desk-instances.png') });
+    await pg.locator('.cardi[data-id="p2"]').click(); await pg.waitForTimeout(400);
+    await pg.screenshot({ path: path.join(out, 'heal-desk-drawer.png') });
+    await pg.locator('.drawer button.row[aria-label="设置节点与出口"]').click(); await pg.waitForTimeout(600);
+    r = await pg.evaluate(() => ({ hash: location.hash.slice(1), h1: (document.querySelector('.appbar h1')?.childNodes[0]?.textContent || '').trim(), on: document.querySelector('.pnav button.on')?.textContent, back: document.querySelectorAll('.appbar button[title^="返回"]').length,
+      txt: document.querySelector('main, #main')?.innerText.replace(/\s+/g, ' ').slice(0, 400) || '', acts: [...document.querySelectorAll('.warn .lk')].map((e) => e.innerText), open: [...document.querySelectorAll('.row .btn')].map((e) => e.innerText), drawer: !!document.querySelector('.drawer') }));
+    check('电脑：从 #1 的窗口进到关着的 #2 的节点页，写明改的是谁、能直接打开、有“添加订阅”、有返回', r.hash === 'node/p2' && r.h1 === '节点与出口' && r.on === '实例' && r.back === 1 && !r.drawer && /#2 carol@proton\.me/.test(r.txt) && r.acts.includes('添加订阅') && r.open.includes('打开'), r);
+    await pg.screenshot({ path: path.join(out, 'heal-desk-node.png') });
+    log.length = 0;
+    await pg.locator('.row .btn', { hasText: '打开' }).click(); await pg.waitForTimeout(400);
+    check('电脑：节点页上的“打开”打开的是 #2', log.includes('POST /api/instances/p2/launch'), log);
+    await pg.locator('.warn .lk', { hasText: '添加订阅' }).click(); await pg.waitForTimeout(400);
+    const dlg = await pg.evaluate(() => ({ n: document.querySelectorAll('.scrim input, .scrim textarea').length, t: document.querySelector('.scrim')?.innerText.replace(/\s+/g, ' ').slice(0, 80) || '' }));
+    check('电脑：提示旁边的“添加订阅”直接弹出填订阅地址的框', dlg.n >= 1 && /订阅/.test(dlg.t), dlg);
+    await pg.screenshot({ path: path.join(out, 'heal-desk-addsub.png') });
+    await pg.keyboard.press('Escape'); await pg.waitForTimeout(300);
+    if (await pg.locator('.scrim').count()) { await pg.locator('.scrim .btn', { hasText: '取消' }).first().click(); await pg.waitForTimeout(300); }
+    await pg.locator('.appbar button[title^="返回"]').click(); await pg.waitForTimeout(400);
+    r = await pg.evaluate(() => ({ hash: location.hash.slice(1), drawer: !!document.querySelector('.drawer') }));
+    check('电脑：返回回到 #2 的抽屉', r.hash === 'instances/p2' && r.drawer, r);
+    // 本窗口自己的节点页（#1 直连）不带“改的是谁”那一行
+    await pg.goto('about:blank'); await pg.goto(hb + 'app.html#node'); await pg.waitForTimeout(600);
+    r = await pg.evaluate(() => ({ on: document.querySelector('.pnav button.on')?.textContent, who: /没在运行|运行中/.test(document.querySelector('main, #main')?.innerText || ''), back: document.querySelectorAll('.appbar button[title^="返回"]').length }));
+    check('电脑：本窗口自己的节点页和以前一样（没有“改的是谁”那一行、没有返回）', r.on === '节点与出口' && !r.who && r.back === 0, r);
+    await c.close(); hs.close(); hs.closeAllConnections?.();
+  }
+}
 console.log(flow.join('\n'));
 
 // fp.js：在普通页面环境里直接改 window，检查各项是否生效、同种子稳定、不同种子不同
