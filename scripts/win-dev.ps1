@@ -2,7 +2,7 @@
 # ASCII only on purpose: Windows PowerShell 5.1 reads a .ps1 without BOM in the local code page, Chinese text would break it.
 #
 # Layout (everything inside one folder, nothing else on the machine is touched):
-#   <dev>\src         git clone of this repo          <dev>\go        portable Go
+#   <dev>\src         source of the branch            <dev>\go        portable Go
 #   <dev>\masktab.exe dev build                       <dev>\data      test data (NOT the user's real data)
 #   <dev>\shots       screenshots of the test windows only (PrintWindow: never captures other windows)
 #
@@ -58,10 +58,17 @@ switch ($cmd) {
   'build' {
     Stop-Dev
     $env:GOCACHE = "$dev\gocache"; $env:GOMODCACHE = "$dev\gomod"; $env:GOFLAGS = '-buildvcs=false'; $env:GOPROXY = 'https://goproxy.cn,https://proxy.golang.org,direct'
+    # Source comes as a tarball from api.github.com: plain "git fetch" from github.com is unreliable on some networks.
+    $tgz = "$dev\src.tgz"; $ok = $false
+    for ($i = 0; $i -lt 4 -and -not $ok; $i++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 40 "https://api.github.com/repos/halou367/masktab/tarball/$a1" -OutFile $tgz; $ok = $true } catch { Start-Sleep 2 } }
+    if (-not $ok) { 'DOWNLOAD FAILED'; exit 1 }
+    Remove-Item "$dev\src.new", "$dev\src.old" -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory "$dev\src.new" | Out-Null
+    & tar -xzf $tgz -C "$dev\src.new" --strip-components=1; if ($LASTEXITCODE -ne 0) { 'UNPACK FAILED'; exit 1 }
+    Set-Location $dev
+    if (Test-Path "$dev\src") { Rename-Item "$dev\src" 'src.old' }; Rename-Item "$dev\src.new" 'src'; Remove-Item "$dev\src.old" -Recurse -Force -ErrorAction SilentlyContinue
     Set-Location "$dev\src"
     $ErrorActionPreference = 'Continue'
-    & git fetch -q origin $a1 2>&1 | Out-Null; & git checkout -q -B $a1 FETCH_HEAD 2>&1 | Out-Null
-    "source: " + (& git log --oneline -1)
+    "source: $a1 " + ((& tar -tzf $tgz 2>$null | select -First 1) -replace '.*-([0-9a-f]{7})[0-9a-f]*/$', '$1'); Remove-Item $tgz
     $out = (& "$dev\go\bin\go.exe" build -ldflags "-H=windowsgui -X main.version=0.1.0-dev" -o $exe ./cmd/masktab 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { "BUILD FAILED`n$out"; exit 1 }
     "built: " + (Get-Item $exe).Length + " bytes"
