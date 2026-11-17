@@ -316,6 +316,11 @@ try {
     check(!!id1, '订阅删光以后这个实例还能打开（以前是“没能打开”的死循环）', id1 ? `提示：${id1.rt.error}` : '没能打开：' + ((await inst(d.id))?.rt?.error || ''));
     check(!!id1 && /订阅/.test(id1.rt.error || '') && !id1.rt.exit, '打开的窗口断着网，并写明是没有订阅', id1 ? id1.rt.error : '');
     if (id1) {
+      // 断着网开的窗口真的出不去：同一时刻、同一个网址，直连的实例取得到，它取不到（窗口照开不等于放行，硬规则 R-1）。
+      const OUT = `Promise.race([fetch('http://www.gstatic.com/generate_204',{mode:'no-cors',cache:'no-store'}).then(()=>'ok',()=>'blocked'),new Promise(r=>setTimeout(()=>r('timeout'),6000))])`;
+      const viaA = (await evalPage(prof(a.id), PAGE, OUT, 9000)).value, viaD = (await evalPage(prof(d.id), PAGE, OUT, 9000)).value;
+      if (viaA !== 'ok') rec('warn', '断着网的窗口出不去', `这台机器的直连实例也取不到外网（${viaA}），没法对比`);
+      else check(viaD === 'blocked' || viaD === 'timeout', '断着网的窗口真的出不去（同一时刻直连的实例取得到）', `直连实例 ${viaA} / 没订阅的实例 ${viaD}`);
       await screenshot(prof(d.id), `chrome-extension://${COMPANION}/newtab.html`, '8-nosub-newtab.png');
       await screenshot(prof(d.id), `chrome-extension://${COMPANION}/app.html#node`, '8-nosub-node.png');
       // 从别的实例的窗口里改它（它不用开着）：实例管理 → 抽屉 → 节点与出口
