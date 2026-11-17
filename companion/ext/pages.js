@@ -253,7 +253,7 @@ export function exitsView(c) {
       dead && h('span', { class: 'bad el' }, xs[0].err || '不通'),
       !xs.length && h('span', { class: 'na' }, '还没探测（订阅页点“测延迟”）'),
       e.label && h('span', { class: 'el' }, e.label),
-      e.type === 'proxyip' && e.expand && ` · ${alive}/${e.resolved.length} 个地址通${v6Count(e) ? `（IPv6 ${v6Count(e)} 个）` : ''}${e.refreshHours ? ` · 每 ${e.refreshHours} 小时解析` : ''}`,
+      e.type === 'proxyip' && e.expand && ` · 展开 ${e.resolved.length} 个地址${v6Count(e) ? `（IPv6 ${v6Count(e)} 个）` : ''}${e.resolved.length && xs.length ? `，${alive} 个通` : ''}${e.refreshHours ? ` · 每 ${e.refreshHours} 小时解析` : ''}`,
       e.resolveError && h('span', { class: 'bad' }, ` · 解析失败：${e.resolveError}`)];
     // 右边两格和面板里的列表一样：下载（点击测峰值）、延迟（点击只重测这一个）。展开的域名测它全部的 IP。
     const one = b || xs[0], subOf = one?.sub, keysOf = () => (xs.length > 1 ? xs.map((x) => x.pkey) : one ? [one.pkey] : []);

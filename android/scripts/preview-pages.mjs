@@ -685,6 +685,10 @@ if (want('v6')) for (const w of [412, 320]) {
   let r = await rows('button.row');
   const txt = await pg.evaluate(() => document.querySelector('#root').innerText);
   check(`地址库（${w} 宽）：展开的域名写明有几个 IPv6，解析失败的写出原因，IPv6 写全`, /展开 3 个地址（IPv6 2 个）/.test(txt) && /解析失败：这个域名不存在/.test(txt) && r.has.includes('A') && r.cut.length === 0 && r.wide.length === 0, { r, txt: txt.slice(0, 400) });
+  // UI-22：地址库的行和面板列表一样带探测结果（类型、住宅 / 机房、纯净度、地区 · 运营商、延迟），延迟可以点着单测
+  { const lib = await pg.evaluate(() => [...document.querySelectorAll('.librow')].map((e) => ({ t: e.innerText, ld: !!e.querySelector('button.ld'), flag: !!e.querySelector('.lic .flag') })));
+    const ok = lib.find((x) => /反代/.test(x.t) && /住宅/.test(x.t) && /Tokyo/.test(x.t) && /\d+ ms/.test(x.t));
+    check(`地址库（${w} 宽）：每行带类型、住宅 / 机房、纯净度、地区和延迟，延迟能点`, !!ok && ok.ld && ok.flag, lib); }
   await pg.screenshot({ path: path.join(out, `v6-exits-${w}.png`) });
   await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(700);
   r = await rows('#root .row');
