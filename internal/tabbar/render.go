@@ -232,12 +232,25 @@ func draw(w, h int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus
 	return c
 }
 
-// StripColor 是色条里这个实例那一段的颜色：实例自己的颜色；和标题栏几乎一样时（看不出来）用浅一档。
+// StripColor 是色条里这个实例那一段的颜色。
+// 当前的：实例自己的颜色；和标题栏几乎一样时（看不出来）用浅一档。
+// 别的：去掉一部分彩色、再压进标题栏的底色里——暗一些、灰一些，但还认得出是哪个颜色。压完和底色分不出来的，换成一段淡淡的灰。
 func (p TabPaint) StripColor(lk Look) [3]int {
-	if near(p.Color, lk.Bg) {
-		return Tint([3]int{255, 255, 255}, p.Color, 0.62)
+	if p.Active {
+		if near(p.Color, lk.Bg) {
+			return Tint([3]int{255, 255, 255}, p.Color, 0.62)
+		}
+		return p.Color
 	}
-	return p.Color
+	y := (299*p.Color[0] + 587*p.Color[1] + 114*p.Color[2]) / 1000
+	c := Tint(mix(p.Color, [3]int{y, y, y}, 0.4), lk.Bg, 0.72)
+	if near(c, lk.Bg) {
+		if OnDark(lk.Bg) {
+			return Tint([3]int{255, 255, 255}, lk.Bg, 0.3)
+		}
+		return Tint([3]int{32, 33, 36}, lk.Bg, 0.3)
+	}
+	return c
 }
 
 // ---------- 自动收起：从色条到整条栏之间的每一刻（decisions UI-17） ----------
@@ -248,14 +261,12 @@ func mix(a, b [3]int, t float64) [3]int {
 	return [3]int{int(lerp(float64(a[0]), float64(b[0]), t) + 0.5), int(lerp(float64(a[1]), float64(b[1]), t) + 0.5), int(lerp(float64(a[2]), float64(b[2]), t) + 0.5)}
 }
 
-// MorphRect 是一个标签在 e 这一刻占的位置：e = 0 是色条里的一小段（当前的那个占满色条的高，别的矮 3 像素、下面对齐），
-// e = 1 是展开后的标签。左右不变。
+// MorphRect 是一个标签在 e 这一刻占的位置：e = 0 是色条里它的那一段（StripRect），e = 1 是展开后的标签。
+// 当前的左右不变，只往下长；别的同时往两边长到标签那么宽。
 func MorphRect(tab Rect, active bool, scale, e float64) Rect {
-	top := px(3, scale)
-	if active {
-		top = 0
-	}
-	return Rect{tab.L, int(lerp(float64(top), float64(tab.T), e) + 0.5), tab.R, int(lerp(float64(px(StripH, scale)), float64(tab.B), e) + 0.5)}
+	s := StripRect(tab, active, scale)
+	at := func(a, b int) int { return int(lerp(float64(a), float64(b), e) + 0.5) }
+	return Rect{at(s.L, tab.L), at(s.T, tab.T), at(s.R, tab.R), at(s.B, tab.B)}
 }
 
 // InkAlpha 是 e 这一刻字、×、＋ 有多实：前一半不出现（标签还太扁），后一半渐渐出来。
@@ -265,7 +276,7 @@ func InkAlpha(e float64) float64 {
 
 // Morph 画自动收起的栏在 e 这一刻的样子（不含字）：e = 0 收着，只有色条；e = 1 完全展开。
 // 中间：每一段色条往下长成标签（颜色、圆角一起过渡），底色从透明变实并从上往下铺开，×、＋ 最后淡入。
-// 位图高 OpenH、预乘透明度，直接交给分层窗口。最上面 stripUp 行在窗口上沿外面，只有色条会画到那里；底色从窗口上沿开始。
+// 位图高 OpenH、预乘透明度，直接交给分层窗口。最上面 stripUp 行在窗口上沿外面，什么都不画（只接鼠标）；色条、底色都从窗口上沿开始。
 // 没展开完的时候，Band 那一条里没画东西的点留一丝透明度（看不出来，但接得住鼠标），别处全透明、点得穿。
 func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlus bool) *Canvas {
 	e = math.Max(0, math.Min(1, e))

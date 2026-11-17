@@ -646,7 +646,7 @@ func (g *group) toggleFill() {
 	}
 	to := Filled(winRect(h), visRect(h), work, scaleOf(h))
 	if g.m.st.Compact {
-		to = FilledCompact(winRect(h), visRect(h), work, scaleOf(h))
+		to = FilledCompact(winRect(h), visRect(h), work)
 	}
 	setPos(h, to, 0)
 	g.filled, g.fillTo = true, winRect(h)

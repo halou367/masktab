@@ -236,9 +236,9 @@ func TestCompact(t *testing.T) {
 	if bar.L+tab.L+40 != 640 || bar.T+12 != 480 {
 		t.Fatalf("挪完以后抓的点在 %d,%d", bar.L+tab.L+40, bar.T+12)
 	}
-	// 铺满：窗口占满可用区域，上面让出色条露在外面的 4 像素
-	f := FilledCompact(Rect{93, 100, 1107, 807}, Rect{100, 100, 1100, 800}, Rect{0, 0, 1920, 1032}, 1)
-	if f != (Rect{-7, 4, 1927, 1039}) {
+	// 铺满：窗口占满可用区域（色条在窗口里面，上面不用让）
+	f := FilledCompact(Rect{93, 100, 1107, 807}, Rect{100, 100, 1100, 800}, Rect{0, 0, 1920, 1032})
+	if f != (Rect{-7, 0, 1927, 1039}) {
 		t.Fatalf("铺满 %v", f)
 	}
 }
@@ -256,15 +256,31 @@ func TestMorph(t *testing.T) {
 		t.Fatalf("高 %d", c.H)
 	}
 	alpha := func(x, y int) int { return int(c.Pix[(y*c.W+x)*4+3]) }
-	if c.At(mid(0), 6) != red || c.At(mid(1), 6) != blue {
-		t.Fatalf("没选中的两段该是实例自己的颜色：%v %v", c.At(mid(0), 6), c.At(mid(1), 6))
+	// 没选中的：暗一些、灰一些——不是实例本来的颜色，也不和标题栏混在一起，红的还偏红、蓝的还偏蓝
+	gr, gb := c.At(mid(0), 6), c.At(mid(1), 6)
+	if gr == red || gb == blue || near(gr, lk.Bg) || near(gb, lk.Bg) || gr[0] <= gr[2] || gb[2] <= gb[0] {
+		t.Fatalf("没选中的两段：%v %v", gr, gb)
 	}
-	// 选中的 9 像素高，没选中的 6 像素、下面对齐（上面 3 行只有接鼠标用的那一丝）
-	if alpha(mid(2), 1) != 255 || alpha(mid(2), 8) != 255 || alpha(mid(0), 1) != 1 || alpha(mid(0), 4) != 255 || alpha(mid(0), 9) != 0 {
-		t.Fatalf("色条的高不对：%d %d %d %d %d", alpha(mid(2), 1), alpha(mid(2), 8), alpha(mid(0), 1), alpha(mid(0), 4), alpha(mid(0), 9))
+	// 都一样粗，都在窗口里面（第 4 ~ 8 行）；窗口上沿外面的 4 行只有接鼠标用的那一丝
+	for i := range tabs {
+		if alpha(mid(i), 3) != 1 || alpha(mid(i), 4) != 255 || alpha(mid(i), 8) != 255 || alpha(mid(i), 9) != 0 {
+			t.Fatalf("第 %d 段的高不对：%d %d %d %d", i, alpha(mid(i), 3), alpha(mid(i), 4), alpha(mid(i), 8), alpha(mid(i), 9))
+		}
 	}
-	if got := c.At(mid(2), 4); got == yellow {
+	// 选中的和标签一样宽，没选中的短、居中
+	if on, off := StripRect(l.Slots[2].Tab, true, 1), StripRect(l.Slots[0].Tab, false, 1); on.W() != l.Slots[2].Tab.W() || off.W() >= on.W()*2/3 || off.W() < on.W()/3 ||
+		off.L-l.Slots[0].Tab.L != l.Slots[0].Tab.R-off.R && off.L-l.Slots[0].Tab.L != l.Slots[0].Tab.R-off.R-1 {
+		t.Fatalf("色条的长短：选中 %v 没选中 %v", on, off)
+	}
+	if alpha(l.Slots[2].Tab.L+10, 6) != 255 || alpha(l.Slots[0].Tab.L+10, 6) != 1 {
+		t.Fatalf("选中的那段画满，没选中的两头是空的：%d %d", alpha(l.Slots[2].Tab.L+10, 6), alpha(l.Slots[0].Tab.L+10, 6))
+	}
+	if got := c.At(mid(2), 6); got == yellow {
 		t.Fatalf("和标题栏同色的那一段该用浅一档：%v", got)
+	}
+	// 没选中的和标题栏同色：换成一段看得见的灰
+	if got := (TabPaint{Color: yellow}).StripColor(lk); near(got, lk.Bg) {
+		t.Fatalf("没选中又和标题栏同色的那段看不见了：%v", got)
 	}
 	for _, x := range []int{l.Slots[0].Tab.R + 2, l.Plus.L + 5, 5} { // 段与段之间的缝、＋ 的位置、最左边一点：看不见，但接得住鼠标
 		if alpha(x, 5) != 1 || c.At(x, 5) != [3]int{0, 0, 0} {
@@ -276,7 +292,7 @@ func TestMorph(t *testing.T) {
 			t.Fatalf("%v 该是透明的", pt)
 		}
 	}
-	if a := alpha(l.Slots[2].Tab.L, 0); a >= 255 {
+	if a := alpha(l.Slots[2].Tab.L, 4); a >= 255 {
 		t.Fatalf("角该是圆的：%d", a)
 	}
 
@@ -295,8 +311,11 @@ func TestMorph(t *testing.T) {
 	// 中间：标签长了一半，底色半透明、只铺到一半，字还没出来
 	c = Morph(800, l, tabs, lk, 1, 0.5, false)
 	r := MorphRect(l.Slots[0].Tab, false, 1, 0.5)
-	if r.T != 7 || r.B != 23 || r.L != l.Slots[0].Tab.L {
+	if s := StripRect(l.Slots[0].Tab, false, 1); r.T != 7 || r.B != 23 || r.L <= l.Slots[0].Tab.L || r.L >= s.L || r.R <= s.R || r.R >= l.Slots[0].Tab.R {
 		t.Fatalf("一半的时候标签在 %v", r)
+	}
+	if on := MorphRect(l.Slots[2].Tab, true, 1, 0.5); on.L != l.Slots[2].Tab.L || on.R != l.Slots[2].Tab.R || on.T != 7 {
+		t.Fatalf("一半的时候选中的标签在 %v", on)
 	}
 	if alpha(mid(0), 12) != 255 || alpha(mid(0), 25) == 255 {
 		t.Fatalf("标签是实的，标签下面不是：%d %d", alpha(mid(0), 12), alpha(mid(0), 25))
