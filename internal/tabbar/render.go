@@ -347,6 +347,7 @@ func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlu
 	return c
 }
 
-// EaseOut 是展开用的节奏：一开始快，越到后面越慢（进场）。EaseIn 是收起用的：先慢后快（退场）。x 是 0…1 的时间进度。
-func EaseOut(x float64) float64 { return 1 - math.Pow(1-math.Max(0, math.Min(1, x)), 4) }
-func EaseIn(x float64) float64  { x = math.Max(0, math.Min(1, x)); return x * x * x }
+// EaseOut 是展开用的节奏：一开始最快，越到后面越慢。EaseShut 是收起用的，也是一开始最快（鼠标一走马上就动），只是收尾没那么拖。
+// x 是 0…1 的时间进度，返回走完了几成。
+func EaseOut(x float64) float64  { return 1 - math.Pow(1-math.Max(0, math.Min(1, x)), 4) }
+func EaseShut(x float64) float64 { x = 1 - math.Max(0, math.Min(1, x)); return 1 - x*x }

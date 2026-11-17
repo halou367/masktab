@@ -345,7 +345,7 @@ func TestMorph(t *testing.T) {
 	if InkAlpha(0.5) != 0 || InkAlpha(1) != 1 || InkAlpha(0.75) != 0.5 {
 		t.Fatal("字在后一半才淡入")
 	}
-	if EaseOut(0) != 0 || EaseOut(1) != 1 || EaseOut(0.5) < 0.9 || EaseIn(0.5) > 0.2 || EaseIn(1) != 1 {
+	if EaseOut(0) != 0 || EaseOut(1) != 1 || EaseOut(0.5) < 0.9 || EaseShut(0) != 0 || EaseShut(1) != 1 || EaseShut(0.25) < 0.4 {
 		t.Fatal("节奏不对")
 	}
 }

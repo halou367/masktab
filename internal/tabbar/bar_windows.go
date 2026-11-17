@@ -38,10 +38,10 @@ type group struct {
 	tracking         bool
 
 	// 自动收起（decisions UI-17）
-	open   bool      // 现在是展开的
-	nearAt time.Time // 鼠标从什么时候起一直在色条附近
-	awayAt time.Time // 鼠标从什么时候起离开了展开的栏
-	pin    time.Time // 测试脚本刚发过鼠标消息：这之前不收起（真鼠标不在这儿）
+	open     bool      // 现在是展开的
+	openedAt time.Time // 上一次开始展开是什么时候（紧接着按在色条那几行上的，算按色条，见鼠标消息的处理）
+	menuOn   bool      // ＋ 的菜单开着：不收
+	pin      time.Time // 测试脚本刚发过鼠标消息：这之前不收起（真鼠标不在这儿）
 
 	lastWin Rect // 当前窗口最近一次的外框：它没了以后，下一个摆在这里
 	normal  Rect // 没铺满时的外框
@@ -134,7 +134,7 @@ func Run(h Host) {
 	}
 	ctlHwnd.Store(m.ctl)
 	_, _, _ = pSetTimer.Call(m.ctl, 1, 250, 0)
-	_, _, _ = pSetTimer.Call(m.ctl, 2, 20, 0) // 看鼠标是不是靠近了收起的色条
+	_, _, _ = pSetTimer.Call(m.ctl, 2, 10, 0) // 看鼠标是不是到了收起的色条上 / 离开了展开的栏
 	m.evCB = syscall.NewCallback(winEvent)
 	_, _, _ = pSetWinEventHook.Call(evForeground, evMinimizeEnd, 0, m.evCB, 0, 0, 0x2 /* 跳过自己进程 */)
 	var ms msg
@@ -1003,41 +1003,35 @@ func under(x, y int) uintptr {
 	return root
 }
 
-// hoverTick 每 20 毫秒看一次鼠标：在收起的色条上停了 0.06 秒就展开，离开展开的栏 0.35 秒就收起。
-// “在色条上”= 鼠标底下最上面的窗口就是这条栏（别的程序的窗口盖在上面时不算）。正拖着、正有实例要并进来的时候不收。
-func (m *mgr) hoverTick() {
+// wantOpen 报告按鼠标现在的位置，这条栏该展开着还是收着。cur：它现在（或正在变成）展开的。
+// 收着的：鼠标到了色条上就该展开。展开着的：鼠标还在栏附近（四周放宽 10 像素）就留着，出去了就该收。
+// “在色条上 / 在栏上”= 鼠标底下最上面的窗口就是这条栏或它的浏览器窗口（别的程序的窗口盖在上面时不算）。
+// 正拖着、正有实例要并进来、＋ 的菜单开着的时候一直展开。没有等待时间：到了就展开，离开就收（需求方：要零延迟、跟手）。
+func (g *group) wantOpen(cur bool, now time.Time) bool {
+	m := g.m
+	if g.drop || g.menuOn || (m.drag.on && m.drag.g == g) || now.Before(g.pin) {
+		return true
+	}
 	x, y := cursor()
+	at := under(x, y)
+	if !cur {
+		return at == g.hwnd && Reach(g.rect, g.lay, x, y, g.scale)
+	}
+	open := Rect{g.rect.L, g.rect.T, g.rect.R, g.rect.T + px(OpenH, g.scale)}
+	return (at == g.hwnd || at == m.main[g.active]) && Stay(open, x, y, g.scale)
+}
+
+// hoverTick 每 10 毫秒看一次鼠标（系统的定时器实际约 16 毫秒一次）：该展开的展开，该收的收。
+// 真鼠标移到色条上时还有一条更快的路：色条是这条栏自己的窗口，鼠标一到系统就发消息来，当场展开（见鼠标消息的处理）。
+func (m *mgr) hoverTick() {
 	now := time.Now()
 	changed := false
 	for _, g := range m.groups {
-		h := m.main[g.active]
-		if !g.shown || h == 0 {
+		if !g.shown || m.main[g.active] == 0 {
 			continue
 		}
-		keep := g.drop || (m.drag.on && m.drag.g == g) || now.Before(g.pin)
-		if !g.open {
-			if !keep && !(Reach(g.rect, g.lay, x, y, g.scale) && under(x, y) == g.hwnd) {
-				g.nearAt = time.Time{}
-				continue
-			}
-			if g.nearAt.IsZero() {
-				g.nearAt = now
-			}
-			if keep || now.Sub(g.nearAt) >= 60*time.Millisecond {
-				g.setOpen(true)
-				changed = true
-			}
-			continue
-		}
-		if at := under(x, y); keep || (Stay(g.rect, x, y, g.scale) && (at == g.hwnd || at == h)) {
-			g.awayAt = time.Time{}
-			continue
-		}
-		if g.awayAt.IsZero() {
-			g.awayAt = now
-		}
-		if now.Sub(g.awayAt) >= 350*time.Millisecond {
-			g.setOpen(false)
+		if g.wantOpen(g.open, now) != g.open {
+			g.setOpen(!g.open)
 			changed = true
 		}
 	}
@@ -1047,16 +1041,18 @@ func (m *mgr) hoverTick() {
 }
 
 // setOpen 展开 / 收起，带过渡（animate）。窗口本身不动、不变大小，变的只是画在上面的东西。
+// 过渡到一半鼠标又回来 / 又走了，animate 会当场掉头，所以最后停在哪一头以它说的为准。
 func (g *group) setOpen(v bool) {
 	if g.open == v {
 		return
 	}
-	g.nearAt, g.awayAt = time.Time{}, time.Time{}
 	if !v {
 		g.hover, g.hoverKind = -1, HitNone
+	} else {
+		g.openedAt = time.Now()
 	}
 	if g.shown && g.rect.W() > 0 {
-		g.animate(v)
+		v = g.animate(v)
 	}
 	g.open = v
 	g.rect = Rect{} // 让 place 按新的状态记下栏的范围（收着：只有色条那么高）
@@ -1152,7 +1148,9 @@ func (g *group) menu() {
 	}
 	x, y := g.rect.L+g.lay.Plus.L, g.rect.T+g.lay.Plus.B+px(2, g.scale)
 	_, _, _ = pSetForegroundWindow.Call(g.hwnd) // 不这样的话点别处菜单不会自己收起来
+	g.menuOn = true
 	cmd, _, _ := pTrackPopupMenu.Call(pm, 0x100 /* 返回选中的项 */ |0x80, uintptr(x), uintptr(y), 0, g.hwnd, 0)
+	g.menuOn = false
 	if !m.alive(g) { // 菜单开着的时候这一组没了
 		return
 	}
@@ -1261,10 +1259,14 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 			g.pin = time.Now().Add(6 * time.Second)
 			g.setOpen(true)
 		case !g.open:
-			// 真鼠标在收着的色条上。只是路过：展开由 hoverTick 管（停一小会儿才展开）。
-			// 没等展开就按下去了：马上展开（不放过渡），按的是哪一段色条就当作点了哪个标签的正中间
+			// 真鼠标到了收着的色条上：当场展开，不等（需求方：要零延迟、跟手）。
+			// 没动鼠标就直接按下去了（鼠标本来就停在这儿）：马上展开（不放过渡），按的是哪一段色条就当作点了哪个标签的正中间
 			// （色条是一段挨一段排的，和展开后的标签左右对不上，所以要换算）
 			if ms != wmLButtonDown {
+				if ms == wmMouseMove && g.wantOpen(false, time.Now()) {
+					g.setOpen(true)
+					m.snapshot()
+				}
 				return 0
 			}
 			on := -1
@@ -1274,7 +1276,6 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 				}
 			}
 			hit := StripHit(g.lay, on, x, g.scale)
-			g.nearAt, g.awayAt = time.Time{}, time.Time{}
 			g.open = true
 			g.rect = Rect{}
 			g.place()
@@ -1283,6 +1284,18 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 				x, y = (tab.L+tab.R)/2, (tab.T+tab.B)/2
 			} else if len(g.lay.Slots) > 0 {
 				y = (g.lay.Slots[0].Tab.T + g.lay.Slots[0].Tab.B) / 2
+			}
+		case ms == wmLButtonDown && y < px(StripH, g.scale) && time.Since(g.openedAt) < 400*time.Millisecond:
+			// 栏刚展开（不到 0.4 秒）就按在色条那几行上：人还来不及看展开后的标签，瞄的是色条里的那一段，照色条的位置算
+			on := -1
+			for i, t := range g.tabs {
+				if t.ID == g.active {
+					on = i
+				}
+			}
+			if hit := StripHit(g.lay, on, x, g.scale); hit >= 0 && hit < len(g.lay.Slots) {
+				tab := g.lay.Slots[hit].Tab
+				x, y = (tab.L+tab.R)/2, (tab.T+tab.B)/2
 			}
 		}
 	}

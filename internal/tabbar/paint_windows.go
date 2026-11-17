@@ -3,6 +3,7 @@
 package tabbar
 
 import (
+	"math"
 	"strings"
 	"syscall"
 	"time"
@@ -245,21 +246,28 @@ func (g *group) frame(sf *surface, e float64) {
 	_, _, _ = pUpdateLayeredWindow.Call(g.hwnd, sf.screen, 0, uintptr(unsafe.Pointer(&size)), sf.mem, uintptr(unsafe.Pointer(&src)), 0, uintptr(unsafe.Pointer(&blend)), 2)
 }
 
-// animate 从现在的样子过渡到展开（open）或收起：每一帧等系统合成画面的那一下再画下一帧，所以是跟着显示器刷新率走的。
-func (g *group) animate(open bool) {
+// animate 放展开 / 收起的过渡，返回最后停在哪一头（true = 展开）。每次屏幕刷新画一帧（DwmFlush 等下一次合成）。
+// 展开 150 毫秒、收起 110 毫秒，都是一开始最快、越到后面越慢：鼠标一到 / 一走，第一帧就动了一大截，不拖。
+// 跟手：每一帧都再看一眼鼠标（wantOpen），过渡到一半鼠标又回来 / 又走了就从当前的样子当场掉头，不等这一段放完；
+// 掉头后只走剩下的那一截，时间按比例缩短。
+func (g *group) animate(open bool) bool {
 	sf := newSurface(g.rect.W(), px(OpenH, g.scale))
 	if sf == nil {
-		return
+		return open
 	}
 	defer sf.free()
-	dur := 240 * time.Millisecond // 展开：快进慢停
-	if !open {
-		dur = 180 * time.Millisecond // 收起：短一些，先慢后快
+	goal := func(v bool) float64 {
+		if v {
+			return 1
+		}
+		return 0
 	}
-	start := time.Now()
-	frames, worst, last := 0, time.Duration(0), start
-	defer func() { // 诊断：这一段画了几帧、最长的一帧隔了多久（掉帧看这个）
-		g.m.note("anim open=%v %d frames in %dms, longest gap %dms", open, frames, time.Since(start).Milliseconds(), worst.Milliseconds())
+	from, e := goal(!open), goal(!open) // 这一段从哪儿出发、现在画到哪儿了（0 收着 … 1 展开）
+	begin := time.Now()
+	start, turns := begin, 0
+	frames, worst, last := 0, time.Duration(0), begin
+	defer func() { // 诊断：这一段画了几帧、最长的一帧隔了多久（掉帧看这个）、中途掉了几次头
+		g.m.note("anim open=%v %d frames in %dms, longest gap %dms, turns %d", open, frames, time.Since(begin).Milliseconds(), worst.Milliseconds(), turns)
 	}()
 	for {
 		t0 := time.Now()
@@ -267,22 +275,28 @@ func (g *group) animate(open bool) {
 			worst = d
 		}
 		frames, last = frames+1, t0
-		x := float64(t0.Sub(start)) / float64(dur)
-		if x >= 1 {
+		if turns < 8 && g.wantOpen(open, t0) != open { // 掉头
+			open, from, start, turns = !open, e, t0, turns+1
+		}
+		full := 150 * time.Millisecond
+		if !open {
+			full = 110 * time.Millisecond
+		}
+		dur := time.Duration(float64(full) * math.Abs(goal(open)-from))
+		if dur <= 0 || t0.Sub(start) >= dur {
 			break
 		}
+		x := float64(t0.Sub(start)) / float64(dur)
 		if open {
-			g.frame(sf, EaseOut(x))
+			e = from + (1-from)*EaseOut(x)
 		} else {
-			g.frame(sf, 1-EaseIn(x))
+			e = from * (1 - EaseShut(x))
 		}
+		g.frame(sf, e)
 		if hr, _, _ := pDwmFlush.Call(); hr != 0 || time.Since(t0) < 2*time.Millisecond {
 			time.Sleep(6 * time.Millisecond) // 系统没在合成（远程桌面之类）：自己停一下
 		}
 	}
-	if open {
-		g.frame(sf, 1)
-	} else {
-		g.frame(sf, 0)
-	}
+	g.frame(sf, goal(open))
+	return open
 }
