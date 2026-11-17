@@ -295,9 +295,18 @@ func Debug() map[string]any {
 func yes(p *syscall.LazyProc, h uintptr) bool { r, _, _ := p.Call(h); return r != 0 }
 func isWindow(h uintptr) bool                 { return h != 0 && yes(pIsWindow, h) }
 func isVisible(h uintptr) bool                { return yes(pIsWindowVisible, h) }
-func isIconic(h uintptr) bool                 { return yes(pIsIconic, h) }
 func isZoomed(h uintptr) bool                 { return yes(pIsZoomed, h) }
 func show(h uintptr, how uintptr)             { _, _, _ = pShowWindow.Call(h, how) }
+
+// isIconic 报告窗口是不是最小化着。Windows 把最小化的窗口放在 (-32000, -32000)；从最小化还原的那一瞬间
+// 系统已经说“没最小化”了、位置却还在那里（真机上遇到过：照那个位置去摆，窗口就丢到屏幕外面了），也算最小化。
+func isIconic(h uintptr) bool {
+	if yes(pIsIconic, h) {
+		return true
+	}
+	r := winRect(h)
+	return r.L <= -30000 || r.T <= -30000
+}
 
 func pidOf(h uintptr) int {
 	var pid uint32
@@ -670,7 +679,7 @@ func (b *bar) place() {
 	}
 	win := winRect(h)
 	b.lastWin = win
-	if b.filled && win != b.fillTo {
+	if b.filled && win != b.fillTo && !isZoomed(h) { // 铺满以后被拖动、改了大小：不算铺满了。最大化不算（下一遍对账时还原）
 		b.filled = false
 	}
 	if !b.filled && !isZoomed(h) {
