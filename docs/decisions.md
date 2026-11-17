@@ -1006,6 +1006,8 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   - 收起：每个实例一小段自己的颜色（当前的 5 像素高，别的 3 像素），贴在窗口最上面那几个像素里（那里本来只是标题栏的底色）。不另占地方，“铺满”就是占满整个可用区域。色条以外是透明的，鼠标点得穿。
   - 展开：鼠标在色条附近（窗口上沿外 6 像素到里 8 像素、左右在色条那一段）停 0.1 秒，整条栏盖到浏览器自己那排标签页上（40 像素高，右上角三个窗口按钮不盖）；离开 0.35 秒收回去。每一段色条和展开后它的标签左右位置一样。
   - 正拖着标签、正有实例要并进来时不收。拖出去、并进来的规矩同 UI-16（“拖到另一组的栏上”按那一组展开后的位置算）。
-- **代码**：`tabbar.go`（`CompactRect`、`LayCompact`、`Reach`、`Stay`、`CarryCompact`、`FilledCompact`）、`render.go`（`Strip`、`DrawOpen`）、`bar_windows.go`（`hoverTick` 每 50 毫秒看一次鼠标、`setOpen`、`mine`、`dropRect`）。测试 `TestCompact`、`TestStrip`。
+- **过渡**（需求方：“展开有点卡卡的掉帧一样，希望是渐变展开”）：第一版是 3 帧、每帧改一次窗口大小，看着卡。现在窗口一直是展开那么大（收着时除了色条全透明，鼠标点得穿），展开 / 收起只换画面：每段色条往下长成标签（位置、圆角、颜色一起过渡），底色由透明变实并从上往下铺开，字、×、＋ 在后一半淡入。展开 240 毫秒、先快后慢；收起 180 毫秒、先慢后快。每帧等系统合成（`DwmFlush`）再画下一帧，跟显示器刷新率走。
+- **代码**：`tabbar.go`（`CompactRect`、`LayCompact`、`Reach`、`Stay`、`CarryCompact`、`FilledCompact`）、`render.go`（`Morph` 画任意一刻、`MorphRect`、`InkAlpha`、`EaseOut` / `EaseIn`）、`paint_windows.go`（`surface`、`frame`、`animate`）、`bar_windows.go`（`hoverTick` 每 30 毫秒看一次鼠标、`setOpen`、`mine`、`dropRect`）。测试 `TestCompact`、`TestMorph`；`FILM=路径 go test -run TestFilm ./internal/tabbar` 把过渡的几个时刻画成一张图。诊断接口的 `trace` 里每段过渡记一行帧数和最长帧间隔。
 - **证据（需求方实机，开发版）**：屏幕实拍收起是三段色条、展开盖住标签页一排且窗口按钮还在；模拟鼠标：展开、6 秒后自己收起、点标签切换、拖出去落点对、拖到另一组顶上并进去、双击空白铺满整个可用区域再还原。
+- **过渡的实测**（需求方实机，60 Hz）：展开 16 帧 / 约 250 毫秒，收起 12–13 帧 / 约 190 毫秒，最长帧间隔 17–18 毫秒（没有掉帧）。
 - **没验证**：真鼠标靠近展开的手感（延时、范围是拍脑袋定的）；想点浏览器标签页时会不会误触发；别的缩放比。
