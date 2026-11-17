@@ -54,14 +54,17 @@ func (g *group) veilUp(cur uintptr) *veil {
 	if ok, _, _ := pBitBlt.Call(sf.mem, 0, 0, uintptr(r.W()), uintptr(r.H()), sf.screen, uintptr(r.L), uintptr(r.T), 0x00CC0020 /* 照抄 */); ok == 0 {
 		return nil
 	}
-	// 整个窗口一个透明度，由系统在显卡上合成：淡出的时候每一帧只改这一个数，不用重新交图（交图的话一帧要三十多毫秒，看着是卡的）。
-	// 先全透明地摆好、把拍下来的图画上去，再变成不透明：不会有一帧是空的
-	_, _, _ = pSetLayeredWindowAttrs.Call(m.veilW, 0, 0, 2 /* LWA_ALPHA */)
-	_, _, _ = pSetWindowPos.Call(m.veilW, ^uintptr(0) /* 总在最上面 */, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), swpNoActivate|swpShow)
-	dc, _, _ := pGetDC.Call(m.veilW)
-	_, _, _ = pBitBlt.Call(dc, 0, 0, uintptr(r.W()), uintptr(r.H()), sf.mem, 0, 0, 0x00CC0020)
-	_, _, _ = pReleaseDC.Call(m.veilW, dc)
-	_, _, _ = pSetLayeredWindowAttrs.Call(m.veilW, 0, 255, 2)
+	// 图、位置、大小、透明度用一次调用一起交给系统（UpdateLayeredWindow），然后才显示这一层。
+	// 以前是“先摆好窗口、再往上画、再改成不透明”三步：这一层是反复用的，窗口挪过 / 改过大小以后头一次换实例，
+	// 它会带着上一次拍的图亮一帧（需求方机器上连拍屏幕拍到的：从黄色的 #3 换到 #0，中间闪了一帧红色的 #2），4 次里 4 次都有。
+	// 整张图一个透明度（不看位图里每个点自己的透明度）；淡出的时候每一帧只改这一个数，不重新交图
+	//（交图的话一帧要三十多毫秒，看着是卡的）。
+	pos, size, src := point32{int32(r.L), int32(r.T)}, point32{int32(r.W()), int32(r.H())}, point32{}
+	blend := [4]byte{0, 0, 255, 0}
+	if ok, _, _ := pUpdateLayeredWindow.Call(m.veilW, sf.screen, uintptr(unsafe.Pointer(&pos)), uintptr(unsafe.Pointer(&size)), sf.mem, uintptr(unsafe.Pointer(&src)), 0, uintptr(unsafe.Pointer(&blend)), 2); ok == 0 {
+		return nil
+	}
+	_, _, _ = pSetWindowPos.Call(m.veilW, ^uintptr(0) /* 总在最上面 */, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate|swpShow)
 	_, _, _ = pDwmFlush.Call() // 等它真的上了屏幕再动底下的窗口
 	return &veil{r: r}
 }
@@ -86,7 +89,10 @@ func (v *veil) fade(m *mgr) {
 			break
 		}
 		x = x * x * (3 - 2*x) // 两头慢中间快
-		_, _, _ = pSetLayeredWindowAttrs.Call(m.veilW, 0, uintptr(255*(1-x)+0.5), 2)
+		blend := [4]byte{0, 0, byte(255*(1-x) + 0.5), 0}
+		if ok, _, _ := pUpdateLayeredWindow.Call(m.veilW, 0, 0, 0, 0, 0, 0, uintptr(unsafe.Pointer(&blend)), 2); ok == 0 {
+			break // 改不了透明度：不淡了，直接拿掉
+		}
 		frames++
 		wait()
 	}
