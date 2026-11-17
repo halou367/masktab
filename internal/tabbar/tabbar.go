@@ -149,6 +149,33 @@ func BarRect(vis Rect, scale float64) Rect {
 	return Rect{vis.L, vis.T - h + px(Overlap, scale), vis.R, vis.T + px(Overlap, scale)}
 }
 
+// Left 报告拖着标签的鼠标是不是已经离开了实例栏（上下左右超出一小段）：离开了，这个实例就被拖出去单独成一组。
+// 在栏里面左右挪不算：点标签时手抖一下不该把实例拆出去。
+func Left(bar Rect, x, y int, scale float64) bool {
+	m := px(14, scale)
+	return x < bar.L-m || x >= bar.R+m || y < bar.T-m || y >= bar.B+m
+}
+
+// Over 报告鼠标是不是停在这条实例栏上（这时松手，拖着的实例就并进这一组）。
+func Over(bar Rect, x, y int, scale float64) bool {
+	m := px(8, scale)
+	return x >= bar.L && x < bar.R && y >= bar.T-m && y < bar.B+m
+}
+
+// Carry 给出窗口该挪多少：挪完以后，它自己那条实例栏的第一个标签上被抓住的那一点正好在鼠标 (x, y) 底下。
+// vis 是窗口现在看得见的那一圈；grabX 是抓的那一点离标签左边多远，grabY 是离栏顶多远。
+func Carry(vis Rect, x, y, grabX, grabY int, scale float64) (dx, dy int) {
+	bar := BarRect(vis, scale)
+	tab := Lay(vis.W(), 1, scale).Slots[0].Tab
+	if m := tab.W() - px(30, scale); grabX > m { // 新的标签可能比原来的窄：别抓到 × 上或者标签外面
+		grabX = m
+	}
+	if grabX < 0 {
+		grabX = 0
+	}
+	return x - (bar.L + tab.L + grabX), y - (bar.T + grabY)
+}
+
 // Fit 给实例栏腾地方：窗口顶到了屏幕可用区域的上沿（贴边、被拖上去）时把它往下挪，挪了以后超出下沿就缩短。
 // win 是窗口的外框，vis 是其中看得见的那一圈（Windows 的窗口外面有一圈看不见的边），work 是屏幕可用区域。
 // 返回新的外框，以及是不是变了。

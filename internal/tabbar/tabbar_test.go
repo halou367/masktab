@@ -151,3 +151,50 @@ func TestVote(t *testing.T) {
 		t.Fatal("三个点各不相同：不算数")
 	}
 }
+
+// 拖标签：在栏里挪不算拖出去；出了栏才算。停在另一条栏上算要并进去。
+func TestDragOutAndOver(t *testing.T) {
+	bar := Rect{100, 50, 900, 88}
+	for _, c := range []struct {
+		x, y int
+		left bool
+	}{{300, 60, false}, {700, 60, false}, {300, 95, false}, {300, 103, true}, {300, 30, true}, {80, 60, true}, {95, 60, false}, {920, 60, true}} {
+		if got := Left(bar, c.x, c.y, 1); got != c.left {
+			t.Fatalf("Left(%d,%d) = %v，该是 %v", c.x, c.y, got, c.left)
+		}
+	}
+	if !Over(bar, 500, 60, 1) || !Over(bar, 500, 92, 1) || Over(bar, 500, 100, 1) || Over(bar, 950, 60, 1) {
+		t.Fatal("Over 不对")
+	}
+}
+
+// 拖出去的窗口：它自己的实例栏的第一个标签要正好在鼠标底下。
+func TestCarry(t *testing.T) {
+	vis := Rect{200, 300, 1200, 900}
+	dx, dy := Carry(vis, 640, 480, 40, 12, 1)
+	moved := vis.Move(dx, dy)
+	bar := BarRect(moved, 1)
+	tab := Lay(moved.W(), 1, 1).Slots[0].Tab
+	if bar.L+tab.L+40 != 640 || bar.T+12 != 480 {
+		t.Fatalf("抓的那一点没在鼠标底下：栏 %+v 标签 %+v", bar, tab)
+	}
+	// 抓在一个很宽的标签的右边：新的标签窄，抓的位置收进来
+	dx, _ = Carry(vis, 640, 480, 900, 12, 1)
+	bar = BarRect(vis.Move(dx, 0), 1)
+	if x := 640 - bar.L; x < tab.L || x >= tab.R {
+		t.Fatalf("鼠标不在新标签上：离栏左边 %d，标签 %d–%d", x, tab.L, tab.R)
+	}
+}
+
+func TestEars(t *testing.T) {
+	w, h := 10, 6
+	pix := make([]byte, w*h*4)
+	for i := range pix {
+		pix[i] = 200
+	}
+	Ears(pix, w, h, 2, [3]int{1, 2, 3})
+	at := func(x, y int) [4]byte { return [4]byte(pix[(y*w+x)*4:]) }
+	if at(0, 5) != [4]byte{3, 2, 1, 255} || at(9, 4) != [4]byte{3, 2, 1, 255} || at(5, 5) != [4]byte{} || at(5, 3) != [4]byte{200, 200, 200, 200} {
+		t.Fatalf("耳朵不对：%v %v %v %v", at(0, 5), at(9, 4), at(5, 5), at(5, 3))
+	}
+}

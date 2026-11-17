@@ -128,6 +128,18 @@ func RoundTop(pix []byte, w, h int, rad float64) {
 	}
 }
 
+// Ears 处理位图最下面多出来的 rows 行：全部透明，只留最左、最右各一个点是底色。
+// 浏览器窗口上面两个角是圆的，实例栏压住了圆角的大半，剩下最边上那一点点缺口由这两只“耳朵”补上。
+func Ears(pix []byte, w, h, rows int, bg [3]int) {
+	for y := h - rows; y < h; y++ {
+		row := pix[y*w*4 : (y+1)*w*4]
+		clear(row)
+		for _, x := range []int{0, w - 1} {
+			row[x*4], row[x*4+1], row[x*4+2], row[x*4+3] = byte(bg[2]), byte(bg[1]), byte(bg[0]), 255
+		}
+	}
+}
+
 // TabPaint 是画一个标签要知道的。
 type TabPaint struct {
 	Color  [3]int

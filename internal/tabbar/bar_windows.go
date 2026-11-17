@@ -4,7 +4,6 @@ package tabbar
 
 import (
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -12,175 +11,27 @@ import (
 	"unsafe"
 )
 
-// 动窗口的部分。全部在一个固定的系统线程上跑（窗口、消息循环、事件钩子都要求同一个线程）；
-// 别的 goroutine 只通过 Poke / Focus / Release 往这个线程递消息。
+// 合并窗口的主体（decisions UI-15、UI-16）。
+//
+// 一“组”= 叠在同一个位置的几个实例窗口 + 它们顶上的一条实例栏。可以有好几组：
+// 把标签从栏里拖出来，那个实例就单独成一组；把它拖到另一条栏上松手，就并进那一组。
+// 只有一个实例的组也有栏（不然没有东西可以抓着拖回去）。
 
-var (
-	user32 = syscall.NewLazyDLL("user32.dll")
-	gdi32  = syscall.NewLazyDLL("gdi32.dll")
-	dwmapi = syscall.NewLazyDLL("dwmapi.dll")
-	kern32 = syscall.NewLazyDLL("kernel32.dll")
+type group struct {
+	m    *mgr
+	hwnd uintptr // 这一组的实例栏
 
-	pRegisterClassExW         = user32.NewProc("RegisterClassExW")
-	pCreateWindowExW          = user32.NewProc("CreateWindowExW")
-	pDefWindowProcW           = user32.NewProc("DefWindowProcW")
-	pGetMessageW              = user32.NewProc("GetMessageW")
-	pTranslateMessage         = user32.NewProc("TranslateMessage")
-	pDispatchMessageW         = user32.NewProc("DispatchMessageW")
-	pPostMessageW             = user32.NewProc("PostMessageW")
-	pShowWindow               = user32.NewProc("ShowWindow")
-	pSetWindowPos             = user32.NewProc("SetWindowPos")
-	pGetWindowRect            = user32.NewProc("GetWindowRect")
-	pIsWindow                 = user32.NewProc("IsWindow")
-	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
-	pIsIconic                 = user32.NewProc("IsIconic")
-	pIsZoomed                 = user32.NewProc("IsZoomed")
-	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
-	pGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
-	pEnumWindows              = user32.NewProc("EnumWindows")
-	pGetClassNameW            = user32.NewProc("GetClassNameW")
-	pGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
-	pAttachThreadInput        = user32.NewProc("AttachThreadInput")
-	pGetCurrentThreadId       = kern32.NewProc("GetCurrentThreadId")
-	pGetWindow                = user32.NewProc("GetWindow")
-	pGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
-	pSetWindowLongPtrW        = user32.NewProc("SetWindowLongPtrW")
-	pMonitorFromWindow        = user32.NewProc("MonitorFromWindow")
-	pGetMonitorInfoW          = user32.NewProc("GetMonitorInfoW")
-	pSetTimer                 = user32.NewProc("SetTimer")
-	pSetCapture               = user32.NewProc("SetCapture")
-	pReleaseCapture           = user32.NewProc("ReleaseCapture")
-	pGetCursorPos             = user32.NewProc("GetCursorPos")
-	pTrackMouseEvent          = user32.NewProc("TrackMouseEvent")
-	pLoadCursorW              = user32.NewProc("LoadCursorW")
-	pSetWinEventHook          = user32.NewProc("SetWinEventHook")
-	pUnhookWinEvent           = user32.NewProc("UnhookWinEvent")
-	pGetDpiForWindow          = user32.NewProc("GetDpiForWindow")
-	pSetThreadDpiCtx          = user32.NewProc("SetThreadDpiAwarenessContext")
-	pCreatePopupMenu          = user32.NewProc("CreatePopupMenu")
-	pAppendMenuW              = user32.NewProc("AppendMenuW")
-	pTrackPopupMenu           = user32.NewProc("TrackPopupMenu")
-	pDestroyMenu              = user32.NewProc("DestroyMenu")
-	pDrawTextW                = user32.NewProc("DrawTextW")
-	pUpdateLayeredWindow      = user32.NewProc("UpdateLayeredWindow")
-	pGetDC                    = user32.NewProc("GetDC")
-	pReleaseDC                = user32.NewProc("ReleaseDC")
-	pWindowFromPoint          = user32.NewProc("WindowFromPoint")
-	pGetAncestor              = user32.NewProc("GetAncestor")
-
-	pCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
-	pCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
-	pGetPixel           = gdi32.NewProc("GetPixel")
-	pGdiFlush           = gdi32.NewProc("GdiFlush")
-	pSelectObject       = gdi32.NewProc("SelectObject")
-	pDeleteObject       = gdi32.NewProc("DeleteObject")
-	pDeleteDC           = gdi32.NewProc("DeleteDC")
-	pCreateFontW        = gdi32.NewProc("CreateFontW")
-	pSetBkMode          = gdi32.NewProc("SetBkMode")
-	pSetTextColor       = gdi32.NewProc("SetTextColor")
-
-	pDwmGetWindowAttribute = dwmapi.NewProc("DwmGetWindowAttribute")
-	pGetModuleHandleW      = kern32.NewProc("GetModuleHandleW")
-)
-
-type rect32 struct{ L, T, R, B int32 }
-
-func (r rect32) rect() Rect { return Rect{int(r.L), int(r.T), int(r.R), int(r.B)} }
-
-type point32 struct{ X, Y int32 }
-
-type wndClassEx struct {
-	Size       uint32
-	Style      uint32
-	WndProc    uintptr
-	ClsExtra   int32
-	WndExtra   int32
-	Instance   uintptr
-	Icon       uintptr
-	Cursor     uintptr
-	Background uintptr
-	MenuName   *uint16
-	ClassName  *uint16
-	IconSm     uintptr
-}
-
-type msg struct {
-	Hwnd    uintptr
-	Message uint32
-	WParam  uintptr
-	LParam  uintptr
-	Time    uint32
-	Pt      point32
-	Private uint32
-}
-
-type monitorInfo struct {
-	Size    uint32
-	Monitor rect32
-	Work    rect32
-	Flags   uint32
-}
-
-type trackMouse struct {
-	Size  uint32
-	Flags uint32
-	Hwnd  uintptr
-	Hover uint32
-}
-
-type bitmapInfoHeader struct {
-	Size          uint32
-	Width, Height int32
-	Planes, Bits  uint16
-	Compression   uint32
-	SizeImage     uint32
-	XPPM, YPPM    int32
-	ClrUsed       uint32
-	ClrImportant  uint32
-}
-
-const (
-	wmMouseActivate = 0x0021
-	wmTimer         = 0x0113
-	wmMouseMove     = 0x0200
-	wmLButtonDown   = 0x0201
-	wmLButtonUp     = 0x0202
-	wmLButtonDbl    = 0x0203
-	wmMButtonUp     = 0x0208
-	wmCaptureChange = 0x0215
-	wmMouseLeave    = 0x02A3
-	wmApp           = 0x8000 // 重新对一遍
-	wmAppFocus      = 0x8001 // 切到 Focus 要的那个实例
-
-	swHide, swShowNoActivate, swShow, swShowNA = 0, 4, 5, 8
-	swpNoSize, swpNoMove, swpNoZOrder          = 0x1, 0x2, 0x4
-	swpNoActivate, swpShow, swpHide, swpAsync  = 0x10, 0x40, 0x80, 0x4000
-
-	evForeground, evMoveSizeStart, evMoveSizeEnd = 0x0003, 0x000A, 0x000B
-	evMinimizeStart, evMinimizeEnd, evLocation   = 0x0016, 0x0017, 0x800B
-)
-
-type bar struct {
-	host Host
-	hwnd uintptr
-
-	st     State
-	tabs   []Tab              // 有窗口的那些，按显示顺序
-	main   map[string]uintptr // 实例 → 它的主窗口
+	tabs   []Tab // 这一组里有窗口的实例，按显示顺序
 	active string
-	off    bool // 已经放手（开关关了、没有实例）
 
-	rect   Rect // 实例栏现在的位置
-	shown  bool
-	scale  float64
-	lay    Layout
-	sig    string            // 上次画的是什么
-	bg     [3]int            // 栏的底色 = 当前窗口标题栏的颜色
-	bgBy   map[string][3]int // 各实例窗口标题栏的颜色（从屏幕上量到的）
-	swAt   time.Time         // 上一次换标签是什么时候
-	font   uintptr
-	fontB  uintptr
-	fontSc float64
+	rect  Rect // 实例栏现在的位置
+	shown bool
+	scale float64
+	lay   Layout
+	sig   string    // 上次画的是什么
+	bg    [3]int    // 栏的底色 = 当前窗口标题栏的颜色
+	swAt  time.Time // 上一次换标签是什么时候
+	drop  bool      // 有实例正被拖到这条栏上：亮一点，表示松手就并进来
 
 	hover, hoverKind int
 	tracking         bool
@@ -190,75 +41,104 @@ type bar struct {
 	filled  bool // 铺满屏幕（代替最大化）
 	fillTo  Rect
 
-	moving bool // 用户正拖着浏览器窗口
-	drag   struct {
-		on, moved bool
-		cx, cy    int
-		win       Rect
-	}
-	busy    bool
+	moving  bool    // 用户正拖着浏览器窗口
 	owner   uintptr // 实例栏现在跟着哪个窗口
-	sysHook uintptr
 	locHook uintptr
 	locPid  int
+	edge    uintptr // 哪个窗口的边线已经染成了 edgeCol
+	edgeCol [3]int
+}
+
+type mgr struct {
+	host Host
+	ctl  uintptr // 不显示的窗口：定时器和别的 goroutine 递来的消息都发给它
+	inst uintptr
+	cls  *uint16
+	evCB uintptr
+
+	st     State
+	main   map[string]uintptr // 实例 → 它的主窗口
+	of     map[string]*group  // 实例 → 在哪一组
+	groups []*group
+	cur    *group // 最近用过的那一组：新开的实例进这一组
+	want   *group // 刚在这一组的 ＋ 菜单里点了“打开 / 新建”：接下来新出现的实例进这一组
+	wantAt time.Time
+	off    bool // 已经放手（开关关了、没有实例）
+	busy   bool
+	noEdge bool // 这台机器上染不了边线（Windows 10）：不再试
+
+	bgBy   map[string][3]int // 各实例窗口标题栏的颜色（从屏幕上量到的）
+	font   uintptr
+	fontB  uintptr
+	fontSc float64
+
+	drag struct {
+		on     bool
+		tab    bool   // 抓的是标签（可以拖出去、并进别的组）；不是的话抓的是栏的空白处（只是挪窗口）
+		out    bool   // 窗口已经跟着鼠标在动了
+		g      *group // 跟着鼠标动的是哪一组
+		id     string // 抓的是哪个实例的标签
+		sx, sy int    // 起点（屏幕坐标）
+		win    Rect   // 起点时窗口的外框
+		gx, gy int    // 抓的那一点在标签里 / 栏里的位置
+		target *group // 鼠标现在停在哪一组的栏上
+	}
 }
 
 var (
-	theBar  *bar
-	barHwnd atomic.Uintptr
+	theMgr  *mgr
+	ctlHwnd atomic.Uintptr
 
 	mu      sync.Mutex
 	hidden  = map[uintptr]bool{} // 我们藏起来的窗口：放手、退出时要全部放出来
+	edged   = map[uintptr]bool{} // 边线被我们染过色的窗口：放手、退出时还回去
+	bars    = map[uintptr]bool{} // 所有的实例栏
 	pending string               // Focus 要切到的实例
 	stopped bool
 	snap    map[string]any // 给诊断接口看的现状
 )
 
-// Run 建实例栏并一直处理消息；不返回。在自己的 goroutine 里调用。
+// Run 开始管窗口并一直处理消息；不返回。在自己的 goroutine 里调用。
 func Run(h Host) {
 	runtime.LockOSThread()
 	// 只让这一个线程按显示器的缩放算坐标：不然在放大的屏幕上拿到的窗口位置是缩过的，栏也会被系统拉糊
 	if pSetThreadDpiCtx.Find() == nil {
 		_, _, _ = pSetThreadDpiCtx.Call(^uintptr(3)) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 	}
-	b := &bar{host: h, main: map[string]uintptr{}, bgBy: map[string][3]int{}, scale: 1, hover: -1}
-	theBar = b
-	inst, _, _ := pGetModuleHandleW.Call(0)
-	cls, _ := syscall.UTF16PtrFromString("MaskTabBar")
+	m := &mgr{host: h, main: map[string]uintptr{}, of: map[string]*group{}, bgBy: map[string][3]int{}}
+	theMgr = m
+	m.inst, _, _ = pGetModuleHandleW.Call(0)
+	m.cls, _ = syscall.UTF16PtrFromString("MaskTabBar")
 	cur, _, _ := pLoadCursorW.Call(0, 32512) // IDC_ARROW
-	wc := wndClassEx{Style: 0x8 /* CS_DBLCLKS */, WndProc: syscall.NewCallback(wndProc), Instance: inst, Cursor: cur, ClassName: cls}
+	wc := wndClassEx{Style: 0x8 /* CS_DBLCLKS */, WndProc: syscall.NewCallback(wndProc), Instance: m.inst, Cursor: cur, ClassName: m.cls}
 	wc.Size = uint32(unsafe.Sizeof(wc))
 	if a, _, err := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); a == 0 {
 		h.Logf("合并窗口：注册窗口类失败：%v", err)
 		return
 	}
-	// 工具窗口（任务栏上没有按钮）、点它不抢焦点、分层窗口（自己给每个点定透明度：圆角是平滑的）
-	b.hwnd, _, _ = pCreateWindowExW.Call(0x80|0x08000000|0x80000, uintptr(unsafe.Pointer(cls)), 0, 0x80000000 /* WS_POPUP */, 0, 0, 100, 34, 0, 0, inst, 0)
-	if b.hwnd == 0 {
-		h.Logf("合并窗口：建实例栏失败")
+	m.ctl, _, _ = pCreateWindowExW.Call(0x80, uintptr(unsafe.Pointer(m.cls)), 0, 0x80000000 /* WS_POPUP */, 0, 0, 1, 1, 0, 0, m.inst, 0)
+	if m.ctl == 0 {
+		h.Logf("合并窗口：建窗口失败")
 		return
 	}
-	barHwnd.Store(b.hwnd)
-	_, _, _ = pSetTimer.Call(b.hwnd, 1, 250, 0)
-	evCB := syscall.NewCallback(winEvent)
-	b.sysHook, _, _ = pSetWinEventHook.Call(evForeground, evMinimizeEnd, 0, evCB, 0, 0, 0x2 /* 跳过自己进程 */)
-	evLocCB = evCB
-	var m msg
+	ctlHwnd.Store(m.ctl)
+	_, _, _ = pSetTimer.Call(m.ctl, 1, 250, 0)
+	m.evCB = syscall.NewCallback(winEvent)
+	_, _, _ = pSetWinEventHook.Call(evForeground, evMinimizeEnd, 0, m.evCB, 0, 0, 0x2 /* 跳过自己进程 */)
+	var ms msg
 	for {
-		r, _, _ := pGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		r, _, _ := pGetMessageW.Call(uintptr(unsafe.Pointer(&ms)), 0, 0, 0)
 		if int32(r) <= 0 {
 			return
 		}
-		_, _, _ = pTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
-		_, _, _ = pDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
+		_, _, _ = pTranslateMessage.Call(uintptr(unsafe.Pointer(&ms)))
+		_, _, _ = pDispatchMessageW.Call(uintptr(unsafe.Pointer(&ms)))
 	}
 }
 
-var evLocCB uintptr
-
 // Poke 让实例栏马上按最新情况对一遍（设置改了、实例开了关了）。
 func Poke() {
-	if h := barHwnd.Load(); h != 0 {
+	if h := ctlHwnd.Load(); h != 0 {
 		_, _, _ = pPostMessageW.Call(h, wmApp, 0, 0)
 	}
 }
@@ -268,7 +148,7 @@ func Focus(id string) {
 	mu.Lock()
 	pending = id
 	mu.Unlock()
-	if h := barHwnd.Load(); h != 0 {
+	if h := ctlHwnd.Load(); h != 0 {
 		_, _, _ = pPostMessageW.Call(h, wmAppFocus, 0, 0)
 	}
 }
@@ -276,164 +156,141 @@ func Focus(id string) {
 // Release 把藏起来的窗口全部放出来，之后不再管窗口。程序退出前调用；哪个 goroutine 都可以调。
 func Release() {
 	mu.Lock()
+	defer mu.Unlock()
 	stopped = true
 	for h := range hidden {
 		_, _, _ = pShowWindow.Call(h, swShowNA)
 	}
 	clear(hidden)
-	mu.Unlock()
-	if h := barHwnd.Load(); h != 0 {
+	for h := range edged {
+		resetEdge(h)
+	}
+	clear(edged)
+	for h := range bars {
 		_, _, _ = pShowWindow.Call(h, swHide)
 	}
 }
 
-// Debug 返回实例栏的现状（诊断、实机测试用）。
+// Debug 返回现状（诊断、实机测试用）。
 func Debug() map[string]any {
 	mu.Lock()
 	defer mu.Unlock()
 	return snap
 }
 
-// ---------- 窗口的小工具 ----------
+// ---------- 组 ----------
 
-func yes(p *syscall.LazyProc, h uintptr) bool { r, _, _ := p.Call(h); return r != 0 }
-func isWindow(h uintptr) bool                 { return h != 0 && yes(pIsWindow, h) }
-func isVisible(h uintptr) bool                { return yes(pIsWindowVisible, h) }
-func isZoomed(h uintptr) bool                 { return yes(pIsZoomed, h) }
-func show(h uintptr, how uintptr)             { _, _, _ = pShowWindow.Call(h, how) }
-
-// isIconic 报告窗口是不是最小化着。Windows 把最小化的窗口放在 (-32000, -32000)；从最小化还原的那一瞬间
-// 系统已经说“没最小化”了、位置却还在那里（真机上遇到过：照那个位置去摆，窗口就丢到屏幕外面了），也算最小化。
-func isIconic(h uintptr) bool {
-	if yes(pIsIconic, h) {
-		return true
+func (m *mgr) alive(g *group) bool {
+	for _, x := range m.groups {
+		if x == g && g != nil {
+			return true
+		}
 	}
-	r := winRect(h)
-	return r.L <= -30000 || r.T <= -30000
+	return false
 }
 
-func pidOf(h uintptr) int {
-	var pid uint32
-	_, _, _ = pGetWindowThreadProcessId.Call(h, uintptr(unsafe.Pointer(&pid)))
-	return int(pid)
-}
-
-func winRect(h uintptr) Rect {
-	var r rect32
-	_, _, _ = pGetWindowRect.Call(h, uintptr(unsafe.Pointer(&r)))
-	return r.rect()
-}
-
-// visRect 是窗口看得见的那一圈（外框外面有一圈看不见的边，用来拖动改大小）。
-func visRect(h uintptr) Rect {
-	var r rect32
-	if hr, _, _ := pDwmGetWindowAttribute.Call(h, 9 /* DWMWA_EXTENDED_FRAME_BOUNDS */, uintptr(unsafe.Pointer(&r)), unsafe.Sizeof(r)); hr != 0 || r.R <= r.L {
-		return winRect(h)
+func (m *mgr) newGroup() *group {
+	// 工具窗口（任务栏上没有按钮）、点它不抢焦点、分层窗口（自己给每个点定透明度：圆角是平滑的）
+	h, _, _ := pCreateWindowExW.Call(0x80|0x08000000|0x80000, uintptr(unsafe.Pointer(m.cls)), 0, 0x80000000 /* WS_POPUP */, 0, 0, 100, 38, 0, 0, m.inst, 0)
+	if h == 0 {
+		m.host.Logf("合并窗口：建实例栏失败")
+		return nil
 	}
-	return r.rect()
+	g := &group{m: m, hwnd: h, scale: 1, hover: -1}
+	m.groups = append(m.groups, g)
+	mu.Lock()
+	bars[h] = true
+	mu.Unlock()
+	return g
 }
 
-// screenOf 返回窗口所在屏幕的可用区域（去掉任务栏）和整块屏幕。
-func screenOf(h uintptr) (work, mon Rect) {
-	m, _, _ := pMonitorFromWindow.Call(h, 2 /* 最近的那块 */)
-	mi := monitorInfo{}
-	mi.Size = uint32(unsafe.Sizeof(mi))
-	_, _, _ = pGetMonitorInfoW.Call(m, uintptr(unsafe.Pointer(&mi)))
-	return mi.Work.rect(), mi.Monitor.rect()
-}
-
-func scaleOf(h uintptr) float64 {
-	if pGetDpiForWindow.Find() != nil {
-		return 1
+// dropGroup 拆掉一组的实例栏（里面的窗口不动）。
+func (m *mgr) dropGroup(g *group) {
+	g.unEdge()
+	if g.locHook != 0 {
+		_, _, _ = pUnhookWinEvent.Call(g.locHook)
+		g.locHook = 0
 	}
-	if d, _, _ := pGetDpiForWindow.Call(h); d >= 96 {
-		return float64(d) / 96
+	mu.Lock()
+	delete(bars, g.hwnd)
+	mu.Unlock()
+	_, _, _ = pDestroyWindow.Call(g.hwnd)
+	for i, x := range m.groups {
+		if x == g {
+			m.groups = append(m.groups[:i], m.groups[i+1:]...)
+			break
+		}
 	}
-	return 1
+	if m.cur == g {
+		m.cur = nil
+	}
+	if m.want == g {
+		m.want = nil
+	}
 }
 
-func setPos(h uintptr, r Rect, flags uintptr) {
-	_, _, _ = pSetWindowPos.Call(h, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), flags|swpNoZOrder|swpNoActivate)
+// home 是新出现的实例该进的那一组：刚点过 ＋ 的那一组，不然最近用过的那一组。
+func (m *mgr) home() *group {
+	if m.alive(m.want) && time.Since(m.wantAt) < 30*time.Second {
+		return m.want
+	}
+	if m.alive(m.cur) {
+		return m.cur
+	}
+	if len(m.groups) > 0 {
+		return m.groups[0]
+	}
+	return m.newGroup()
 }
 
-func cursor() (int, int) {
-	var p point32
-	_, _, _ = pGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
-	return int(p.X), int(p.Y)
-}
-
-type topWin struct {
-	hwnd uintptr
-	pid  int
-}
-
-var (
-	enumOut []uintptr
-	enumCB  = sync.OnceValue(func() uintptr {
-		return syscall.NewCallback(func(h, _ uintptr) uintptr { enumOut = append(enumOut, h); return 1 })
-	})
-)
-
-// browserWindows 列出看得见的内核顶层窗口（从上到下）：没有属主、不是工具窗口、不是画中画。只在实例栏的线程上调用。
-func browserWindows() []topWin {
-	enumOut = enumOut[:0]
-	_, _, _ = pEnumWindows.Call(enumCB(), 0)
-	var out []topWin
-	for _, h := range enumOut {
-		if !isVisible(h) {
-			continue
-		}
-		if o, _, _ := pGetWindow.Call(h, 4 /* GW_OWNER */); o != 0 {
-			continue
-		}
-		// 工具窗口不算；总在最前的也不算（画中画的小窗口）
-		if ex, _, _ := pGetWindowLongPtrW.Call(h, ^uintptr(19) /* GWL_EXSTYLE */); ex&(0x80|0x8) != 0 {
-			continue
-		}
-		var cls [64]uint16
-		n, _, _ := pGetClassNameW.Call(h, uintptr(unsafe.Pointer(&cls[0])), uintptr(len(cls)))
-		if n == 0 || !strings.HasPrefix(syscall.UTF16ToString(cls[:n]), "Chrome_WidgetWin_") {
-			continue
-		}
-		// 太小的不是浏览器窗口。门槛不能高：浏览器窗口能缩到大约 500×130（真机上遇到过，按 300×200 卡就把它漏掉了）
-		if r := winRect(h); !isIconic(h) && (r.W() < 200 || r.H() < 80) {
-			continue
-		}
-		out = append(out, topWin{h, pidOf(h)})
+func (g *group) ids() []string {
+	out := make([]string, len(g.tabs))
+	for i, t := range g.tabs {
+		out[i] = t.ID
 	}
 	return out
 }
 
-// ---------- 对一遍：实例、窗口、实例栏 ----------
+// fill 按名单的顺序重新列出这一组的标签。
+func (g *group) fill() {
+	g.tabs = g.tabs[:0:0]
+	for _, t := range g.m.st.Tabs {
+		if g.m.of[t.ID] == g && g.m.main[t.ID] != 0 {
+			g.tabs = append(g.tabs, t)
+		}
+	}
+}
 
-func (b *bar) sync() {
-	if b.busy {
+// ---------- 对一遍：实例、窗口、组、实例栏 ----------
+
+func (m *mgr) sync() {
+	if m.busy {
 		return
 	}
-	b.busy = true
-	defer func() { b.busy = false }()
+	m.busy = true
+	defer func() { m.busy = false }()
 	mu.Lock()
 	stop := stopped
 	mu.Unlock()
 	if stop {
 		return
 	}
-	st := b.host.State()
-	b.st = st
+	st := m.host.State()
+	m.st = st
 	if !st.Enabled || len(st.Tabs) == 0 {
-		b.letGo()
+		m.letGo()
 		return
 	}
-	b.off = false
+	m.off = false
 	wins := browserWindows()
 	main := map[string]uintptr{}
-	var tabs []Tab
-	var fresh string
+	found := map[string]bool{} // 这一遍里刚找到窗口的实例
 	for _, t := range st.Tabs {
-		h := b.main[t.ID]
+		h := m.main[t.ID]
 		if h != 0 && (!isWindow(h) || pidOf(h) != t.Pid) {
 			mu.Lock()
 			delete(hidden, h)
+			delete(edged, h)
 			mu.Unlock()
 			h = 0
 		}
@@ -441,89 +298,122 @@ func (b *bar) sync() {
 			for _, w := range wins {
 				if w.pid == t.Pid {
 					h = w.hwnd
-					fresh = t.ID
+					found[t.ID] = true
 					break
 				}
 			}
 		}
 		if h != 0 {
 			main[t.ID] = h
-			tabs = append(tabs, t)
 		}
 	}
-	var before []string
-	for _, t := range b.tabs {
-		before = append(before, t.ID)
+	m.main = main
+	for id := range m.of {
+		if main[id] == 0 {
+			delete(m.of, id)
+		}
 	}
-	b.main, b.tabs = main, tabs
-	if len(tabs) == 0 {
-		b.hideBar()
-		b.active = ""
-		b.snapshot()
-		return
-	}
-	fg, _, _ := pGetForegroundWindow.Call()
-	switched := true
-	switch {
-	case b.active == "": // 刚开始管：以最前面的那个为准，没有就第一个
-		pick := tabs[0].ID
-		for id, h := range main {
-			if h == fg {
-				pick = id
+	for _, t := range st.Tabs {
+		if main[t.ID] != 0 && m.of[t.ID] == nil {
+			if g := m.home(); g != nil {
+				m.of[t.ID] = g
 			}
 		}
-		b.active = pick
-		b.lastWin = winRect(main[pick])
-		b.own(main[pick])
-		b.host.Logf("合并窗口：开始管 %d 个实例的窗口，当前是 %s", len(tabs), pick)
-	case main[b.active] == 0: // 当前的关掉了：换到旁边那个，摆在原来的位置
-		alive := map[string]bool{}
-		for id := range main {
-			alive[id] = true
+	}
+	fg, _, _ := pGetForegroundWindow.Call()
+	for _, g := range append([]*group(nil), m.groups...) {
+		before := g.ids()
+		g.fill()
+		if len(g.tabs) == 0 {
+			m.dropGroup(g)
+			continue
 		}
-		next := Next(before, b.active, alive)
-		b.active = ""
-		b.switchTo(next)
-	case fresh != "" && fresh != b.active: // 新开了一个实例：它到前面来
-		b.switchTo(fresh)
+		fresh := ""
+		for _, t := range g.tabs {
+			if found[t.ID] {
+				fresh = t.ID
+			}
+		}
+		g.sync(before, fresh, fg)
+	}
+	fg, _, _ = pGetForegroundWindow.Call()
+	for _, g := range m.groups {
+		if fg != 0 && (m.main[g.active] == fg || g.hwnd == fg) {
+			m.cur = g
+		}
+	}
+	if !m.alive(m.cur) && len(m.groups) > 0 {
+		m.cur = m.groups[0]
+	}
+	m.snapshot()
+}
+
+func (g *group) sync(before []string, fresh string, fg uintptr) {
+	m := g.m
+	main := m.main
+	switched := true
+	switch {
+	case g.active == "": // 这一组刚开始管：以最前面的那个为准，没有就第一个
+		pick := g.tabs[0].ID
+		for _, t := range g.tabs {
+			if main[t.ID] == fg {
+				pick = t.ID
+			}
+		}
+		g.active = pick
+		g.lastWin = winRect(main[pick])
+		g.own(main[pick])
+		m.host.Logf("合并窗口：开始管 %d 个实例的窗口，当前是 %s", len(g.tabs), pick)
+	case main[g.active] == 0 || m.of[g.active] != g: // 当前的关掉了（或者去了别的组）：换到旁边那个，摆在原来的位置
+		alive := map[string]bool{}
+		for _, t := range g.tabs {
+			alive[t.ID] = true
+		}
+		next := Next(before, g.active, alive)
+		g.active = ""
+		g.switchTo(next)
+	case fresh != "" && fresh != g.active: // 新开了一个实例：它到前面来
+		g.switchTo(fresh)
 	default:
 		switched = false
 	}
 	// 别的实例自己跑到最前面了（别处让它聚焦）：就切到它。这一遍里刚换过的话不看，前台还没来得及变
 	if !switched {
-		for id, h := range main {
-			if h != fg || id == b.active {
+		for _, t := range g.tabs {
+			h := main[t.ID]
+			if h != fg || t.ID == g.active {
 				continue
 			}
 			// 刚换完标签的一小会儿里，一个藏着的窗口成了前台：那是系统在我们藏起原来的前台窗口时自己挑的
 			//（真机上遇到过：点 #2 结果跳到 #3），不是谁要它出来。把前台交还给当前这个
-			if !isVisible(h) && time.Since(b.swAt) < 1500*time.Millisecond {
-				b.front(main[b.active])
+			if !isVisible(h) && time.Since(g.swAt) < 1500*time.Millisecond {
+				g.front(main[g.active])
 				break
 			}
-			b.switchTo(id)
+			g.switchTo(t.ID)
 			break
 		}
 	}
-	for id, h := range main {
-		if id != b.active && isVisible(h) {
+	for _, t := range g.tabs {
+		if h := main[t.ID]; t.ID != g.active && isVisible(h) {
 			mu.Lock()
 			hidden[h] = true
 			mu.Unlock()
 			show(h, swHide)
 		}
 	}
-	h := main[b.active]
+	h := main[g.active]
 	if !isVisible(h) { // 当前这个任何时候都不能是藏着的
 		show(h, swShowNA)
 	}
-	b.own(h) // 当前实例的主窗口换了一个（原来那个被关了）也跟上
+	g.own(h) // 当前实例的主窗口换了一个（原来那个被关了）也跟上
 	mu.Lock()
 	delete(hidden, h)
 	mu.Unlock()
-	if !isIconic(h) && !b.moving && !b.drag.on {
+	dragging := m.drag.on && m.drag.g == g
+	if !isIconic(h) && !g.moving && !dragging {
 		if isZoomed(h) {
-			b.toggleFill()
+			g.toggleFill()
 		} else {
 			win, vis := winRect(h), visRect(h)
 			work, mon := screenOf(h)
@@ -534,91 +424,87 @@ func (b *bar) sync() {
 			}
 		}
 	}
-	b.hookLoc(pidOf(h))
-	b.place()
-	if !switched && b.shown && !b.moving && !b.drag.on {
-		if c, ok := frameColor(h, visRect(h), b.scale); ok {
-			b.bgBy[b.active] = c
+	g.hookLoc(pidOf(h))
+	g.place()
+	if !switched && g.shown && !g.moving && !dragging {
+		if c, ok := frameColor(h, visRect(h), g.scale); ok {
+			m.bgBy[g.active] = c
 		}
 	}
-	b.pickBg()
-	b.repaintIfChanged()
-	b.snapshot()
+	g.pickBg()
+	g.paintEdge()
+	g.repaintIfChanged()
 }
 
 // pickBg 定栏的底色：量到过当前窗口标题栏的颜色就用它，没有就按实例颜色估一个。
-func (b *bar) pickBg() {
-	if c, ok := b.bgBy[b.active]; ok {
-		b.bg = c
+func (g *group) pickBg() {
+	if c, ok := g.m.bgBy[g.active]; ok {
+		g.bg = c
 		return
 	}
-	for _, t := range b.tabs {
-		if t.ID == b.active {
-			b.bg = FrameGuess(t.Color)
+	for _, t := range g.tabs {
+		if t.ID == g.active {
+			g.bg = FrameGuess(t.Color)
 		}
 	}
 }
 
-// frameColor 从屏幕上量窗口标题栏的颜色：紧挨着实例栏下沿的那一行整行都是标题栏的底色，取三个点，至少两个一样才算。
-// 只在那个点上确实是这个窗口时才量（被别的窗口挡住就不量）。内核按实例颜色生成主题，窗口在不在前台颜色还不一样，
-// 自己算不如直接量准。
-func frameColor(h uintptr, vis Rect, sc float64) ([3]int, bool) {
-	dc, _, _ := pGetDC.Call(0)
-	if dc == 0 {
-		return [3]int{}, false
-	}
-	defer pReleaseDC.Call(0, dc)
-	y := vis.T + px(Overlap, sc)
-	var got [][3]int
-	for _, f := range []int{25, 50, 75} {
-		x := vis.L + vis.W()*f/100
-		at, _, _ := pWindowFromPoint.Call(uintptr(uint32(x)) | uintptr(uint32(y))<<32)
-		if root, _, _ := pGetAncestor.Call(at, 2 /* 顶层窗口 */); root != h {
-			continue
-		}
-		if c, _, _ := pGetPixel.Call(dc, uintptr(x), uintptr(y)); uint32(c) != 0xFFFFFFFF {
-			got = append(got, [3]int{int(c & 0xFF), int(c >> 8 & 0xFF), int(c >> 16 & 0xFF)})
-		}
-	}
-	return Vote(got)
-}
-
-func covers(a, b Rect) bool { return a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B }
-
-// own 让实例栏跟着这个窗口：系统保证它始终压在属主上面、跟属主一起到前面到后面。
-func (b *bar) own(h uintptr) {
-	if h == b.owner {
+// paintEdge 把当前窗口的边线染成栏的底色（见 setEdge）。
+func (g *group) paintEdge() {
+	h := g.m.main[g.active]
+	if h == 0 || g.m.noEdge || (h == g.edge && g.bg == g.edgeCol) {
 		return
 	}
-	b.owner = h
-	_, _, _ = pSetWindowLongPtrW.Call(b.hwnd, ^uintptr(7) /* GWLP_HWNDPARENT */, h)
+	if !setEdge(h, g.bg) {
+		g.m.noEdge = true
+		g.m.host.Logf("合并窗口：这台电脑上改不了窗口边线的颜色（Windows 10？），栏和窗口的接缝处会有一条细线")
+		return
+	}
+	g.edge, g.edgeCol = h, g.bg
+	mu.Lock()
+	edged[h] = true
+	mu.Unlock()
+}
+
+func (g *group) unEdge() { g.edge = 0 }
+
+// own 让实例栏跟着这个窗口：总在它上面，它到前面栏也到前面，它被别的窗口盖住栏也被盖住。
+func (g *group) own(h uintptr) {
+	if h == g.owner {
+		return
+	}
+	g.owner = h
+	_, _, _ = pSetWindowLongPtrW.Call(g.hwnd, ^uintptr(7) /* GWLP_HWNDPARENT */, h)
 	if h != 0 {
-		_, _, _ = pSetWindowPos.Call(b.hwnd, 0 /* 最上面 */, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+		_, _, _ = pSetWindowPos.Call(g.hwnd, 0 /* 最上面 */, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 	}
 }
 
-func (b *bar) hookLoc(pid int) {
-	if pid == b.locPid && b.locHook != 0 {
+func (g *group) hookLoc(pid int) {
+	if pid == g.locPid && g.locHook != 0 {
 		return
 	}
-	if b.locHook != 0 {
-		_, _, _ = pUnhookWinEvent.Call(b.locHook)
+	if g.locHook != 0 {
+		_, _, _ = pUnhookWinEvent.Call(g.locHook)
 	}
-	b.locPid = pid
-	b.locHook, _, _ = pSetWinEventHook.Call(evLocation, evLocation, 0, evLocCB, uintptr(pid), 0, 0)
+	g.locPid = pid
+	g.locHook, _, _ = pSetWinEventHook.Call(evLocation, evLocation, 0, g.m.evCB, uintptr(pid), 0, 0)
 }
 
 // front 把窗口设成前台窗口。Windows 只让“刚收到过鼠标键盘操作”的程序这样做：点实例栏时我们有这个资格，
 // 从头像菜单里切换实例时没有（操作是在浏览器里发生的）。那时如果前台正是我们管的窗口（或实例栏自己），
 // 就借它的线程去设；前台是别的程序（用户在干别的）就不抢。
-func (b *bar) front(h uintptr) {
+func (g *group) front(h uintptr) {
 	_, _, _ = pSetForegroundWindow.Call(h)
 	fg, _, _ := pGetForegroundWindow.Call()
 	if fg == h || fg == 0 {
 		return
 	}
-	ours := fg == b.hwnd
-	for _, w := range b.main {
+	ours := false
+	for _, x := range g.m.groups {
+		ours = ours || x.hwnd == fg
+	}
+	for _, w := range g.m.main {
 		ours = ours || w == fg
 	}
 	if !ours {
@@ -635,14 +521,18 @@ func (b *bar) front(h uintptr) {
 	}
 }
 
-// switchTo 把这个实例的窗口摆到当前位置显示出来，再把原来那个藏起来。
-func (b *bar) switchTo(id string) {
-	tgt := b.main[id]
+// switchTo 把这个实例的窗口摆到这一组的位置显示出来，再把原来那个藏起来。
+func (g *group) switchTo(id string) {
+	m := g.m
+	tgt := m.main[id]
 	if tgt == 0 {
 		return
 	}
-	cur := b.main[b.active]
-	r := b.lastWin
+	cur := m.main[g.active]
+	if m.of[g.active] != g { // 原来那个已经不在这一组了（被拖出去了）：不动它
+		cur = 0
+	}
+	r := g.lastWin
 	if cur != 0 && cur != tgt && isWindow(cur) && isVisible(cur) && !isIconic(cur) {
 		r = winRect(cur)
 	}
@@ -656,10 +546,10 @@ func (b *bar) switchTo(id string) {
 		_, _, _ = pSetWindowPos.Call(tgt, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 	}
 	show(tgt, swShow)
-	b.front(tgt) // 要在藏起原来那个之前：前台窗口被藏起来时，系统会自己另挑一个窗口当前台
-	b.swAt = time.Now()
-	b.owner = 0
-	b.own(tgt)
+	g.front(tgt) // 要在藏起原来那个之前：前台窗口被藏起来时，系统会自己另挑一个窗口当前台
+	g.swAt = time.Now()
+	g.owner = 0
+	g.own(tgt)
 	mu.Lock()
 	delete(hidden, tgt)
 	if cur != 0 && cur != tgt && isWindow(cur) {
@@ -669,457 +559,593 @@ func (b *bar) switchTo(id string) {
 	if cur != 0 && cur != tgt && isWindow(cur) {
 		show(cur, swHide)
 	}
-	b.active = id
+	g.active = id
 	if r.W() > 0 {
-		b.lastWin = r
+		g.lastWin = r
 	}
-	b.hookLoc(pidOf(tgt))
-	b.place()
-	b.pickBg()
-	b.repaintIfChanged()
-	b.snapshot()
+	g.hookLoc(pidOf(tgt))
+	g.place()
+	g.pickBg()
+	g.paintEdge()
+	g.repaintIfChanged()
 }
 
 // toggleFill 在“铺满屏幕”和原来的大小之间切换。浏览器自己的最大化不给实例栏留地方，所以一发现它最大化了就换成这个。
-func (b *bar) toggleFill() {
-	h := b.main[b.active]
+func (g *group) toggleFill() {
+	h := g.m.main[g.active]
 	if h == 0 {
 		return
 	}
 	work, _ := screenOf(h) // 先记下在哪块屏幕上：还原以后窗口可能回到别处
-	if b.filled {
+	if g.filled {
 		if isZoomed(h) {
 			show(h, swShowNoActivate)
 		}
-		if b.normal.W() > 0 {
-			setPos(h, b.normal, 0)
+		if g.normal.W() > 0 {
+			setPos(h, g.normal, 0)
 		}
-		b.filled = false
+		g.filled = false
 		return
 	}
 	if isZoomed(h) {
 		show(h, swShowNoActivate)
-		b.normal = winRect(h)
+		g.normal = winRect(h)
 	}
 	to := Filled(winRect(h), visRect(h), work, scaleOf(h))
 	setPos(h, to, 0)
-	b.filled, b.fillTo = true, winRect(h)
+	g.filled, g.fillTo = true, winRect(h)
 }
 
+// ear 是实例栏的窗口比栏本身多出来的那几行（见 Ears）。
+func ear(sc float64) int { return px(3, sc) }
+
 // place 把实例栏贴到当前窗口上面；窗口最小化、全屏时把栏收起来。
-func (b *bar) place() {
-	h := b.main[b.active]
+func (g *group) place() {
+	h := g.m.main[g.active]
 	if h == 0 || !isWindow(h) || isIconic(h) || !isVisible(h) {
-		b.hideBar()
+		g.hideBar()
 		return
 	}
 	vis := visRect(h)
 	if _, mon := screenOf(h); covers(vis, mon) { // 全屏（F11、视频）
-		b.hideBar()
+		g.hideBar()
 		return
 	}
 	win := winRect(h)
-	b.lastWin = win
-	if b.filled && win != b.fillTo && !isZoomed(h) { // 铺满以后被拖动、改了大小：不算铺满了。最大化不算（下一遍对账时还原）
-		b.filled = false
+	g.lastWin = win
+	if g.filled && win != g.fillTo && !isZoomed(h) { // 铺满以后被拖动、改了大小：不算铺满了。最大化不算（下一遍对账时还原）
+		g.filled = false
 	}
-	if !b.filled && !isZoomed(h) {
-		b.normal = win
+	if !g.filled && !isZoomed(h) {
+		g.normal = win
 	}
 	sc := scaleOf(h)
 	r := BarRect(vis, sc)
-	if r == b.rect && b.shown && sc == b.scale {
+	if r == g.rect && g.shown && sc == g.scale {
 		return
 	}
-	resized := r.W() != b.rect.W() || sc != b.scale || !b.shown
-	b.rect, b.scale = r, sc
+	resized := r.W() != g.rect.W() || sc != g.scale || !g.shown
+	g.rect, g.scale = r, sc
 	flags := uintptr(swpNoActivate | swpNoZOrder)
-	if !b.shown {
+	if !g.shown {
 		flags |= swpShow
 	}
-	_, _, _ = pSetWindowPos.Call(b.hwnd, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), flags)
-	b.shown = true
+	_, _, _ = pSetWindowPos.Call(g.hwnd, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()+ear(sc)), flags)
+	g.shown = true
 	if resized {
-		b.sig = ""
-		b.repaintIfChanged()
+		g.sig = ""
+		g.repaintIfChanged()
 	}
 }
 
-func (b *bar) hideBar() {
-	if b.shown {
-		show(b.hwnd, swHide)
-		b.shown = false
+func (g *group) hideBar() {
+	if g.shown {
+		show(g.hwnd, swHide)
+		g.shown = false
 	}
 }
 
-// letGo：开关关了、或者一个实例都没有了。把藏着的窗口放出来（稍微错开，免得叠成一摞看不出有几个），收起实例栏。
-func (b *bar) letGo() {
-	if b.off {
+// letGo：开关关了、或者一个实例都没有了。把藏着的窗口放出来（稍微错开，免得叠成一摞看不出有几个），拆掉所有的实例栏。
+func (m *mgr) letGo() {
+	if m.off {
 		return
 	}
-	b.off = true
-	i := 0
-	for _, t := range b.tabs {
-		h := b.main[t.ID]
-		if t.ID == b.active || !isWindow(h) {
-			continue
+	m.off = true
+	m.endDrag(false)
+	n := 0
+	for _, g := range append([]*group(nil), m.groups...) {
+		i := 0
+		for _, t := range g.tabs {
+			h := m.main[t.ID]
+			n++
+			if t.ID == g.active || !isWindow(h) {
+				continue
+			}
+			i++
+			if g.lastWin.W() > 0 {
+				d := px(32*i, g.scale)
+				setPos(h, g.lastWin.Move(d, d), 0)
+			}
+			show(h, swShowNA)
 		}
-		i++
-		if b.lastWin.W() > 0 {
-			d := px(32*i, b.scale)
-			setPos(h, b.lastWin.Move(d, d), 0)
-		}
-		show(h, swShowNA)
+		g.hideBar()
+		g.own(0)
+		m.dropGroup(g)
 	}
 	mu.Lock()
 	for h := range hidden { // 兜底：名单里还有的也放出来
 		show(h, swShowNA)
 	}
 	clear(hidden)
+	for h := range edged {
+		resetEdge(h)
+	}
+	clear(edged)
 	mu.Unlock()
-	b.hideBar()
-	b.own(0)
-	if b.locHook != 0 {
-		_, _, _ = pUnhookWinEvent.Call(b.locHook)
-		b.locHook, b.locPid = 0, 0
+	if n > 0 {
+		m.host.Logf("合并窗口：放手，%d 个窗口各自显示", n)
 	}
-	if len(b.tabs) > 0 {
-		b.host.Logf("合并窗口：放手，%d 个窗口各自显示", len(b.tabs))
-	}
-	b.main, b.tabs, b.active, b.filled = map[string]uintptr{}, nil, "", false
-	b.snapshot()
+	m.main, m.of, m.cur, m.want = map[string]uintptr{}, map[string]*group{}, nil, nil
+	m.snapshot()
 }
 
-func (b *bar) snapshot() {
+func (m *mgr) snapshot() {
+	no := map[string]int{}
+	for _, t := range m.st.Tabs {
+		no[t.ID] = t.No
+	}
 	wins := []map[string]any{}
-	for _, t := range b.tabs {
-		h := b.main[t.ID]
-		wins = append(wins, map[string]any{"id": t.ID, "no": t.No, "pid": t.Pid, "hwnd": h, "visible": isVisible(h), "rect": winRect(h), "vis": visRect(h)})
+	groups := []map[string]any{}
+	var cur map[string]any
+	for gi, g := range m.groups {
+		var tabs []int
+		for _, t := range g.tabs {
+			h := m.main[t.ID]
+			tabs = append(tabs, t.No)
+			wins = append(wins, map[string]any{"id": t.ID, "no": t.No, "pid": t.Pid, "hwnd": h, "visible": isVisible(h), "rect": winRect(h), "vis": visRect(h), "group": gi})
+		}
+		var slots []Rect
+		for _, s := range g.lay.Slots {
+			slots = append(slots, s.Tab)
+		}
+		x := map[string]any{"bar": g.hwnd, "shown": g.shown, "rect": g.rect, "scale": g.scale, "active": g.active, "activeNo": no[g.active],
+			"filled": g.filled, "slots": slots, "plus": g.lay.Plus, "bg": g.bg, "tabs": tabs, "drop": g.drop}
+		groups = append(groups, x)
+		if g == m.cur || cur == nil {
+			cur = x
+		}
 	}
-	var slots []Rect
-	for _, s := range b.lay.Slots {
-		slots = append(slots, s.Tab)
+	s := map[string]any{}
+	for k, v := range cur { // 最近用过的那一组的情况也放在最外层：只有一组时测试脚本不用管“组”
+		s[k] = v
 	}
-	s := map[string]any{"bar": b.hwnd, "shown": b.shown, "rect": b.rect, "scale": b.scale, "active": b.active, "filled": b.filled,
-		"windows": wins, "slots": slots, "plus": b.lay.Plus, "enabled": b.st.Enabled, "bg": b.bg}
+	s["enabled"], s["groups"], s["windows"], s["dragging"] = m.st.Enabled, groups, wins, m.drag.on
 	mu.Lock()
 	snap = s
 	mu.Unlock()
 }
 
-// ---------- 画 ----------
+// ---------- 把实例拖出去、并进来 ----------
 
-func (b *bar) repaintIfChanged() {
-	var sb strings.Builder
-	for _, t := range b.tabs {
-		sb.WriteString(t.ID + "|" + t.Label() + "|")
-		sb.WriteByte(byte(t.Color[0]))
-		sb.WriteByte(byte(t.Color[1]))
-		sb.WriteByte(byte(t.Color[2]))
+// detach 把一个实例从它那一组里拿出来单独成一组，窗口摆到鼠标底下（抓的还是那个标签）。
+func (m *mgr) detach(g *group, id string, x, y, gx, gy int) *group {
+	h := m.main[id]
+	if h == 0 || len(g.tabs) < 2 {
+		return nil
 	}
-	sig := sb.String() + "@" + b.active + string(rune('0'+b.hover+1)) + string(rune('0'+b.hoverKind)) +
-		string(rune(b.rect.W())) + string(rune(int(b.scale*100))) + string(rune(b.bg[0]<<16|b.bg[1]<<8|b.bg[2]))
-	if sig == b.sig {
-		return
+	ng := m.newGroup()
+	if ng == nil {
+		return nil
 	}
-	b.sig = sig
-	b.lay = Lay(b.rect.W(), len(b.tabs), b.scale)
-	b.render()
+	before := g.ids()
+	m.of[id] = ng
+	g.fill()
+	ng.fill()
+	ng.active, ng.scale = id, g.scale
+	win, vis := winRect(h), visRect(h)
+	if g.filled && g.normal.W() > 0 { // 从铺满的一组里拖出来：回到铺满之前的大小
+		dw, dh := g.normal.W()-win.W(), g.normal.H()-win.H()
+		win.R, win.B, vis.R, vis.B = win.R+dw, win.B+dh, vis.R+dw, vis.B+dh
+	}
+	if g.active == id { // 原来那一组换到旁边的实例，位置不变
+		alive := map[string]bool{}
+		for _, t := range g.tabs {
+			alive[t.ID] = true
+		}
+		g.active = ""
+		g.switchTo(Next(before, id, alive))
+	}
+	g.sig = ""
+	g.repaintIfChanged()
+	dx, dy := Carry(vis, x, y, gx, gy, g.scale)
+	r := win.Move(dx, dy)
+	_, _, _ = pSetWindowPos.Call(h, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), swpNoActivate)
+	if !isVisible(h) {
+		show(h, swShowNA)
+	}
+	mu.Lock()
+	delete(hidden, h)
+	mu.Unlock()
+	ng.front(h)
+	ng.lastWin = r
+	ng.own(h)
+	ng.hookLoc(pidOf(h))
+	ng.place()
+	ng.pickBg()
+	ng.paintEdge()
+	ng.repaintIfChanged()
+	m.cur = ng
+	m.host.Logf("合并窗口：实例 %s 被拖出来单独成一组（现在 %d 组）", id, len(m.groups))
+	return ng
 }
 
-func rgb(c [3]int) uintptr { return uintptr(c[0]) | uintptr(c[1])<<8 | uintptr(c[2])<<16 }
-
-func (b *bar) fonts() {
-	if b.font != 0 && b.fontSc == b.scale {
-		return
-	}
-	for _, f := range []uintptr{b.font, b.fontB} {
-		if f != 0 {
-			_, _, _ = pDeleteObject.Call(f)
+// merge 把 from 这一组整个并进 to，id 成为 to 的当前标签。
+func (m *mgr) merge(from, to *group, id string) {
+	for _, t := range from.tabs {
+		m.of[t.ID] = to
+		if h := m.main[t.ID]; t.ID != id && isVisible(h) {
+			mu.Lock()
+			hidden[h] = true
+			mu.Unlock()
+			show(h, swHide)
 		}
 	}
-	face, _ := syscall.UTF16PtrFromString("Microsoft YaHei UI")
-	mk := func(weight uintptr) uintptr {
-		// 不用 ClearType（彩色的次像素边）：字是画在我们自己的位图上的，之后整张图带透明度交给系统合成，普通抗锯齿才对
-		f, _, _ := pCreateFontW.Call(uintptr(-px(12, b.scale))&0xFFFFFFFF, 0, 0, 0, weight, 0, 0, 0, 1 /* 默认字符集 */, 0, 0, 4 /* 抗锯齿 */, 0, uintptr(unsafe.Pointer(face)))
-		return f
-	}
-	b.font, b.fontB, b.fontSc = mk(400), mk(600), b.scale
+	from.hideBar()
+	from.own(0)
+	m.dropGroup(from)
+	to.fill()
+	to.switchTo(id)
+	to.sig = ""
+	to.repaintIfChanged()
+	m.cur = to
+	m.host.Logf("合并窗口：实例 %s 并进了另一组（现在 %d 组）", id, len(m.groups))
 }
 
-// render 画出整条栏交给系统：形状用我们自己的位图（抗锯齿），字由系统画在上面，最后把上面两个角变成透明的圆角。
-func (b *bar) render() {
-	w, hgt := b.rect.W(), b.rect.H()
-	if w <= 0 || hgt <= 0 {
+func (m *mgr) startDrag(g *group, tab bool, id string, x, y, gx, gy int) {
+	h := m.main[g.active]
+	if h == 0 {
 		return
 	}
-	lk := LookOn(b.bg)
-	paints := make([]TabPaint, len(b.tabs))
-	for i, t := range b.tabs {
-		paints[i] = TabPaint{Color: t.Color, Active: t.ID == b.active, Hover: b.hover == i, HoverX: b.hover == i && b.hoverKind == HitClose}
-	}
-	c := Draw(w, b.lay, paints, lk, b.scale, b.hoverKind == HitPlus)
-	screen, _, _ := pGetDC.Call(0)
-	mem, _, _ := pCreateCompatibleDC.Call(screen)
-	defer func() {
-		_, _, _ = pDeleteDC.Call(mem)
-		_, _, _ = pReleaseDC.Call(0, screen)
-	}()
-	bi := bitmapInfoHeader{Width: int32(w), Height: -int32(hgt), Planes: 1, Bits: 32}
-	bi.Size = uint32(unsafe.Sizeof(bi))
-	var bits unsafe.Pointer
-	dib, _, _ := pCreateDIBSection.Call(mem, uintptr(unsafe.Pointer(&bi)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
-	if dib == 0 || bits == nil {
+	d := &m.drag
+	d.on, d.tab, d.out, d.g, d.id, d.target = true, tab, false, g, id, nil
+	d.sx, d.sy, d.gx, d.gy = x, y, gx, gy
+	d.win = winRect(h)
+	g.lastWin = d.win
+	_, _, _ = pSetCapture.Call(g.hwnd)
+}
+
+// dragMove：鼠标按着在动，(x, y) 是屏幕坐标。
+func (m *mgr) dragMove(x, y int) {
+	d := &m.drag
+	g := d.g
+	if !m.alive(g) {
+		m.endDrag(false)
 		return
 	}
-	defer pDeleteObject.Call(dib)
-	old, _, _ := pSelectObject.Call(mem, dib)
-	defer pSelectObject.Call(mem, old)
-	pix := unsafe.Slice((*byte)(bits), w*hgt*4)
-	copy(pix, c.Pix)
-	b.fonts()
-	_, _, _ = pSetBkMode.Call(mem, 1 /* 透明 */)
-	for i, s := range b.lay.Slots {
-		if i >= len(b.tabs) {
+	if !d.out {
+		if d.tab && len(g.tabs) > 1 { // 一组里有好几个实例：鼠标出了栏，才把抓着的这个拖出去
+			if !Left(g.rect, x, y, g.scale) {
+				return
+			}
+			ng := m.detach(g, d.id, x, y, d.gx, d.gy)
+			if ng == nil {
+				return
+			}
+			d.g, g = ng, ng
+			d.sx, d.sy, d.win = x, y, winRect(m.main[ng.active])
+		} else { // 抓的是空白处，或者这一组只有一个实例：整个窗口跟着走
+			dx, dy := x-d.sx, y-d.sy
+			if dx*dx+dy*dy < 25 {
+				return
+			}
+			if g.filled && g.normal.W() > 0 { // 从铺满的状态拖下来：回到原来的大小，鼠标仍然抓在同样的相对位置上
+				w0 := d.win.W()
+				nw, nh := g.normal.W(), g.normal.H()
+				l := d.sx - (d.sx-d.win.L)*nw/w0
+				d.win = Rect{l, d.win.T, l + nw, d.win.T + nh}
+				g.filled = false
+			}
+		}
+		d.out = true
+	}
+	h := m.main[g.active]
+	if h == 0 {
+		return
+	}
+	r := d.win.Move(x-d.sx, y-d.sy)
+	_, _, _ = pSetWindowPos.Call(h, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), swpNoZOrder|swpNoActivate|swpAsync)
+	// 栏自己先跟上，不等窗口那边的位置通知：两者一起动，不拖尾
+	if r.W() == g.lastWin.W() && g.shown {
+		g.rect = g.rect.Move(r.L-g.lastWin.L, r.T-g.lastWin.T)
+		_, _, _ = pSetWindowPos.Call(g.hwnd, 0, uintptr(g.rect.L), uintptr(g.rect.T), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
+	}
+	g.lastWin = r
+	if d.tab {
+		m.aim(x, y)
+	}
+}
+
+// aim 看鼠标是不是停在别的组的栏上，是的话让那条栏亮起来。
+func (m *mgr) aim(x, y int) {
+	d := &m.drag
+	var t *group
+	for _, o := range m.groups {
+		if o != d.g && o.shown && Over(o.rect, x, y, o.scale) {
+			t = o
 			break
 		}
-		f := b.font
-		if paints[i].Active {
-			f = b.fontB
-		}
-		_, _, _ = pSelectObject.Call(mem, f)
-		_, _, _ = pSetTextColor.Call(mem, rgb(paints[i].Ink(lk)))
-		tr := rect32{int32(s.Tab.L + px(11, b.scale)), int32(s.Tab.T), int32(s.Tab.R - px(8, b.scale)), int32(s.Tab.B)}
-		if s.Close.W() > 0 && (paints[i].Active || paints[i].Hover) {
-			tr.R = int32(s.Close.L - px(2, b.scale))
-		}
-		if tr.R <= tr.L {
-			continue
-		}
-		txt, _ := syscall.UTF16FromString(b.tabs[i].Label())
-		// 单行、竖直居中、放不下用省略号、“&”不当快捷键
-		_, _, _ = pDrawTextW.Call(mem, uintptr(unsafe.Pointer(&txt[0])), uintptr(len(txt)-1), uintptr(unsafe.Pointer(&tr)), 0x20|0x4|0x8000|0x800)
 	}
-	_, _, _ = pGdiFlush.Call()
-	RoundTop(pix, w, hgt, 8*b.scale) // 系统画字时不写透明度那一位，这里统一补上
-	size, src := point32{int32(w), int32(hgt)}, point32{}
-	blend := [4]byte{0, 0, 255, 1} // 按位图自带的透明度合成
-	_, _, _ = pUpdateLayeredWindow.Call(b.hwnd, screen, 0, uintptr(unsafe.Pointer(&size)), mem, uintptr(unsafe.Pointer(&src)), 0, uintptr(unsafe.Pointer(&blend)), 2)
+	if t == d.target {
+		return
+	}
+	for _, o := range []*group{d.target, t} {
+		if m.alive(o) {
+			o.drop = o == t
+			o.repaintIfChanged()
+		}
+	}
+	d.target = t
+}
+
+// endDrag：松手（commit）或者拖动被打断。
+func (m *mgr) endDrag(commit bool) {
+	d := &m.drag
+	if !d.on {
+		return
+	}
+	g, t, id, merge := d.g, d.target, d.id, commit && d.tab && d.out
+	d.on, d.g, d.target = false, nil, nil
+	_, _, _ = pReleaseCapture.Call()
+	if m.alive(t) {
+		t.drop = false
+		t.repaintIfChanged()
+	}
+	switch {
+	case merge && m.alive(t) && m.alive(g) && t != g:
+		m.merge(g, t, id)
+	case m.alive(g):
+		g.rect = Rect{} // 让 place 按窗口的实际位置重新摆一次
+	}
+	m.sync()
 }
 
 // ---------- 鼠标 ----------
 
 func lparamXY(l uintptr) (int, int) { return int(int16(l & 0xFFFF)), int(int16((l >> 16) & 0xFFFF)) }
 
-func (b *bar) setHover(kind, idx int) {
+// mkTest：鼠标消息的 wParam 里带这一位时，lParam 里是屏幕坐标而不是栏里的坐标，并且不去问系统鼠标现在在哪。
+// 只有实机测试脚本这样发（scripts/win-dev.ps1 的 drag）：真鼠标的消息不会带这一位。
+const mkTest = 0x8000
+
+// where 返回这条鼠标消息在栏里的坐标和屏幕坐标。
+func (g *group) where(wp, lp uintptr) (x, y, sx, sy int) {
+	x, y = lparamXY(lp)
+	if wp&mkTest != 0 {
+		return x - g.rect.L, y - g.rect.T, x, y
+	}
+	sx, sy = cursor()
+	return
+}
+
+func (g *group) setHover(kind, idx int) {
 	if kind == HitNone {
 		idx = -1
 	}
-	if kind == b.hoverKind && idx == b.hover {
+	if kind == g.hoverKind && idx == g.hover {
 		return
 	}
-	b.hoverKind, b.hover = kind, idx
-	b.repaintIfChanged()
+	g.hoverKind, g.hover = kind, idx
+	g.repaintIfChanged()
 }
 
-func (b *bar) mouseMove(x, y int) {
-	if b.drag.on {
-		cx, cy := cursor()
-		dx, dy := cx-b.drag.cx, cy-b.drag.cy
-		if !b.drag.moved && dx*dx+dy*dy < 16 {
-			return
-		}
-		h := b.main[b.active]
-		if h == 0 {
-			return
-		}
-		if !b.drag.moved && b.filled && b.normal.W() > 0 { // 从铺满的状态拖下来：回到原来的大小，鼠标仍然抓在同样的相对位置上
-			w0 := b.drag.win.W()
-			nw, nh := b.normal.W(), b.normal.H()
-			l := b.drag.cx - (b.drag.cx-b.drag.win.L)*nw/w0
-			b.drag.win = Rect{l, b.drag.win.T, l + nw, b.drag.win.T + nh}
-			b.filled = false
-		}
-		b.drag.moved = true
-		r := b.drag.win.Move(dx, dy)
-		_, _, _ = pSetWindowPos.Call(h, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), swpNoZOrder|swpNoActivate|swpAsync)
-		// 栏自己先跟上，不等窗口那边的位置通知：两者一起动，不拖尾
-		br := b.rect.Move(r.L-b.lastWin.L, r.T-b.lastWin.T)
-		if r.W() != b.lastWin.W() {
-			br.R = br.L + b.rect.W() + (r.W() - b.lastWin.W())
-		}
-		b.lastWin = r
-		if br.W() == b.rect.W() {
-			b.rect = br
-			_, _, _ = pSetWindowPos.Call(b.hwnd, 0, uintptr(br.L), uintptr(br.T), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
-		}
-		return
-	}
-	if !b.tracking {
-		tm := trackMouse{Flags: 2 /* TME_LEAVE */, Hwnd: b.hwnd}
+func (g *group) mouseMove(x, y int) {
+	if !g.tracking {
+		tm := trackMouse{Flags: 2 /* TME_LEAVE */, Hwnd: g.hwnd}
 		tm.Size = uint32(unsafe.Sizeof(tm))
 		_, _, _ = pTrackMouseEvent.Call(uintptr(unsafe.Pointer(&tm)))
-		b.tracking = true
+		g.tracking = true
 	}
-	b.setHover(b.lay.Hit(x, y))
+	g.setHover(g.lay.Hit(x, y))
 }
 
-func (b *bar) click(x, y int) {
-	kind, i := b.lay.Hit(x, y)
-	h := b.main[b.active]
+func (g *group) click(x, y, sx, sy int) {
+	m := g.m
+	m.cur = g
+	kind, i := g.lay.Hit(x, y)
+	h := m.main[g.active]
 	switch kind {
 	case HitTab:
-		if i < len(b.tabs) && b.tabs[i].ID != b.active {
-			b.switchTo(b.tabs[i].ID)
-		} else if h != 0 {
-			_, _, _ = pSetForegroundWindow.Call(h)
+		if i >= len(g.tabs) {
+			return
 		}
+		id := g.tabs[i].ID
+		if id != g.active {
+			g.switchTo(id)
+		} else if h != 0 {
+			g.front(h)
+		}
+		m.startDrag(g, true, id, sx, sy, x-g.lay.Slots[i].Tab.L, y) // 按住不放再拖：把这个实例拖出去 / 并到别的组
 	case HitClose:
-		if i < len(b.tabs) {
-			go b.host.Close(b.tabs[i].ID)
+		if i < len(g.tabs) {
+			go m.host.Close(g.tabs[i].ID)
 		}
 	case HitPlus:
-		b.menu()
+		g.menu()
 	default: // 空白处：拖动整个窗口
 		if h == 0 {
 			return
 		}
 		_, _, _ = pSetForegroundWindow.Call(h)
-		b.drag.on, b.drag.moved = true, false
-		b.drag.cx, b.drag.cy = cursor()
-		b.drag.win = winRect(h)
-		b.lastWin = b.drag.win
-		_, _, _ = pSetCapture.Call(b.hwnd)
+		m.startDrag(g, false, "", sx, sy, 0, 0)
 	}
 }
 
-func (b *bar) endDrag() {
-	if !b.drag.on {
+func (g *group) menu() {
+	m := g.m
+	items := m.st.Menu
+	pm, _, _ := pCreatePopupMenu.Call()
+	if pm == 0 {
 		return
 	}
-	b.drag.on = false
-	_, _, _ = pReleaseCapture.Call()
-	b.rect = Rect{} // 让 place 按窗口的实际位置重新摆一次
-	b.sync()
-}
-
-func (b *bar) menu() {
-	items := b.st.Menu
-	m, _, _ := pCreatePopupMenu.Call()
-	if m == 0 {
-		return
-	}
-	defer pDestroyMenu.Call(m)
+	defer pDestroyMenu.Call(pm)
 	for i, it := range items {
 		if it.Label == "-" {
-			_, _, _ = pAppendMenuW.Call(m, 0x800 /* 分隔线 */, 0, 0)
+			_, _, _ = pAppendMenuW.Call(pm, 0x800 /* 分隔线 */, 0, 0)
 			continue
 		}
 		s, _ := syscall.UTF16PtrFromString(it.Label)
-		_, _, _ = pAppendMenuW.Call(m, 0, uintptr(i+1), uintptr(unsafe.Pointer(s)))
+		_, _, _ = pAppendMenuW.Call(pm, 0, uintptr(i+1), uintptr(unsafe.Pointer(s)))
 	}
-	x, y := b.rect.L+b.lay.Plus.L, b.rect.T+b.lay.Plus.B+px(2, b.scale)
-	_, _, _ = pSetForegroundWindow.Call(b.hwnd) // 不这样的话点别处菜单不会自己收起来
-	cmd, _, _ := pTrackPopupMenu.Call(m, 0x100 /* 返回选中的项 */ |0x80, uintptr(x), uintptr(y), 0, b.hwnd, 0)
-	_, _, _ = pPostMessageW.Call(b.hwnd, 0, 0, 0)
-	if h := b.main[b.active]; h != 0 {
+	x, y := g.rect.L+g.lay.Plus.L, g.rect.T+g.lay.Plus.B+px(2, g.scale)
+	_, _, _ = pSetForegroundWindow.Call(g.hwnd) // 不这样的话点别处菜单不会自己收起来
+	cmd, _, _ := pTrackPopupMenu.Call(pm, 0x100 /* 返回选中的项 */ |0x80, uintptr(x), uintptr(y), 0, g.hwnd, 0)
+	if !m.alive(g) { // 菜单开着的时候这一组没了
+		return
+	}
+	_, _, _ = pPostMessageW.Call(g.hwnd, 0, 0, 0)
+	if h := m.main[g.active]; h != 0 {
 		_, _, _ = pSetForegroundWindow.Call(h)
 	}
 	if n := int(cmd); n > 0 && n <= len(items) {
-		go b.host.Pick(items[n-1].Key)
+		m.want, m.wantAt = g, time.Now() // 打开 / 新建的实例进这一组
+		go m.host.Pick(items[n-1].Key)
 	}
 }
 
-func wndProc(hwnd, m, wp, lp uintptr) uintptr {
-	b := theBar
-	if b == nil || b.hwnd != hwnd {
-		r, _, _ := pDefWindowProcW.Call(hwnd, m, wp, lp)
+func (m *mgr) focus() {
+	mu.Lock()
+	id := pending
+	pending = ""
+	mu.Unlock()
+	m.sync()
+	g := m.of[id]
+	if g == nil || m.main[id] == 0 {
+		return
+	}
+	m.cur = g
+	if id != g.active {
+		g.switchTo(id)
+	} else if h := m.main[id]; h != 0 {
+		if isIconic(h) {
+			show(h, 9 /* 还原 */)
+		}
+		g.front(h)
+	}
+	m.snapshot()
+}
+
+func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
+	m := theMgr
+	if m == nil {
+		r, _, _ := pDefWindowProcW.Call(hwnd, ms, wp, lp)
 		return r
 	}
-	switch m {
-	case wmTimer, wmApp:
-		b.sync()
-		return 0
-	case wmAppFocus:
-		mu.Lock()
-		id := pending
-		pending = ""
-		mu.Unlock()
-		b.sync()
-		if id != "" && id != b.active && b.main[id] != 0 {
-			b.switchTo(id)
-		} else if h := b.main[b.active]; id == b.active && h != 0 {
-			if isIconic(h) {
-				show(h, 9 /* 还原 */)
-			}
-			_, _, _ = pSetForegroundWindow.Call(h)
+	if hwnd == m.ctl {
+		switch ms {
+		case wmTimer, wmApp:
+			m.sync()
+			return 0
+		case wmAppFocus:
+			m.focus()
+			return 0
 		}
-		return 0
+		r, _, _ := pDefWindowProcW.Call(hwnd, ms, wp, lp)
+		return r
+	}
+	var g *group
+	for _, x := range m.groups {
+		if x.hwnd == hwnd {
+			g = x
+		}
+	}
+	if g == nil {
+		r, _, _ := pDefWindowProcW.Call(hwnd, ms, wp, lp)
+		return r
+	}
+	switch ms {
 	case wmMouseActivate:
 		return 3 // 不激活：焦点留在浏览器窗口里
 	case wmMouseMove:
-		x, y := lparamXY(lp)
-		b.mouseMove(x, y)
-		return 0
-	case wmMouseLeave:
-		b.tracking = false
-		b.setHover(HitNone, -1)
-		return 0
-	case wmLButtonDown:
-		x, y := lparamXY(lp)
-		b.click(x, y)
-		return 0
-	case wmLButtonDbl:
-		x, y := lparamXY(lp)
-		if kind, _ := b.lay.Hit(x, y); kind == HitNone {
-			b.endDrag()
-			b.toggleFill()
-			b.rect = Rect{}
-			b.place()
-			b.snapshot()
+		x, y, sx, sy := g.where(wp, lp)
+		if m.drag.on {
+			m.dragMove(sx, sy)
+			m.snapshot()
 		} else {
-			b.click(x, y)
+			g.mouseMove(x, y)
 		}
 		return 0
-	case wmLButtonUp, wmCaptureChange:
-		if m == wmLButtonUp || b.drag.on && lp != hwnd {
-			b.endDrag()
+	case wmMouseLeave:
+		g.tracking = false
+		g.setHover(HitNone, -1)
+		return 0
+	case wmLButtonDown:
+		x, y, sx, sy := g.where(wp, lp)
+		g.click(x, y, sx, sy)
+		m.snapshot()
+		return 0
+	case wmLButtonDbl:
+		x, y, sx, sy := g.where(wp, lp)
+		if kind, _ := g.lay.Hit(x, y); kind == HitNone {
+			m.endDrag(false)
+			g.toggleFill()
+			g.rect = Rect{}
+			g.place()
+		} else {
+			g.click(x, y, sx, sy)
+		}
+		m.snapshot()
+		return 0
+	case wmLButtonUp:
+		if m.drag.on {
+			_, _, sx, sy := g.where(wp, lp)
+			m.dragMove(sx, sy)
+		}
+		m.endDrag(true)
+		return 0
+	case wmCaptureChange:
+		if m.drag.on && lp != hwnd {
+			m.endDrag(false)
 		}
 		return 0
 	case wmMButtonUp:
-		x, y := lparamXY(lp)
-		if kind, i := b.lay.Hit(x, y); (kind == HitTab || kind == HitClose) && i < len(b.tabs) {
-			go b.host.Close(b.tabs[i].ID)
+		x, y, _, _ := g.where(wp, lp)
+		if kind, i := g.lay.Hit(x, y); (kind == HitTab || kind == HitClose) && i < len(g.tabs) {
+			go m.host.Close(g.tabs[i].ID)
 		}
 		return 0
 	}
-	r, _, _ := pDefWindowProcW.Call(hwnd, m, wp, lp)
+	r, _, _ := pDefWindowProcW.Call(hwnd, ms, wp, lp)
 	return r
 }
 
-// winEvent：系统通知窗口动了、换了前台。只关心当前那个窗口。
+// winEvent：系统通知窗口动了、换了前台。
 func winEvent(_, event, hwnd, idObject, _, _, _ uintptr) uintptr {
-	b := theBar
-	if b == nil || b.off {
+	m := theMgr
+	if m == nil || m.off {
 		return 0
 	}
-	h := b.main[b.active]
+	var g *group // 这个窗口是哪一组当前的那个
+	for _, x := range m.groups {
+		if hwnd != 0 && m.main[x.active] == hwnd {
+			g = x
+		}
+	}
 	switch event {
 	case evLocation:
-		if hwnd == h && int32(idObject) == 0 && !b.drag.on {
-			b.place()
+		if g != nil && int32(idObject) == 0 && !(m.drag.on && m.drag.g == g) {
+			g.place()
 		}
 	case evMoveSizeStart:
-		if hwnd == h {
-			b.moving = true
+		if g != nil {
+			g.moving = true
 		}
 	case evMoveSizeEnd:
-		if hwnd == h {
-			b.moving = false
-			b.sync()
+		if g != nil {
+			g.moving = false
+			m.sync()
 		}
 	case evForeground, evMinimizeStart, evMinimizeEnd:
-		b.sync()
+		m.sync()
 	}
 	return 0
 }
