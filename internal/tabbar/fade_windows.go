@@ -73,10 +73,10 @@ func (v *veil) fade(m *mgr) {
 			time.Sleep(6 * time.Millisecond)
 		}
 	}
-	for t0 := time.Now(); time.Since(t0) < 70*time.Millisecond; { // 新窗口从藏着到画出第一帧要一点时间
+	for t0 := time.Now(); time.Since(t0) < 30*time.Millisecond; { // 新窗口从藏着到画出第一帧要一点时间（显示窗口那一步本身已经等了它一会儿）
 		wait()
 	}
-	const dur = 170 * time.Millisecond
+	const dur = 160 * time.Millisecond
 	start := time.Now()
 	frames := 0
 	for {

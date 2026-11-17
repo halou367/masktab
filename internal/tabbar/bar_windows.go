@@ -570,6 +570,7 @@ func (g *group) switchTo(id string) {
 	}
 	r := g.lastWin
 	var v *veil
+	t0 := time.Now()
 	if cur != 0 && cur != tgt && isWindow(cur) && isVisible(cur) && !isIconic(cur) {
 		r = winRect(cur)
 		if !m.drag.on { // 换实例不闪：先把现在的样子盖在上面，底下换好了再让它淡出去（decisions UI-18）
@@ -613,6 +614,7 @@ func (g *group) switchTo(id string) {
 	g.paintEdge()
 	g.repaintIfChanged()
 	if v != nil {
+		m.note("switch: windows swapped in %dms", time.Since(t0).Milliseconds())
 		v.fade(m)
 		setCalm(tgt, false)
 		if isWindow(cur) {
