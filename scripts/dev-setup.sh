@@ -49,7 +49,7 @@ cd "$MT_ROOT"
 # git：沙箱重置会丢 .git/config（远端、署名、推送凭据都在里面），这里补回来。令牌只从 ~/.masktab-token 读，不写进仓库和 .git/config。
 git remote get-url origin > /dev/null 2>&1 || { git remote add origin "https://github.com/$(sed -n 's#^module github.com/##p' go.mod).git"; say "补上 git 远端"; }
 git config user.name > /dev/null || { git config user.name "$(git log -1 --format=%an)"; git config user.email "$(git log -1 --format=%ae)"; say "补上 git 署名（沿用上一个提交的）"; }
-git config core.fileMode false
+git config core.fileMode false   # 沙箱恢复出来的文件不带可执行位，不关掉的话每个脚本都显示“改过”。代价：新加的脚本要 git add --chmod=+x
 if [ -z "$CI" ] && [ -f "$HOME/.masktab-token" ]; then
   printf '#!/bin/sh\ncase "$1" in *sername*) echo x-access-token;; *) cat "$HOME/.masktab-token";; esac\n' > "$MT_DEV/askpass.sh"; chmod +x "$MT_DEV/askpass.sh"
   git config core.askPass "$MT_DEV/askpass.sh"
