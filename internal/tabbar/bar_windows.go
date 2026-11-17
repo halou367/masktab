@@ -370,7 +370,7 @@ var (
 	})
 )
 
-// browserWindows 列出看得见的内核顶层窗口（从上到下）：没有属主、不是工具窗口、够大（小的是画中画之类）。只在实例栏的线程上调用。
+// browserWindows 列出看得见的内核顶层窗口（从上到下）：没有属主、不是工具窗口、不是画中画。只在实例栏的线程上调用。
 func browserWindows() []topWin {
 	enumOut = enumOut[:0]
 	_, _, _ = pEnumWindows.Call(enumCB(), 0)
@@ -382,7 +382,8 @@ func browserWindows() []topWin {
 		if o, _, _ := pGetWindow.Call(h, 4 /* GW_OWNER */); o != 0 {
 			continue
 		}
-		if ex, _, _ := pGetWindowLongPtrW.Call(h, ^uintptr(19) /* GWL_EXSTYLE */); ex&0x80 != 0 {
+		// 工具窗口不算；总在最前的也不算（画中画的小窗口）
+		if ex, _, _ := pGetWindowLongPtrW.Call(h, ^uintptr(19) /* GWL_EXSTYLE */); ex&(0x80|0x8) != 0 {
 			continue
 		}
 		var cls [64]uint16
@@ -390,7 +391,8 @@ func browserWindows() []topWin {
 		if n == 0 || !strings.HasPrefix(syscall.UTF16ToString(cls[:n]), "Chrome_WidgetWin_") {
 			continue
 		}
-		if r := winRect(h); !isIconic(h) && (r.W() < 300 || r.H() < 200) {
+		// 太小的不是浏览器窗口。门槛不能高：浏览器窗口能缩到大约 500×130（真机上遇到过，按 300×200 卡就把它漏掉了）
+		if r := winRect(h); !isIconic(h) && (r.W() < 200 || r.H() < 80) {
 			continue
 		}
 		out = append(out, topWin{h, pidOf(h)})
