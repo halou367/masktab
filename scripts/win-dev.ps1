@@ -145,7 +145,7 @@ switch ($cmd) {
     $bar = [IntPtr][long]$d.bar; $win = [IntPtr][long]$w.hwnd
     $L = [int]$w.vis.L; $T = [int]$d.rect.T; $R = [int]$w.vis.R; $B = [Math]::Min([int]$w.vis.B, $T + 420)
     # refuse unless the test window really is what is on screen there (no pixels are read for this check)
-    $bad = 0; foreach ($fx in 0.02, 0.5, 0.98) { foreach ($yy in ($T + 10), ($T + 60), ($B - 10)) { $pt = New-Object System.Drawing.Point ([int]($L + ($R - $L) * $fx)), $yy; $r = [W]::GetAncestor([W]::WindowFromPoint($pt), 2); if ($r -ne $bar -and $r -ne $win) { $bad++ } } }
+    $bad = 0; foreach ($fx in 0.02, 0.5, 0.98) { foreach ($yy in ($T + 10), ($T + 60), ($B - 10)) { $pt = New-Object System.Drawing.Point ([int]($L + ($R - $L) * $fx)), $yy; $root = [W]::GetAncestor([W]::WindowFromPoint($pt), 2); if ($root -ne $bar -and $root -ne $win) { $bad++ } } }
     if ($bad -gt 0) { "covered by another window at $bad of 9 points: not captured"; break }
     $m = 6; $bmp = New-Object System.Drawing.Bitmap ($R - $L + 2 * $m), ($B - $T + $m); $g2 = [System.Drawing.Graphics]::FromImage($bmp)
     $g2.CopyFromScreen(($L - $m), ($T - $m), 0, 0, $bmp.Size); $g2.Dispose(); $out = "$dev\shots\$a1.png"; $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
