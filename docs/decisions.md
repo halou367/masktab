@@ -1169,7 +1169,9 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   - `RewriteChain`：全局出口默认写成 `/video/<加密串>`。加密串就是 edgetunnel 的 `base64SecretEncode`：把链式代理的 JSON 按节点的 uuid 逐字节异或（trojan 节点用 password），再做 Base64，这样 path 里不会出现明文的账号和地址。没有 uuid，或在“高级 → 全局代理的 path 写法”里选了“明文”时，写成 `/sstp://账号@主机:端口`，旧版服务端也认。
   - 改 path 写法以后会马上重载 mihomo 配置。
 - 证据：`TestRewriteChain` 测了生成的串，又拿 edgetunnel 源码（2026-11-10 的 main）里的 `base64SecretDecode` 和 `/video/` 正则解回去，得到 `{"hostname":"public-vpn-1.opengw.net","password":"vpn","port":443,"type":"sstp","username":"vpn"}`，和原来一致。
-- 未验证：没有经真服务端跑过 SSTP 上游，Worker 能不能连上 VPN Gate 也还不知道；旧版 edgetunnel 不认 `/video/`，要手动切到明文。
+- 实测（2026-11-17 23:50，需求方电脑上的开发版，用正式版的两个订阅）：导入 5 台 VPN Gate 的 SSTP（`sstp://vpn:vpn@<主机>.opengw.net:<端口>`），经 Worker 测到 4 台能通，出口分别是 KDDI、BIGLOBE、NTT、Sony 的日本宽带 IP，延迟 210 到 1400 ms；大学那台 public-vpn 超时。实例 #1 选 NTT 那台：Cloudflare 站点和普通站点看到的都是同一个 IP，时区自动设成 Asia/Tokyo，前后一致。mihomo 配置里 11 条 path 都是 `/video/`，没有明文 sstp://。
+- 还剩的问题：DNS 检测（bash.ws）看到的解析器仍是 Cloudflare 日本，因为域名是 Worker 解析的，不在客户端，客户端改不了。另外每条新连接都要建一次 SSTP，首字节 1.9 秒左右；下载约 1.1 MB/s，20 MB 的文件下到 3.4 MB 连接就断了。
+- 旧版 edgetunnel 不认 `/video/`，要手动切到明文。
 
 ### UI-22 IP 列表统一：入口、出口、地址库同一种行，点延迟单测，点下载测峰值（2026-11-17，需求方：“订阅与地址库里面每一个 IP 都是空的……IP 类不论入口和出口都尽可能注释统一，可以测速测延迟，比如点击延迟可以单测延迟，点击测下载速度按钮可以测峰值，无论小窗还是设置内”）
 - 每一行：国旗；地址；第二行依次是类型（优选 / 反代 / 全局代理的类型）、住宅或机房图标、纯净度（短条加分数）、城市和运营商；右边是下载、延迟。
