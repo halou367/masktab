@@ -33,6 +33,8 @@ var (
 	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	pIsIconic                 = user32.NewProc("IsIconic")
 	pIsZoomed                 = user32.NewProc("IsZoomed")
+	pGetWindowPlacement       = user32.NewProc("GetWindowPlacement")
+	pSetWindowPlacement       = user32.NewProc("SetWindowPlacement")
 	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	pEnumWindows              = user32.NewProc("EnumWindows")
@@ -156,9 +158,9 @@ const (
 	wmApp           = 0x8000 // 重新对一遍
 	wmAppFocus      = 0x8001 // 切到 Focus 要的那个实例
 
-	swHide, swShowNoActivate, swShow, swShowNA = 0, 4, 5, 8
-	swpNoSize, swpNoMove, swpNoZOrder          = 0x1, 0x2, 0x4
-	swpNoActivate, swpShow, swpHide, swpAsync  = 0x10, 0x40, 0x80, 0x4000
+	swHide, swMaximize, swShowNoActivate, swShow, swShowNA = 0, 3, 4, 5, 8
+	swpNoSize, swpNoMove, swpNoZOrder                      = 0x1, 0x2, 0x4
+	swpNoActivate, swpShow, swpHide, swpAsync              = 0x10, 0x40, 0x80, 0x4000
 
 	evForeground, evMoveSizeStart, evMoveSizeEnd = 0x0003, 0x000A, 0x000B
 	evMinimizeStart, evMinimizeEnd, evLocation   = 0x0016, 0x0017, 0x800B
@@ -220,6 +222,33 @@ func scaleOf(h uintptr) float64 {
 		return float64(d) / 96
 	}
 	return 1
+}
+
+type windowPlacement struct {
+	Length, Flags, ShowCmd uint32
+	Min, Max               point32
+	Normal                 rect32
+}
+
+// setPlaced 一步到位：把（多半正最大化着的）窗口变成普通状态、摆到 r（屏幕坐标），不抢焦点。成了返回 true。
+// 不用“先还原、再挪过去”两步：那样系统先放一段“还原”的动画（缩回最大化之前的位置），还没放完窗口又被挪走，
+// 屏幕上是几个半透明的重影叠在一起（需求方机器上连拍屏幕拍到的，前后 0.3 秒）。一步到位的话系统只放一段动画，从哪到哪都是对的。
+func setPlaced(h uintptr, r Rect) bool {
+	wp := windowPlacement{}
+	wp.Length = uint32(unsafe.Sizeof(wp))
+	if ok, _, _ := pGetWindowPlacement.Call(h, uintptr(unsafe.Pointer(&wp))); ok == 0 {
+		return false
+	}
+	wp.Flags, wp.ShowCmd = 0, swShowNoActivate
+	wp.Normal = rect32{int32(r.L), int32(r.T), int32(r.R), int32(r.B)}
+	if ok, _, _ := pSetWindowPlacement.Call(h, uintptr(unsafe.Pointer(&wp))); ok == 0 {
+		return false
+	}
+	// 这个结构里的坐标不算任务栏：任务栏在屏幕上边 / 左边时，摆出来会差一个任务栏的宽。量一下，差了就补上
+	if !isZoomed(h) && winRect(h) != r {
+		setPos(h, r, 0)
+	}
+	return true
 }
 
 func setPos(h uintptr, r Rect, flags uintptr) {

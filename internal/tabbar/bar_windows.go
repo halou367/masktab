@@ -47,6 +47,8 @@ type group struct {
 	normal  Rect // 没铺满时的外框
 	filled  bool // 铺满屏幕（代替最大化）
 	fillTo  Rect
+	inset   [4]int // 窗口外面那圈看不见的边：左、上、右、下各多宽（见 noteInset）
+	insetOK bool
 
 	moving  bool    // 用户正拖着浏览器窗口
 	owner   uintptr // 实例栏现在跟着哪个窗口
@@ -625,6 +627,18 @@ func (g *group) switchTo(id string) {
 }
 
 // toggleFill 在“铺满屏幕”和原来的大小之间切换。浏览器自己的最大化不给实例栏留地方，所以一发现它最大化了就换成这个。
+//
+// 铺满的窗口不是“最大化”的，只是一个摆得正好占满可用区域的普通窗口（浏览器最大化以后标签页那一排会变矮、顶上不留空，
+// 实例栏展开时就盖不准了；普通窗口的样子不变）。
+//
+// 过渡交给系统放（2026-11-18，需求方：“把整个功能做的更原生、流畅”）：
+//   - 铺满：窗口先真的最大化（点浏览器的最大化按钮本来就是；双击栏的空白处时由我们来最大化），系统放它的“最大化”动画；
+//     然后一步换成铺满的位置（setPlaced）——两个位置只差几个像素，看不出来。
+//   - 还原：从最大化一步回到原来的位置，系统放它的“还原”动画。双击空白处来的时候窗口不是最大化的，先不放动画地最大化一下
+//     （位置几乎不变，看不出来），再还原。
+//
+// 以前铺满是“还原（系统放一段缩回去的动画）→ 再挪成铺满”，和系统的最大化动画叠在一起，屏幕上有 0.3 秒是几个重影；
+// 双击空白处则完全没有动画，直接跳。
 func (g *group) toggleFill() {
 	h := g.m.main[g.active]
 	if h == 0 {
@@ -632,25 +646,61 @@ func (g *group) toggleFill() {
 	}
 	work, _ := screenOf(h) // 先记下在哪块屏幕上：还原以后窗口可能回到别处
 	if g.filled {
-		if isZoomed(h) {
-			show(h, swShowNoActivate)
+		if !isZoomed(h) {
+			setCalm(h, true)
+			show(h, swMaximize)
+			setCalm(h, false)
 		}
-		if g.normal.W() > 0 {
-			setPos(h, g.normal, 0)
+		if g.normal.W() <= 0 || !setPlaced(h, g.normal) {
+			if isZoomed(h) {
+				show(h, swShowNoActivate)
+			}
+			if g.normal.W() > 0 {
+				setPos(h, g.normal, 0)
+			}
 		}
 		g.filled = false
 		return
 	}
-	if isZoomed(h) {
+	if !isZoomed(h) { // 双击栏的空白处
+		g.normal = winRect(h)
+		g.noteInset(h)
+		show(h, swMaximize)
+	}
+	fill := func(win, vis Rect) Rect {
+		if g.m.st.Compact {
+			return FilledCompact(win, vis, work)
+		}
+		return Filled(win, vis, work, scaleOf(h))
+	}
+	if isZoomed(h) && g.insetOK { // 窗口外面那圈看不见的边有多宽，是它还没最大化的时候量好的
+		in := g.inset
+		if setPlaced(h, fill(Rect{-in[0], -in[1], 100 + in[2], 100 + in[3]}, Rect{0, 0, 100, 100})) {
+			if to := fill(winRect(h), visRect(h)); to != winRect(h) { // 换了屏幕、缩放不一样：那圈边的宽度变了，按实际的再摆一次
+				setPos(h, to, 0)
+			}
+			g.filled, g.fillTo = true, winRect(h)
+			return
+		}
+	}
+	if isZoomed(h) { // 没量过（程序启动时它就是最大化的）：只好先还原再量
 		show(h, swShowNoActivate)
 		g.normal = winRect(h)
 	}
-	to := Filled(winRect(h), visRect(h), work, scaleOf(h))
-	if g.m.st.Compact {
-		to = FilledCompact(winRect(h), visRect(h), work)
-	}
-	setPos(h, to, 0)
+	setPos(h, fill(winRect(h), visRect(h)), 0)
 	g.filled, g.fillTo = true, winRect(h)
+}
+
+// noteInset 记下窗口外面那圈看不见的边（拖着改大小用的）各有多宽。只在窗口是普通状态时量：最大化以后不一样。
+func (g *group) noteInset(h uintptr) {
+	if isZoomed(h) || isIconic(h) {
+		return
+	}
+	win, vis := winRect(h), visRect(h)
+	if vis.W() <= 0 || win.W() <= 0 {
+		return
+	}
+	g.inset, g.insetOK = [4]int{vis.L - win.L, vis.T - win.T, win.R - vis.R, win.B - vis.B}, true
 }
 
 // ear 是实例栏的窗口比栏本身多出来的那几行（见 Ears）。
@@ -676,6 +726,7 @@ func (g *group) place() {
 	if !g.filled && !isZoomed(h) {
 		g.normal = win
 	}
+	g.noteInset(h)
 	sc := scaleOf(h)
 	r := BarRect(vis, sc)
 	if g.m.st.Compact {
@@ -1418,6 +1469,10 @@ func winEvent(_, event, hwnd, idObject, _, _, _ uintptr) uintptr {
 	switch event {
 	case evLocation:
 		if g != nil && int32(idObject) == 0 && !(m.drag.on && m.drag.g == g) {
+			if isZoomed(hwnd) && !isIconic(hwnd) && !g.moving { // 刚最大化：马上换成“铺满”，不等下一次定时对账（等的话顶上的色条会不见一小会儿）
+				g.toggleFill()
+				g.rect = Rect{}
+			}
 			g.place()
 		}
 	case evMoveSizeStart:
