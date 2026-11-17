@@ -85,7 +85,6 @@ type mgr struct {
 	drag struct {
 		on     bool
 		test   bool   // 这次拖动是测试脚本发消息模拟的（不是真鼠标）
-		lost   bool   // 系统说“抓着鼠标”被收走了，但当时手上有事没能当场收尾：下一次定时器来收（dragWatch）
 		tab    bool   // 抓的是标签（可以拖出去、并进别的组）；不是的话抓的是栏的空白处（只是挪窗口）
 		out    bool   // 窗口已经跟着鼠标在动了
 		g      *group // 跟着鼠标动的是哪一组
@@ -973,7 +972,7 @@ func (m *mgr) endDrag(commit bool) {
 		}
 		return Rect{}
 	}())
-	d.on, d.g, d.target, d.test, d.lost = false, nil, nil, false, false
+	d.on, d.g, d.target, d.test = false, nil, nil, false
 	_, _, _ = pReleaseCapture.Call()
 	if m.alive(t) {
 		t.drop = false
@@ -988,20 +987,22 @@ func (m *mgr) endDrag(commit bool) {
 	m.sync()
 }
 
-// dragWatch 是拖动的兜底：记着“正拖着”，可鼠标主键其实已经没按着了（或者系统早说过鼠标被收走了），就当场收尾。
+// dragWatch 是拖动的兜底：记着“正拖着”，可鼠标主键其实已经没按着了，就当场收尾。
 // 点完标签马上看一次，之后每 10 毫秒看一次。
 // 为什么要有（需求方 2026-11-18：“点击后鼠标移开，就会把实例拽出来……我只是单击”，CI 上用真鼠标点也点出来过）：
 // 点标签这一下先换实例（换窗口 + 淡出，0.2～0.3 秒，这期间不处理别的消息），换完才记“开始拖”——普通的一下单击，这时手早松了。
 // 而松手是在换窗口的半路上发生的：那一刻鼠标底下最上面的不一定是实例栏（新窗口正盖上来），我们也还没“抓着鼠标”，
 // 系统就可能把松手送给别的窗口。于是程序一直以为还按着，鼠标一离开栏就把这个实例“拖”出去单独成一组。
 // 测试脚本模拟的拖动不看（它本来就没有真的按着鼠标）。
+// 只认“键是不是真的按着”，不认系统发来的“鼠标被收走了”：把实例拖出栏的那一下，我们自己会把“抓着鼠标”从旧栏换到新栏，
+// 旧栏照样收到这条通知——拿它当“拖完了”，窗口刚出栏就不跟手了（2026-11-18 在需求方机器上用真鼠标试出来的，改掉了）。
 func (m *mgr) dragWatch() {
 	d := &m.drag
-	if !d.on || d.test || (!d.lost && primaryDown()) {
+	if !d.on || d.test || primaryDown() {
 		return
 	}
-	m.note("drag watchdog: button up without WM_LBUTTONUP (lost=%v out=%v)", d.lost, d.out)
-	m.endDrag(d.out && !d.lost) // 窗口已经跟着鼠标在走了：按“在这儿松手”算；还没拖出去：就当只是点了一下
+	m.note("drag watchdog: button up without WM_LBUTTONUP (out=%v)", d.out)
+	m.endDrag(d.out) // 窗口已经跟着鼠标在走了：按“在这儿松手”算；还没拖出去：就当只是点了一下
 	m.snapshot()
 }
 
@@ -1261,13 +1262,9 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		return 0
 	case wmCaptureChange:
 		// 拖到一半鼠标被别的窗口抢走了。模拟的拖动不看这个：没有真的按着鼠标，换前台窗口时系统就会把“抓着鼠标”收回去
-		if m.drag.on && !m.drag.test && lp != hwnd {
-			if m.enter() {
-				m.endDrag(false)
-				m.leave()
-			} else { // 手上正有事（这条通知是在处理别的消息的半路上送来的）：记下来，定时器来收，不能当没发生
-				m.drag.lost = true
-			}
+		if m.drag.on && !m.drag.test && lp != hwnd && m.enter() {
+			m.endDrag(false)
+			m.leave()
 		}
 		return 0
 	case wmMouseMove, wmLButtonDown, wmLButtonDbl, wmLButtonUp, wmMButtonUp:
