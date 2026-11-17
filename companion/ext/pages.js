@@ -79,6 +79,9 @@ export function settingsAdv(c) {
     !host && sec('启动'),
     !host && row({ ic: 'ext', t: '新扩展的数据模式', s: name(O.ext, s.newExtData), drop: true, onclick: () => pick('新扩展的数据模式', O.ext, s.newExtData, 'newExtData') }),
     !host && row({ ic: 'history', t: '启动时恢复上次的实例', trail: sw(s.restoreOnStart, '恢复上次的实例', (v) => set(c, 'restoreOnStart', v)) }),
+    // 合并窗口（决策 UI-15）：只有 Windows 桌面版做了
+    !host && st.os === 'windows' && row({ ic: 'layers', t: '合并窗口', s: '各实例的窗口叠在同一个位置，顶上多一排实例标签，点标签切换',
+      trail: sw(s.mergeWindows, '合并窗口', (v) => set(c, 'mergeWindows', v)) }),
     !host && row({ ic: 'close', t: '退出 MaskTab', s: '关闭全部实例并退出（下次启动会恢复）', onclick: async () => { if (await confirmDlg('关闭全部实例并退出？', '', '退出', true)) api('POST', '/api/quit').catch(() => {}); } })];
 }
 

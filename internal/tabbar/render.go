@@ -83,8 +83,14 @@ func LookOn(bg [3]int) Look {
 	return Look{Bg: bg, Dim: Tint([3]int{0, 0, 0}, bg, 0.65)}
 }
 
-// FrameGuess 在还没从屏幕上量到标题栏颜色时先估一个：内核按实例颜色生成主题，标题栏大约是实例颜色压暗一半。
-func FrameGuess(c [3]int) [3]int { return Tint(c, [3]int{0, 0, 0}, 0.48) }
+// FrameGuess 在还没从屏幕上量到标题栏颜色时先估一个：内核按实例颜色生成主题，
+// 浅的颜色（黄）标题栏就是它本身，深的颜色（红、蓝）标题栏大约是它压暗一半。
+func FrameGuess(c [3]int) [3]int {
+	if !OnDark(c) {
+		return c
+	}
+	return Tint(c, [3]int{0, 0, 0}, 0.48)
+}
 
 // Vote 从屏幕上量到的几个点里取出现两次以上的颜色（鼠标正停在某个按钮上时那一个点会不一样）。
 func Vote(samples [][3]int) ([3]int, bool) {
