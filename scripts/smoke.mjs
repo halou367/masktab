@@ -274,27 +274,40 @@ try {
     await desktopShot('6a-merged.png');
     rec(d.enabled === true && d.compact === true && (d.groups || []).length >= 1 ? 'ok' : 'fail', '合并窗口开着时：实例栏起来了，两个实例的窗口并在一组（自动收起也开着）', JSON.stringify({ enabled: d.enabled, compact: d.compact, groups: (d.groups || []).length, windows: (d.windows || []).length, err: d.err }));
     // 真鼠标点一下标签换实例，然后把鼠标移开：不该把实例“拖”出去（需求方 2026-11-18：“我只是单击就拽出来了”）。
-    // 用系统的输入接口真的动鼠标、真的按键（不是给窗口发消息）：先移到收着的色条上等它展开，点另一个实例的标签，松手，往下移开。
+    // 用系统的输入接口真的动鼠标、真的按键（不是给窗口发消息）：等栏收起 → 鼠标移到色条上等它展开 → 点另一个实例的标签（按下 hold 毫秒就松）
+    // → 停一下 → 一步一步往下移开。按得快和按得慢各来一遍。
     try {
+      const NAME = '单击标签后移开鼠标不会把实例拖出去';
       const MOUSE = `Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y); [DllImport("user32.dll")] public static extern void mouse_event(uint f,int dx,int dy,uint d,UIntPtr e);' -Name M -Namespace W; `;
-      const g0 = (d.groups || [])[0];
-      if (!g0 || (g0.tabs || []).length < 2 || !g0.rect) rec('warn', '单击标签后移开鼠标不会把实例拖出去', '没有两个实例并在一组，查不了：' + JSON.stringify(g0 || {}).slice(0, 200));
-      else {
-        await powershell(MOUSE + `[W.M]::SetCursorPos(${g0.rect.L + 300},${g0.rect.T + 200}); Start-Sleep -Milliseconds 300; [W.M]::SetCursorPos(${g0.rect.L + (g0.slots?.[0] ? Math.round((g0.slots[0].L + g0.slots[0].R) / 2) : Math.round((g0.rect.R - g0.rect.L) / 2))},${g0.rect.T + 2}); Start-Sleep -Milliseconds 200; [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 900`);
-        const d1 = await api('GET', '/api/debug/tabbar'), g1 = (d1.groups || [])[0] || {};
-        const other = (g1.tabs || []).findIndex((n) => n !== g1.activeNo), slot = (g1.slots || [])[other];
-        if (!g1.open || !slot) rec('warn', '单击标签后移开鼠标不会把实例拖出去', '鼠标移到色条上以后栏没展开（测试机上鼠标可能动不了），查不了：' + JSON.stringify({ open: g1.open, rect: g1.rect, tabs: g1.tabs }));
-        else {
-          const cx = g1.rect.L + Math.round((slot.L + slot.R) / 2), cy = g1.rect.T + Math.round((slot.T + slot.B) / 2), want = g1.tabs[other];
-          // 点（按下 70 毫秒就松）→ 停 250 毫秒 → 分 14 步往下移 400 来个像素
-          await powershell(MOUSE + `[W.M]::SetCursorPos(${cx},${cy}); Start-Sleep -Milliseconds 400; [W.M]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 70; [W.M]::mouse_event(4,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 250; for ($i = 1; $i -le 14; $i++) { [W.M]::SetCursorPos(${cx},${cy} + $i * 30); [W.M]::mouse_event(1,0,1,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 40 }; Start-Sleep -Milliseconds 1200`);
-          const d2 = await api('GET', '/api/debug/tabbar'), g2 = (d2.groups || [])[0] || {};
-          await desktopShot('6a-after-click.png');
-          const info = JSON.stringify({ clicked: want, activeNo: g2.activeNo, groups: (d2.groups || []).length, dragging: d2.dragging, trace: (d2.trace || []).slice(-6) });
-          if (g2.activeNo !== want && (d2.groups || []).length === 1 && !d2.dragging) rec('warn', '单击标签后移开鼠标不会把实例拖出去', '点了以后没换到那个实例（这一下可能没点着），查不了：' + info);
-          else rec((d2.groups || []).length === 1 && d2.dragging === false && g2.activeNo === want ? 'ok' : 'fail', '真鼠标单击标签换了实例，移开鼠标以后还是一组（没有被当成拖动）', info);
-        }
+      const bar = async () => { const x = await api('GET', '/api/debug/tabbar'); return { all: x, g: (x.groups || [])[0] || {} }; };
+      const until = async (ok, ms) => { let b; for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(150)) { b = await bar(); if (ok(b)) return b; } return null; };
+      const tail = (x, n = 14) => (x.trace || []).slice(-n);
+      const clickAway = async (hold) => {
+        let b = await bar();
+        if ((b.all.groups || []).length !== 1 || (b.g.tabs || []).length < 2) return { skip: '没有两个实例并在一组：' + JSON.stringify({ groups: (b.all.groups || []).length, tabs: b.g.tabs }) };
+        await powershell(MOUSE + `[W.M]::SetCursorPos(${b.g.rect.L + 320},${b.g.rect.T + 260}); [W.M]::mouse_event(1,1,1,0,[UIntPtr]::Zero)`);
+        b = await until((x) => x.g.open === false && x.g.band, 9000);
+        if (!b) return { skip: '鼠标移开以后栏没收起：' + JSON.stringify(tail((await bar()).all, 6)) };
+        const bx = Math.round((b.g.band.L + b.g.band.R) / 2), by = Math.round((b.g.band.T + b.g.band.B) / 2) + 1;
+        await powershell(MOUSE + `[W.M]::SetCursorPos(${bx},${by - 1}); Start-Sleep -Milliseconds 60; [W.M]::SetCursorPos(${bx},${by}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 60; [W.M]::mouse_event(1,-1,0,0,[UIntPtr]::Zero)`); // 之后鼠标就停在色条上
+        const o = await until((x) => x.g.open === true && (x.g.slots || []).length >= 2, 4000);
+        if (!o) return { skip: '鼠标移到色条上以后栏没展开（测试机上鼠标可能动不了）：' + JSON.stringify({ at: [bx, by], band: b.g.band, rect: b.g.rect, trace: tail((await bar()).all, 6) }) };
+        const i = o.g.tabs.findIndex((n) => n !== o.g.activeNo), slot = o.g.slots[i], want = o.g.tabs[i];
+        const cx = o.g.rect.L + Math.round((slot.L + slot.R) / 2), cy = o.g.rect.T + Math.round((slot.T + slot.B) / 2);
+        await powershell(MOUSE + `[W.M]::SetCursorPos(${cx},${cy}); [W.M]::mouse_event(1,1,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 350; [W.M]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds ${hold}; [W.M]::mouse_event(4,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 300; for ($i = 1; $i -le 16; $i++) { [W.M]::SetCursorPos(${cx},${cy} + $i * 25); [W.M]::mouse_event(1,0,1,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 35 }; Start-Sleep -Milliseconds 1500`);
+        const a = await bar();
+        return { want, activeNo: a.g.activeNo, groups: (a.all.groups || []).length, dragging: a.all.dragging, at: [cx, cy], trace: tail(a.all) };
+      };
+      for (const hold of [25, 120]) {
+        const r = await clickAway(hold), what = `（按下 ${hold} 毫秒就松）`;
+        if (r.skip) { rec('warn', NAME + what, '查不了：' + r.skip); continue; }
+        if (r.groups === 1 && !r.dragging && r.activeNo !== r.want) { rec('warn', NAME + what, '点了以后没换到那个实例（这一下可能没点着），查不了：' + JSON.stringify(r)); continue; }
+        const good = r.groups === 1 && r.dragging === false && r.activeNo === r.want;
+        if (!good) await desktopShot(`6a-click-pulled-${hold}.png`);
+        rec(good ? 'ok' : 'fail', '真鼠标单击标签换了实例，移开鼠标以后还是一组，没有被当成拖动' + what, JSON.stringify(good ? { ...r, trace: undefined } : r));
+        if (!good) break; // 已经被拖散了，后面那一遍没法接着做
       }
+      await desktopShot('6a-after-click.png');
     } catch (e) { rec('warn', '单击标签后移开鼠标不会把实例拖出去', '检查没跑起来：' + e.message); }
     await api('PATCH', '/api/settings', { mergeWindows: false }); await sleep(3000);
   }

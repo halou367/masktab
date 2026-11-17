@@ -773,7 +773,8 @@ func (m *mgr) snapshot() {
 			slots = append(slots, s.Tab)
 		}
 		x := map[string]any{"bar": g.hwnd, "shown": g.shown, "rect": g.rect, "scale": g.scale, "active": g.active, "activeNo": no[g.active],
-			"filled": g.filled, "slots": slots, "plus": g.lay.Plus, "bg": g.bg, "tabs": tabs, "drop": g.drop, "open": g.open}
+			"filled": g.filled, "slots": slots, "plus": g.lay.Plus, "bg": g.bg, "tabs": tabs, "drop": g.drop, "open": g.open,
+			"band": Band(g.lay, g.scale).Move(g.rect.L, g.rect.T)} // band：收着时鼠标放上去就展开的那一条（屏幕坐标），测试脚本用
 		groups = append(groups, x)
 		if g == m.cur || cur == nil {
 			cur = x
