@@ -462,6 +462,9 @@ func (g *group) sync(before []string, fresh string, fg uintptr) {
 		}
 	}
 	g.hookLoc(pidOf(h))
+	if !isIconic(h) && !isZoomed(h) && !g.moving && !dragging && !time.Now().Before(g.settle) {
+		g.align(winRect(h))
+	}
 	if !m.st.Compact {
 		g.open = false
 	}
@@ -706,6 +709,28 @@ func (m *mgr) settleTick() {
 			g.pickBg()
 			g.repaintIfChanged()
 		}
+	}
+}
+
+// align 让这一组里藏着的窗口也待在当前窗口的位置、一样大（r 是当前窗口的外框）。
+//
+// 为什么：浏览器关掉时记下的是它的窗口最后在哪，下次打开就先出现在那里。藏着的窗口以前留在它上次露面的地方
+//（关掉“合并窗口”时还会被错开摆），所以这一组挪过以后，重新打开其中一个实例，它的窗口先在老地方冒出来，
+// 0.2 秒后才被挪进这一组——看着是窗口跳了一下（需求方机器上量到的：先出现在 2134,238，0.23 秒后到 2500,120）。
+// 跟着走以后，退出 MaskTab 时每个实例记下的都是这一组的位置，下次打开直接就在对的地方。
+// 顺带：换实例时目标窗口已经是对的位置和大小，不用当场改大小、重新排版。
+// 管不到的：实例关着的时候这一组又挪了地方；头一次启动的新实例（浏览器自己挑位置）。这两种仍然会跳一下。
+func (g *group) align(r Rect) {
+	if r.W() <= 0 {
+		return
+	}
+	for _, t := range g.tabs {
+		h := g.m.main[t.ID]
+		if t.ID == g.active || h == 0 || isVisible(h) || isZoomed(h) || isIconic(h) || winRect(h) == r {
+			continue
+		}
+		// 异步：万一那个浏览器卡住了，不能把我们也拖住
+		_, _, _ = pSetWindowPos.Call(h, 0, uintptr(r.L), uintptr(r.T), uintptr(r.W()), uintptr(r.H()), swpNoZOrder|swpNoActivate|swpAsync)
 	}
 }
 
