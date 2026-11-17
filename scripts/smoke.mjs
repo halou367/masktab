@@ -275,7 +275,7 @@ try {
     rec(d.enabled === true && d.compact === true && (d.groups || []).length >= 1 ? 'ok' : 'fail', '合并窗口开着时：实例栏起来了，两个实例的窗口并在一组（自动收起也开着）', JSON.stringify({ enabled: d.enabled, compact: d.compact, groups: (d.groups || []).length, windows: (d.windows || []).length, err: d.err }));
     // 真鼠标点一下标签换实例，然后把鼠标移开：不该把实例“拖”出去（需求方 2026-11-18：“我只是单击就拽出来了”）。
     // 用系统的输入接口真的动鼠标、真的按键（不是给窗口发消息）：等栏收起 → 鼠标移到色条上等它展开 → 点另一个实例的标签（按下 hold 毫秒就松）
-    // → 停一下 → 一步一步往下移开。按得快和按得慢各来一遍。
+    // → 停一下 → 一步一步往下移开。按得快、按得慢来回点四遍（老毛病不是回回都出：要看松手那一下系统正好送给了谁）。
     try {
       const NAME = '单击标签后移开鼠标不会把实例拖出去';
       // 每一步记个时间到文件里（有的测试机上这段脚本会卡很久：要知道卡在哪一步）
@@ -307,13 +307,13 @@ try {
         const a = await bar();
         return { want, activeNo: a.g.activeNo, groups: (a.all.groups || []).length, dragging: a.all.dragging, at: [cx, cy], steps: [...steps], trace: tail(a.all) };
       };
-      for (const hold of [25, 120]) {
+      for (const hold of [25, 120, 60, 25]) {
         const r = await clickAway(hold), what = `（按下 ${hold} 毫秒就松）`;
         if (r.skip) { rec('warn', NAME + what, '查不了：' + r.skip); continue; }
         if (r.groups === 1 && !r.dragging && r.activeNo !== r.want) { rec('warn', NAME + what, '点了以后没换到那个实例（这一下可能没点着），查不了：' + JSON.stringify(r)); continue; }
         const good = r.groups === 1 && r.dragging === false && r.activeNo === r.want;
         if (!good) await desktopShot(`6a-click-pulled-${hold}.png`);
-        rec(good ? 'ok' : 'fail', '真鼠标单击标签换了实例，移开鼠标以后还是一组，没有被当成拖动' + what, JSON.stringify(good ? { ...r, trace: undefined } : r));
+        rec(good ? 'ok' : 'fail', '真鼠标单击标签换了实例，移开鼠标以后还是一组，没有被当成拖动' + what, JSON.stringify(good ? { want: r.want, activeNo: r.activeNo, groups: r.groups, drag: r.trace.filter((x) => /drag|detach/.test(x)).slice(-2) } : r));
         if (!good) break; // 已经被拖散了，后面那一遍没法接着做
       }
       await desktopShot('6a-after-click.png');
