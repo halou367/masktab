@@ -23,6 +23,21 @@ shot() {
   fi
   return 1
 }
+# 从 logcat（标准输入）里挑出“我们自己的进程”的崩溃；有就打印出来并返回 0。
+# 只认 MaskTab 自己的：模拟器自带的系统应用（比如“设置”）偶尔自己崩一下，和我们无关，不能算成我们没过
+# （2026-11-18 run 44333694642：com.android.settings 在“安装未知应用”那一页崩了一次，整轮被记成失败）。
+# SIG=1 时原生层的崩溃（Fatal signal）也算：那一行里进程名被截短了认不出是谁的，所以不分是谁（第一轮一直是这么查的）。
+ourcrash() {
+  awk -v pkg="$PKG" -v sig="${SIG:-0}" '
+    /FATAL EXCEPTION/ { head = $0; next }
+    head != "" { if (index($0, "Process: " pkg)) { print head; print; found = 1 } head = "" ; next }
+    sig && /Fatal signal/ { print; found = 1 }
+    END { exit found ? 0 : 1 }'
+}
+# 别的应用的崩溃只说明一下，不算失败
+othercrash() {
+  grep -A1 "FATAL EXCEPTION" | grep "Process: " | grep -v "Process: $PKG" | sed 's/.*Process: /说明：模拟器里别的应用崩过一次（不是 MaskTab，不算失败）：/' | sort -u || true
+}
 fail=0
 BGPIDS=()
 # 退出时收掉后台起的节点服务端与 HTTP 服务、端口转发，写结果
@@ -308,11 +323,12 @@ need "MaskTab 指纹参数 example.com" "网页里拿到实例指纹参数"
 if grep -q "Invalid event data for callback" "$OUT/logcat.txt"; then echo "失败：原生消息回传失败（Invalid event data）"; fail=1; fi
 grep -E "MaskTab (指纹|后台|标签页)" "$OUT/logcat.txt" | cut -c1-200 | head -20
 
-if grep -E "FATAL EXCEPTION|Process: $PKG|Fatal signal" "$OUT/logcat.txt" | grep -v "^--" > "$OUT/crash.txt"; then
+if SIG=1 ourcrash < "$OUT/logcat.txt" > "$OUT/crash.txt"; then
   echo "logcat 里有崩溃："; cat "$OUT/crash.txt"; fail=1
 else
   echo "logcat 里没有崩溃"; rm -f "$OUT/crash.txt"
 fi
+othercrash < "$OUT/logcat.txt"
 
 # ---------- 第二轮：旧数据迁移 + 经代理（runner 上起一个 mihomo 当节点服务端，订阅由本机 HTTP 服务提供；模拟器里 10.0.2.2 = runner） ----------
 # 这一轮放进去的是 0.1.41 及以前的数据格式（files/state.json，Kotlin 那一套写的），并把核心服务的数据清空：
@@ -516,5 +532,7 @@ update_phase() {
 update_phase || fail=1
 A shell setprop debug.masktab.update '""' || true
 
-if A logcat -d | grep -E "FATAL EXCEPTION|Process: $PKG" > "$OUT/crash-proxy.txt"; then echo "第二轮 logcat 里有崩溃："; cat "$OUT/crash-proxy.txt"; fail=1; else rm -f "$OUT/crash-proxy.txt"; fi
+A logcat -d > "$OUT/logcat-round2-all.txt"
+if ourcrash < "$OUT/logcat-round2-all.txt" > "$OUT/crash-proxy.txt"; then echo "第二轮 logcat 里有崩溃："; cat "$OUT/crash-proxy.txt"; fail=1; else rm -f "$OUT/crash-proxy.txt"; fi
+othercrash < "$OUT/logcat-round2-all.txt"
 exit $fail
