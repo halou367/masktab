@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { h, icon, run, applyTheme } from './ui.js';
+import { h, icon, run, applyTheme, pageIn, flipSnap, flipPlay } from './ui.js';
 import { menuView, menuSearch } from './menu.js';
 import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
@@ -40,7 +40,11 @@ function render() {
   // 键盘正停在哪里：重画后放回去。停在某个实例上就回到那个实例；停在搜索框里就回到搜索框、光标位置不变。
   // （后台刷新状态的重画可能正好落在用户打字的时候：以前这时焦点就丢了，接着打的字、↓、回车都没有反应。）
   const act = document.activeElement, at = act?.dataset?.iid, inQ = act?.matches?.('.qs input') ? [act.selectionStart, act.selectionEnd] : null;
+  const was = root.dataset.page, now = menu ? 'menu' : 'panel', snap = was === now ? flipSnap(root) : null;
+  root.dataset.page = now;
   root.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
+  flipPlay(snap, root); // 其它实例列表：开了、关了、换了次序有过渡（决策 UI-26）
+  if (was && was !== now) pageIn(root, menu ? 'back' : 'fwd'); // 菜单 ⇄ 节点面板：前进从右边进，返回从左边进
   if (!menu) panel.after();
   else {
     fitList();
@@ -51,7 +55,7 @@ function render() {
 }
 // 首页上直接打字 = 搜索实例：不用先点搜索框（实例不多时搜索框平时不显示）。打的这个字会进到刚聚焦的搜索框里。
 document.addEventListener('keydown', (ev) => {
-  if (!menu || !st?.me || ev.ctrlKey || ev.metaKey || ev.altKey || document.querySelector('.scrim')) return;
+  if (!menu || !st?.me || ev.ctrlKey || ev.metaKey || ev.altKey || document.querySelector('.scrim:not(.out)')) return;
   if (document.activeElement?.matches?.('input, textarea, select')) return;
   if (!(ev.key.length === 1 && ev.key !== ' ') && ev.key !== 'Process') return;
   menuSearch(); render();
@@ -71,7 +75,7 @@ function fitList() {
 }
 panel.init(root, { load, render, open, back: () => { menu = true; render(); scrollTo(0, 0); }, backTitle: '返回实例菜单', keys: true });
 
-const idle = () => !document.querySelector('input:focus, select:focus, textarea:focus, .scrim');
+const idle = () => !document.querySelector('input:focus, select:focus, textarea:focus, .scrim:not(.out)');
 async function poll() {
   let seq = st?.seq || 0;
   for (;;) {

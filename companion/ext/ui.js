@@ -275,10 +275,74 @@ export function avatar(color, text, size = 40, cc, dot, ring2) {
 const bars = () => dispatchEvent(new Event('mt-bars')); // 手机外壳据此重算状态栏 / 导航栏的颜色（盖了一层遮罩时变暗）
 export function overlay(box, center = true, cls = '') {
   const sc = h('div', { class: 'scrim' + (center ? ' center' : '') + cls }, box);
-  const close = () => { sc.remove(); bars(); };
+  const close = () => { leave(sc, bars); bars(); };
   sc.addEventListener('click', (e) => { if (e.target === sc) { close(); sc.dispatchEvent(new Event('dismiss')); } });
   document.body.append(sc); bars();
+  // Esc = 点外面（最上面那一层才响应；里面自己处理了 Esc 的，比如新建向导退回上一步，就不再关）
+  const esc = (e) => { if (e.key !== 'Escape' || e.defaultPrevented || !sc.isConnected || sc.classList.contains('out')) { if (!sc.isConnected) removeEventListener('keydown', esc); return; }
+    if ([...document.querySelectorAll('.scrim:not(.out)')].pop() !== sc) return; e.preventDefault(); close(); sc.dispatchEvent(new Event('dismiss')); removeEventListener('keydown', esc); };
+  addEventListener('keydown', esc);
   return { sc, close };
+}
+
+// ---------- 动效（决策 UI-26）：时长和曲线都在 ui.css 的 --d-* / --e-* 里，这里只负责“什么时候加哪个类” ----------
+const rmq = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+/** 系统 / 浏览器设了“减少动画”。 */
+export const reduced = () => !!rmq?.matches;
+const ms = (v) => { const m = /([\d.]+)(m?s)/.exec(v || ''); return m ? +m[1] * (m[2] === 's' ? 1000 : 1) : 0; };
+/** 一个时长变量现在是多少毫秒（减少动画时是 0）。 */
+export const dur = (name = '--d-m') => (reduced() ? 0 : ms(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0);
+/** 离场：加上 .out 播完退场动画再移除（遮罩、抽屉）。已经不在页面上的直接算完成。 */
+export function leave(el, done) {
+  if (!el || !el.isConnected) { done?.(); return; }
+  if (el.classList.contains('out')) return;
+  const t = dur('--d-m');
+  const fin = () => { el.remove(); done?.(); };
+  if (!t) { fin(); return; }
+  el.classList.add('out');
+  let ok = false; const end = () => { if (!ok) { ok = true; fin(); } };
+  el.addEventListener('animationend', (e) => { if (e.target === el) end(); });
+  setTimeout(end, t + 80); // 动画被打断、被系统省掉时兜底
+}
+/** 换页动效：dir = 'fwd' 进入下一层，'back' 返回上一层，其余淡入。只给外壳容器加一次，状态刷新重画不会再动。 */
+export function pageIn(el, dir) {
+  if (!el || reduced()) return;
+  const c = dir === 'fwd' ? 'pg-fwd' : dir === 'back' ? 'pg-back' : 'pg-fade';
+  el.classList.remove('pg-fwd', 'pg-back', 'pg-fade');
+  void el.offsetWidth; // 重新触发
+  el.classList.add(c);
+  el.addEventListener('animationend', () => el.classList.remove(c), { once: true });
+}
+/** 列表增删（FLIP）：重画之前 snap = flipSnap(容器)，重画之后 flipPlay(snap, 容器)。
+    带 data-k / data-id / data-iid 的元素按这个键对上：位置变了的滑过去，新出现的淡入放大，消失的留一个影子淡出。
+    同一页里才动（换了页 / 第一次画不动），一次最多 60 项。 */
+const KSEL = '[data-k], .cardi[data-id], .ai[data-iid]';
+const keyOf = (e) => e.dataset.k || e.dataset.id || e.dataset.iid;
+export function flipSnap(root) {
+  if (!root || reduced()) return null;
+  const m = new Map();
+  for (const e of root.querySelectorAll(KSEL)) { if (m.size >= 60) break; const r = e.getBoundingClientRect(); if (r.width || r.height) m.set(keyOf(e), { r, e }); }
+  return { m, page: root.dataset.page || location.hash.split('/')[0] };
+}
+export function flipPlay(snap, root) {
+  if (!snap || !root || reduced() || (root.dataset.page || location.hash.split('/')[0]) !== snap.page) return;
+  const seen = new Set(), t = dur('--d-m');
+  if (!t) return;
+  for (const e of root.querySelectorAll(KSEL)) {
+    const k = keyOf(e); seen.add(k);
+    const was = snap.m.get(k);
+    if (!was) { if (snap.m.size) e.classList.add('it-in'), e.addEventListener('animationend', () => e.classList.remove('it-in'), { once: true }); continue; }
+    const r = e.getBoundingClientRect(), dx = was.r.left - r.left, dy = was.r.top - r.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    e.animate?.([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: t, easing: 'cubic-bezier(.2, 0, 0, 1)' });
+  }
+  for (const [k, { r, e }] of snap.m) {
+    if (seen.has(k) || !r.width) continue;
+    const g = e.cloneNode(true);
+    g.classList.add('it-ghost'); g.removeAttribute('data-k'); g.removeAttribute('data-id'); g.removeAttribute('data-iid');
+    Object.assign(g.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+    document.body.append(g); setTimeout(() => g.remove(), t + 80);
+  }
 }
 // 最近按下的那一行 / 那个按钮：下拉栏从它那儿长出来（键盘回车触发时用当前焦点）。
 let pressed = null, pressedAt = 0;

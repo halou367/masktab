@@ -180,7 +180,7 @@ if (want('flow')) {
   await pg.waitForTimeout(500);
   const info = () => pg.evaluate(() => ({ hash: location.hash.slice(1), cls: document.body.className, page: document.getElementById('root').dataset.page || '',
     title: (document.querySelector('.appbar h1')?.childNodes[0]?.textContent || '').trim(), kids: document.getElementById('root').childElementCount,
-    chk: document.querySelectorAll('.chk').length, scrim: !!document.querySelector('.scrim') }));
+    chk: document.querySelectorAll('.chk').length, scrim: !!document.querySelector('.scrim:not(.out)') })); // .out = 正在播退场动画（决策 UI-26）
   const setHash = async (r) => { await pg.evaluate((x) => { location.hash = x; }, r); await pg.waitForTimeout(300); };
   const calls = () => pg.evaluate(() => window.__calls.splice(0));
   const back = async () => { await pg.locator('.appbar button[title="返回"]').first().click(); await pg.waitForTimeout(300); };
@@ -549,7 +549,7 @@ if (desk && want('desk')) {
   await dp.screenshot({ path: path.join(out, 'desk-region.png') });
   await dp.locator('.scrim.dd').click({ position: { x: 4, y: 4 } });
   await dp.waitForTimeout(200);
-  check('电脑版：点下拉栏外面 = 收起', await dp.evaluate(() => !document.querySelector('.scrim')), {});
+  check('电脑版：点下拉栏外面 = 收起', await dp.evaluate(() => !document.querySelector('.scrim:not(.out)')), {});
   await dp.locator('.appbar button[title="返回实例菜单"]').click();
   await dp.waitForTimeout(200);
   check('电脑版：节点页返回回到头像菜单', await dp.evaluate(() => document.body.classList.contains('menu')), {});
@@ -834,6 +834,20 @@ if (want('a11y')) {
   const hit = await pg.evaluate((ns) => [...document.querySelectorAll('[aria-label]')].map((e) => e.getAttribute('aria-label')).filter((l) => ns.some((n) => l.startsWith(n))), names);
   check('新标签页的无障碍标签不和原生菜单项重名（伪装概况卡叫“伪装概况”）', hit.length === 0 && await pg.locator('[aria-label="伪装概况"]').count() === 1, hit);
   await pg.close();
+  // 动效（决策 UI-26）：时长曲线全在 CSS 变量里；系统设了“减少动画”时全部归零，弹框照样能开能关
+  for (const rm of ['no-preference', 'reduce']) {
+    const c2 = await br.newContext({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 1, userAgent: UA, locale: 'zh-CN', reducedMotion: rm }); await c2.addInitScript(mock, fixture);
+    const p2 = await c2.newPage(); watch(p2, 'motion-' + rm);
+    await p2.goto(base + 'app.html#settings'); await p2.waitForTimeout(600);
+    await p2.locator('.row', { hasText: '默认邮箱' }).click(); await p2.waitForTimeout(rm === 'reduce' ? 80 : 400);
+    const m = await p2.evaluate(() => { const d = document.querySelector('.scrim .dlg'), cs = d && getComputedStyle(d); return { has: !!d, dur: cs?.animationDuration, ease: cs?.animationTimingFunction, v: getComputedStyle(document.documentElement).getPropertyValue('--d-m').trim(), val: d?.querySelector('input')?.value }; });
+    if (rm === 'reduce') check('减少动画：弹框的动画时长是 0，--d-m 是 0ms', m.has && m.dur === '0s' && m.v === '0ms', m);
+    else check('动效：弹框用统一的时长和曲线（--d-m 240ms、减速曲线）', m.has && m.dur === '0.24s' && /cubic-bezier\(0, 0, 0, 1\)/.test(m.ease) && m.v === '240ms', m);
+    if (rm !== 'reduce') check('设置页“默认邮箱”：弹框里带着已经存的邮箱', m.val === 'reg.me@example.com', m);
+    await p2.keyboard.press('Escape'); await p2.waitForTimeout(rm === 'reduce' ? 60 : 400);
+    check(`Esc 关弹框，关掉后从页面上移除（${rm === 'reduce' ? '减少动画：立刻' : '播完退场动画'}）`, await p2.locator('.scrim').count() === 0, {});
+    await c2.close();
+  }
 }
 // ---------- 订阅 / 节点没了也改得了（决策 F-HEAL，2026-11-17 用户反馈的死循环）----------
 // 以前：订阅删了 → 实例打不开 → 节点面板只在实例自己的窗口里 → 改不了。现在实例管理的抽屉里就能进这个实例的“节点与出口”，它不用开着。

@@ -39,7 +39,7 @@ export function instancesView(c) {
   const out = [head, st.vault?.error ? h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, st.vault.error)) : null, grid,
     rulesBox(st)];
   const cur = sub && sub !== 'import' && st.instances.find((i) => i.id === sub);
-  if (cur) out.push(drawer(cur));
+  if (cur) out.push(drawer(cur)); else lastDrawer = '';
   if (sub === 'import') out.push(importBox());
   return out;
 }
@@ -220,7 +220,9 @@ function netRows(i) {
     row({ ic: 'sub', t: sub ? (pf?.host || sub.name) : st.subscriptions.length ? '还没选线路' : '还没有订阅', s: sub ? how : on ? h('span', { class: 'bad' }, st.subscriptions.length ? '选一条线路才能上网' : '添加订阅才能上网') : '订阅、出口、入口都在这里改',
       chev: true, aria: '设置节点与出口', title: '设置这个实例的订阅、出口、入口（不用先打开它）', onclick: go })];
 }
+let lastDrawer = ''; // 上一次画的是哪个实例的抽屉：状态刷新重画同一个抽屉时不再播滑入动画（决策 UI-26）
 function drawer(i) {
+  const still = lastDrawer === i.id; lastDrawer = i.id;
   if (accts.id !== i.id || !accts.items) loadAccts(i.id).catch((e) => toast(e.message, true));
   const items = accts.id === i.id ? accts.items : null;
   const close = () => { shown = new Set(); editing = ''; setRoute(''); };
@@ -255,7 +257,7 @@ function drawer(i) {
     const other = ctx.st.instances.find((x) => x.no === n);
     ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { no: n }), other ? `已和原来的 #${n} 对调` : `已改成 #${n}`);
   };
-  return h('div', { class: 'scrim', onclick: (ev) => ev.target === ev.currentTarget && close() },
+  return h('div', { class: 'scrim' + (still ? ' still' : ''), onclick: (ev) => ev.target === ev.currentTarget && close() },
     h('aside', { class: 'drawer', style: { '--c': i.color } },
       h('div', { class: 'dh' }, ibtn('back', '收起', close), face(i, true, true, true), h('div', { class: 'grow' },
         h('input', { class: 'name', value: i.name || '', placeholder: nameOf(i), title: '名称（回车保存）', onchange: (ev) => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { name: ev.target.value })) }),

@@ -1,5 +1,5 @@
 import { api, shownExit } from './api.js';
-import { h, icon, ibtn, toast, run, applyTheme, appBar, sec, row, sw, choose, ask, confirmDlg } from './ui.js';
+import { h, icon, ibtn, toast, run, applyTheme, appBar, sec, row, sw, choose, ask, confirmDlg, pageIn, flipSnap, flipPlay } from './ui.js';
 import { instancesView } from './instances.js';
 import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
@@ -27,7 +27,7 @@ async function load(force) {
   applyTheme(st.settings?.theme || 'system', st.me?.color);
   await syncIcons(st);
   panel.set(st);
-  if (force || (!editing() && !document.querySelector('.scrim'))) render();
+  if (force || (!editing() && !document.querySelector('.scrim:not(.out)'))) render();
 }
 
 const shell = { load: () => load(true), render: () => render(), open, back: null }; // back：改别的实例时回到它的详情
@@ -117,9 +117,12 @@ function render() {
     kids = ({ settings: () => settingsHome({ ...c, back: null, pc: true }), instances: () => instancesView(ic), exits: () => exitsView({ ...c, back: null }), extensions,
       'settings/adv': () => settingsAdv({ ...c, back: null }), 'settings/about': () => settingsAbout({ ...c, back: null }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back: null }) }[p] || (() => instancesView(ic)))();
   }
+  const snap = lastPage === p ? flipSnap(main) : null; // 同一页里重画：列表增删、换位置有过渡（决策 UI-26）
+  main.dataset.page = p;
   main.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
   if (p === 'node' || p === 'fp') panel.after();
-  if (lastPage !== p) scrollTo(0, 0);
+  flipPlay(snap, main);
+  if (lastPage !== p) { scrollTo(0, 0); pageIn(main, 'fade'); }
   lastPage = p;
   document.title = 'MaskTab · ' + (TITLES[p] || '设置');
 }

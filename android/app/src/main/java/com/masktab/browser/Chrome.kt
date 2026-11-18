@@ -18,6 +18,7 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -27,6 +28,19 @@ import org.mozilla.geckoview.PanZoomController
 
 // 浏览器外壳的 Chrome 风格部件（决策 UI-1、UI-2、UI-4）：配色、图标、状态栏 / 导航栏底色、浮层（头像菜单、三点菜单、标签页切换器用）、下拉刷新。
 // 只管样子和手势，不碰业务：数据都来自核心服务的状态（Host），动作都是核心服务的接口或内置页面的路由。
+
+/**
+ * 动效（决策 UI-26）：和网页那边 ui.css 的 --d-* / --e-* 是同一套时长和曲线，改一边要改另一边。
+ * 系统“开发者选项 → 动画缩放”或无障碍里的“移除动画”会按比例缩放 / 关掉 ViewPropertyAnimator 和 ValueAnimator，不用自己判断；
+ * GeckoView 里的页面同样会得到 prefers-reduced-motion。
+ */
+object Motion {
+    const val XS = 100L; const val S = 160L; const val M = 240L; const val L = 320L
+    val std get() = PathInterpolator(0.2f, 0f, 0f, 1f)
+    val dec get() = PathInterpolator(0f, 0f, 0f, 1f)
+    val acc get() = PathInterpolator(0.3f, 0f, 1f, 1f)
+    val emph get() = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
+}
 
 /** 配色：底色、文字色是固定的（深色取自需求方手机 Chrome 截图）；强调色、选中底色、各层卡片的底色跟着当前实例的颜色走（决策 UI-10，见 Theme.of）。 */
 class Pal(
@@ -177,12 +191,15 @@ class Overlay(ctx: Context, val pal: Pal, dim: Boolean, val onClose: () -> Unit)
         isClickable = true
         setOnClickListener { close() }
         alpha = 0f
-        animate().alpha(1f).setDuration(160).start()
+        animate().alpha(1f).setDuration(Motion.S).setInterpolator(Motion.std).start()
     }
     fun close() {
         if (closing) return
         closing = true
-        animate().alpha(0f).setDuration(140).withEndAction { (parent as? ViewGroup)?.removeView(this); onClose() }.start()
+        // 底部弹出的卡片（头像菜单）跟着往下退，其余的随遮罩淡出
+        (0 until childCount).map { getChildAt(it) }.firstOrNull { (it.layoutParams as? FrameLayout.LayoutParams)?.gravity == Gravity.BOTTOM }
+            ?.animate()?.translationY(height * 0.35f)?.setDuration(Motion.M)?.setInterpolator(Motion.acc)?.start()
+        animate().alpha(0f).setDuration(Motion.M).setInterpolator(Motion.acc).withEndAction { (parent as? ViewGroup)?.removeView(this); onClose() }.start()
     }
 }
 

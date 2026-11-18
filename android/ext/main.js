@@ -13,7 +13,7 @@
 //   __back          app 的系统返回键：由页面按自己的返回栈处理（见 goBack）
 // 数据全部来自核心服务（和电脑版是同一个程序，决策 D-4），经 app 的 Bridge 转一道；这里没有手机专用的接口和状态。
 import { api } from './api.js';
-import { h, icon, ibtn, toast, run, appBar, row, sw, confirmDlg, applyTheme } from './ui.js';
+import { h, icon, ibtn, toast, run, appBar, row, sw, confirmDlg, applyTheme, leave, pageIn, flipSnap, flipPlay } from './ui.js';
 import { menuView } from './menu.js';
 import { instancesView } from './instances.js';
 import { syncIcons, siteIcon } from './sites.js';
@@ -33,16 +33,17 @@ const act = (fn, ok) => run(async () => { await fn(); await load(true); }, ok);
 
 // ---------- 返回栈 ----------
 // 页面里点进下一页时记下上一页；返回（顶栏左上角、或 app 转来的系统返回键）先关对话框，再退子视图，再回上一页，栈空了就收起整个页面。
-let stack = [], navving = false;
-const open = (r) => { if (r === route()) return; stack.push(route()); navving = true; location.hash = r; };
+let stack = [], navving = false, navDir = '';
+const open = (r) => { if (r === route()) return; stack.push(route()); navving = true; navDir = 'fwd'; location.hash = r; };
 function goBack() {
-  const sc = document.querySelector('.scrim');
-  if (sc) { sc.remove(); dispatchEvent(new Event('mt-bars')); render(true); return; }
+  const sc = [...document.querySelectorAll('.scrim:not(.out)')].pop();
+  // 对话框、底部表单：播完退场动画再移除（决策 UI-26），等它的人收到“取消”；实例抽屉：等于收起（回到实例列表）
+  if (sc && !sc.querySelector('.drawer')) { sc.dispatchEvent(new Event('dismiss')); leave(sc, () => dispatchEvent(new Event('mt-bars'))); dispatchEvent(new Event('mt-bars')); return; }
   const p = pageOf();
   if ((p === 'node' || p === 'fp') && panel.back()) return;
-  if (p === 'instances' && route().includes('/')) { navving = true; location.replace('#instances'); return; }
+  if (p === 'instances' && route().includes('/')) { navving = true; navDir = 'back'; location.replace('#instances'); return; }
   const prev = stack.pop();
-  if (prev) { navving = true; location.replace('#' + prev); } else closeMe();
+  if (prev) { navving = true; navDir = 'back'; location.replace('#' + prev); } else closeMe();
 }
 const back = { fn: goBack, title: '返回' };
 
@@ -64,7 +65,7 @@ async function load(force) {
   if (!force && j === last) return; // 没变化不重画（重画会打断输入、拖动）
   const first = !st;
   last = j; st = s; panel.set(st);
-  if (!force && !first && (editing() || document.querySelector('.scrim'))) return; // 正在输入 / 开着对话框：不重画，下一轮再说
+  if (!force && !first && (editing() || document.querySelector('.scrim:not(.out)'))) return; // 正在输入 / 开着对话框：不重画，下一轮再说
   if (first) enter(); else render(force);
 }
 
@@ -82,7 +83,7 @@ function oops(title, detail) {
 let barsKey = '';
 function bars() {
   if (pageOf() === 'idle') return;
-  const dim = !!document.querySelector('.scrim:not(.dd)'), sheet = !!document.querySelector('.scrim > .sheet'); // 下拉栏的遮罩是透明的，不压暗
+  const dim = !!document.querySelector('.scrim:not(.dd):not(.out)'), sheet = !!document.querySelector('.scrim:not(.out) > .sheet'); // 下拉栏的遮罩是透明的，不压暗
   const key = `${dim}|${sheet}|${document.documentElement.dataset.theme}`;
   if (key === barsKey) return;
   barsKey = key;
@@ -152,10 +153,12 @@ function render(force) {
       menu: () => [appBar('', back), menuView(st, { node: () => open('node'), fp: () => open('fp'), open, render: () => render(true) })],
     }[p] || (() => settingsHome(c));
     const kids = [view()].flat(Infinity).filter(Boolean);
+    const snap = root.dataset.page === p ? flipSnap(root) : null; // 同一页里重画：列表增删、换位置有过渡（决策 UI-26）
     document.body.className = 'pg-' + p.replace('/', '-');
     root.className = p === 'node' || p === 'fp' ? 'np' : '';
     root.replaceChildren(...kids);
     root.dataset.page = p;
+    flipPlay(snap, root);
     if (p === 'node' || p === 'fp') panel.after();
     BOOT.ready = true;
     bars();
@@ -170,8 +173,9 @@ let lastPage = '';
 function enter() {
   const p = pageOf();
   // app 从外面直接打开一页（头像菜单、三点菜单、新标签页的卡片）：清空返回栈，返回 = 收起
-  if (!navving) stack = [];
+  if (!navving) { stack = []; navDir = ''; }
   navving = false;
+  const dir = navDir; navDir = '';
   if (p === 'idle') { lastPage = 'idle'; render(true); return; }
   if ((p === 'node' || p === 'fp') && p !== lastPage) { panel.home(p === 'fp'); if (p === 'node') panel.refreshSubs(); }
   lastPage = p;
@@ -179,6 +183,8 @@ function enter() {
   if (p === 'history') { recent = null; loadRecent(); }
   scrollTo(0, 0);
   render(true);
+  // 换页动效（决策 UI-26）：点进下一页从右边滑进来，返回从左边，app 从外面直接打开的一页淡入。和 Chrome 安卓设置页一样
+  pageIn(root, dir || 'fade');
   console.info('MaskTab 页面就绪', route(), st ? '有状态' : '无状态'); // CI 冒烟测试在 logcat 里找这一行
 }
 

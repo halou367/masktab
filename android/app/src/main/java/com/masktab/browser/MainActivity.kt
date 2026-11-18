@@ -48,6 +48,7 @@ import org.mozilla.geckoview.GeckoView
 // 状态栏、导航栏的图标深浅跟着底色换。浮层盖住整个窗口（连两条栏），遮罩压暗时两条栏一起变暗。
 
 class MainActivity : Activity(), CoreUi {
+    private var lastShownInst: String? = null // 上一次显示的是哪个实例的标签页（换实例时淡入）
     private lateinit var root: BarsLayout
     private lateinit var col: LinearLayout
     private lateinit var gecko: TouchGecko
@@ -360,6 +361,9 @@ class MainActivity : Activity(), CoreUi {
         val t = Core.curTab()
         // 正显示内置页面时不动 GeckoView 里的会话（关掉页面时再换回标签页）
         if (!panelOn && t != null && shown !== t.session) {
+            // 换了实例（不只是换标签页）：网页区域淡入一下，看得出“换了一个窗口”（决策 UI-26）
+            if (lastShownInst != null && lastShownInst != t.inst) { pull.alpha = 0.35f; pull.animate().alpha(1f).setDuration(Motion.M).setInterpolator(Motion.dec).start() }
+            lastShownInst = t.inst
             pull.done()
             gecko.releaseSession()
             for ((_, l) in Core.tabs) for (x in l) if (x !== t) x.session.setActive(false)
@@ -454,7 +458,7 @@ class MainActivity : Activity(), CoreUi {
     private fun hideStartup() {
         val v = startup ?: return
         startup = null
-        v.animate().alpha(0f).setDuration(250).withEndAction { (v.parent as? ViewGroup)?.removeView(v) }.start()
+        v.animate().alpha(0f).setDuration(Motion.M).setInterpolator(Motion.std).withEndAction { (v.parent as? ViewGroup)?.removeView(v) }.start()
         applyBars()
     }
 
@@ -678,7 +682,7 @@ class MainActivity : Activity(), CoreUi {
         o.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         fitOverlay(o)
         card.translationY = resources.displayMetrics.heightPixels.toFloat()
-        card.animate().translationY(0f).setDuration(260).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        card.animate().translationY(0f).setDuration(Motion.L).setInterpolator(Motion.emph).start()
         logi("头像菜单已打开")
     }
 
@@ -729,7 +733,8 @@ class MainActivity : Activity(), CoreUi {
         fitOverlay(o)
         card.pivotX = card.layoutParams.width.toFloat(); card.pivotY = 0f
         card.scaleX = 0.85f; card.scaleY = 0.85f
-        card.animate().scaleX(1f).scaleY(1f).setDuration(180).start()
+        card.alpha = 0f
+        card.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(Motion.M).setInterpolator(Motion.dec).start()
         logi("三点菜单已打开")
     }
 

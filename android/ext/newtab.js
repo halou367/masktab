@@ -21,7 +21,7 @@ if (go) {
 }
 
 // 盖了一层对话框时告诉 app 把状态栏、导航栏一起压暗（决策 UI-4）
-const bars = () => { const dim = !!document.querySelector('.scrim'); api('POST', '/ui/bars', { src: 'ntp', dim }, 3000).catch(() => {}); };
+const bars = () => { const dim = !!document.querySelector('.scrim:not(.out)'); api('POST', '/ui/bars', { src: 'ntp', dim }, 3000).catch(() => {}); };
 addEventListener('mt-bars', bars);
 
 async function render() {
