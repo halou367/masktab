@@ -1,3 +1,4 @@
+import './swlife.js'; // 新后台一装好就接手（放最前面：事件要在脚本第一遍执行时挂上）
 import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText, letterOf } from './api.js';
 import { avatarPx, hexRgb } from './icon.js';
 import './vaultmsg.js'; // 挂出 globalThis.MTVault（和手机的后台共用，所以不是模块导出）
