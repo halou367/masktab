@@ -715,6 +715,10 @@ class MainActivity : Activity(), CoreUi {
         box.addView(top)
         fun item(ic: String, label: String, trail: View? = null, enabled: Boolean = true, act: () -> Unit) = box.addView(menuRow(pal, ic, label, trail, enabled, 52) { closeOverlay(); act() })
         item("addBox", "打开新的标签页") { Core.openTab(Host.current) }
+        // 翻译此页（决策 UI-27）：叫这个网页里的内置扩展整页翻成中文，再点一次换回原文；翻译请求走本实例自己的代理
+        if (web) item("lang", "翻译此页") {
+            try { Core.bgPort?.postMessage(jsonOf("t" to "tr-start", "inst" to Host.current)) } catch (e: Exception) { logw("翻译没发出去", e) }
+        }
         box.addView(divider(pal))
         item("history", "历史记录") { openSheet("history", true) }
         item("del", "删除浏览数据") { clearData() }

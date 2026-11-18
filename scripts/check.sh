@@ -3,7 +3,7 @@
 #   scripts/check.sh fast            秒级：格式、go vet（Linux + Windows）、go test、界面脚本语法
 #   scripts/check.sh pages [段…]     十几秒～一分钟：两端页面的点按流程（假状态 + 真页面）。不写段名 = 全部，分几个进程同时跑
 #                                    段名：shots narrow light flow newtab desk v6 update safe import a11y heal sstp fp
-#   scripts/check.sh ext             半分钟：真 Chromium 里装上真扩展 + 真核心服务（录入登录、自动填写、工具栏图标）
+#   scripts/check.sh ext             半分钟：真 Chromium 里装上真扩展 + 真核心服务（录入登录、自动填写、工具栏图标、网页翻译）
 #   scripts/check.sh smoke           三分钟：真内核 + 真核心服务（开实例、指纹、隔离、断流、订阅、编号…）
 #   scripts/check.sh all             上面四样依次跑
 # 结果：只打印失败的项和每层一行小结；完整输出、截图在 $MT_OUT（默认 ~/.cache/masktab-dev/out）。
@@ -16,7 +16,7 @@ need_pw() { [ -d "$MT_PW/node_modules/playwright" ] || { echo "还没装 Playwri
 
 # 手机内置扩展 = companion/ext 里这几样共用文件 + android/ext 里的全部。
 # 这份清单还有一处要同步：android/app/build.gradle.kts 的 BuildExt（打进 APK 的就是它列的那些）。
-SHARED_EXT="ui.js ui.css sites.js menu.js instances.js wizard.js autofill.js common.js panel.js panel.css pages.js ntp.js vaultmsg.js assets"
+SHARED_EXT="ui.js ui.css sites.js menu.js instances.js wizard.js translate.js autofill.js common.js panel.js panel.css pages.js ntp.js vaultmsg.js assets"
 
 fast() {
   local t0=$SECONDS bad=0 out
@@ -69,6 +69,7 @@ ext() {
     # 两遍：有代理内核（要先跑过一次 smoke 才有）、没有代理内核
     if [ -x "$mh" ]; then MASKTAB_MIHOMO="$mh" node "$MT_ROOT/scripts/ext-e2e.mjs" "$MT_DEV/bin/masktab" "$MT_OUT/ext-e2e" || exit 1; fi
     node "$MT_ROOT/scripts/ext-e2e.mjs" "$MT_DEV/bin/masktab" || exit 1
+    node "$MT_ROOT/scripts/translate-e2e.mjs" "$MT_OUT/translate" || exit 1   # 网页翻译：真扩展 + 假接口，请求必须经代理（decisions UI-27）
   ) >> "$log" 2>&1 || bad=1
   grep "^失败" "$log" | cut -c1-500 | head -20; [ $bad = 1 ] && tail -5 "$log" | cut -c1-300
   note ext "$([ $bad = 0 ] && echo 通过 || echo 失败)（$(grep -c '^通过' "$log") 项通过，$((SECONDS - t0)) 秒）"

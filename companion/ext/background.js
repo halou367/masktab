@@ -118,6 +118,11 @@ async function wizardWindow() {
   const pos = cur && cur.width ? { left: Math.round(cur.left + (cur.width - w) / 2), top: Math.round(cur.top + Math.max(40, (cur.height - hh) / 3)) } : {};
   await chrome.windows.create({ url, type: 'popup', width: w, height: hh, focused: true, ...pos });
 }
+// 翻译此页（决策 UI-27）：叫当前标签页的内容脚本整页翻成中文；再来一次换回原文。
+async function translateActive() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab && /^https?:/.test(tab.url || '')) await chrome.tabs.sendMessage(tab.id, { t: 'mt:translate' }).catch(() => {});
+}
 
 // 长轮询事件。每次返回后调用一次扩展接口，使 Service Worker 保持存活；另有 30 秒闹钟兜底拉起。
 async function loop() {
@@ -185,16 +190,41 @@ ownPasswords();
 chrome.commands.onCommand.addListener(async (cmd) => {
   try {
     if (cmd === 'new-instance') await wizardWindow(); // 新建走向导（决策 UI-25）
+    if (cmd === 'translate') await translateActive();
     if (cmd === 'open-manager') await chrome.tabs.create({ url: chrome.runtime.getURL('app.html#instances') });
   } catch (err) { console.warn(err); }
 });
+// ---------- 网页翻译（决策 UI-27） ----------
+// 内容脚本 translate.js 把要翻的文字交到这里，由后台去发请求：实例的浏览器整个挂在它自己的代理端口上，后台的请求也从这个实例的出口出去（R-1）。
+// 只认这几个翻译接口的地址，内容脚本不能拿它当万能代理；不带 Cookie、不带来源页。
+const TR_HOSTS = new Set(['translate.googleapis.com', 'edge.microsoft.com', 'api-edge.cognitive.microsofttranslator.com']);
+async function trFetch(m) {
+  let u;
+  try { u = new URL(m.url); } catch { throw new Error('地址不对'); }
+  if (u.protocol !== 'https:' || !TR_HOSTS.has(u.hostname)) throw new Error('不是翻译接口');
+  const i = m.init || {}, ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch(u, { method: i.method === 'POST' ? 'POST' : 'GET', headers: i.headers || {}, body: i.method === 'POST' ? i.body : undefined, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal: ctl.signal });
+    return { ok: r.ok, status: r.status, body: await r.text() };
+  } finally { clearTimeout(t); }
+}
+globalThis.trFetch = trFetch; // 测试从调试端口调用（scripts/translate-e2e.mjs）
+// 右键菜单：在网页上右键 → 翻译此页 / 显示原文
+function trMenu() { try { chrome.contextMenus.removeAll(() => chrome.contextMenus.create({ id: 'mt-translate', title: '翻译此页 / 显示原文（MaskTab）', contexts: ['page', 'selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] }, () => void chrome.runtime.lastError)); } catch { /* 没有右键菜单权限 */ } }
+chrome.contextMenus?.onClicked.addListener((info, tab) => { if (info.menuItemId === 'mt-translate' && tab?.id >= 0) chrome.tabs.sendMessage(tab.id, { t: 'mt:translate' }).catch(() => {}); });
+
 chrome.alarms.onAlarm.addListener(() => { loop(); reportCookies().catch(() => {}); });
-chrome.runtime.onInstalled.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); loop(); });
-chrome.runtime.onStartup.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); loop(); });
+chrome.runtime.onInstalled.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); trMenu(); loop(); });
+chrome.runtime.onStartup.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); trMenu(); loop(); });
 chrome.runtime.onMessage.addListener((m, sender, send) => {
   if (m && typeof m === 'object' && String(m.t).startsWith('vault:')) {
     if (sender.id !== chrome.runtime.id) return false;
     vaultMsg(m, sender).then((r) => send({ ok: true, r }), (e) => send({ ok: false, error: e.message }));
+    return true;
+  }
+  if (m && m.t === 'tr:fetch') { // 网页翻译：只认本扩展自己的内容脚本
+    if (sender.id !== chrome.runtime.id || !sender.tab) return false;
+    trFetch(m).then(send, (e) => send({ error: e.name === 'AbortError' ? '翻译接口超时' : e.message }));
     return true;
   }
   if (m === 'wake') { loop(); send(true); return false; } // 扩展页面打开时叫醒后台
@@ -202,4 +232,5 @@ chrome.runtime.onMessage.addListener((m, sender, send) => {
   return false;
 });
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
+trMenu();
 loop();

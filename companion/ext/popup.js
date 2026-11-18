@@ -18,6 +18,14 @@ const record = () => run(async () => {
   window.close();
 });
 
+// 翻译此页（决策 UI-27）：让当前标签页的网页整页翻成中文；再点一次换回原文。翻译请求经本实例自己的代理发出。
+const translate = () => run(async () => {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || !/^https?:/.test(tab.url || '')) throw new Error('先打开要翻译的网页');
+  try { await chrome.tabs.sendMessage(tab.id, { t: 'mt:translate' }); } catch { throw new Error('这个页面还没准备好：刷新一下再点翻译'); }
+  window.close();
+});
+
 // soft = 后台自动刷新：取回状态时用户已经在输入框里打字（或开着对话框）就先不重画，免得打断输入法；下一次重画会用上新状态。
 async function load(soft) {
   try { st = await api('GET', '/api/state'); } catch (e) { root.replaceChildren(h('div', { class: 'warn bad', style: { marginTop: '8px' } }, icon('warn', 20), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
@@ -33,7 +41,7 @@ function render() {
   const me = st.me;
   if (me) document.body.style.setProperty('--inst', me.color);
   const toPanel = (fp) => () => { menu = false; panel.home(fp); render(); };
-  const nav = { node: toPanel(false), fp: toPanel(true), open, render, record };
+  const nav = { node: toPanel(false), fp: toPanel(true), open, render, record, translate };
   const kids = menu && me ? menuView(st, nav) : panel.kids();
   document.body.classList.toggle('menu', menu);
   root.className = menu ? '' : 'np';

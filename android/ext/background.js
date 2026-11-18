@@ -44,7 +44,8 @@ function applyState(s) {
 function connect() {
   try {
     const port = browser.runtime.connectNative(NATIVE);
-    port.onMessage.addListener((msg) => { if (msg?.t === 'state') applyState(msg); else if (msg?.t === 'rec-start') recStart(String(msg.inst || '')); }); // rec-start：头像菜单（app 原生画的）里的“录入登录”
+    // rec-start：头像菜单（app 原生画的）里的“录入登录”；tr-start：三点菜单里的“翻译此页”（决策 UI-27）
+    port.onMessage.addListener((msg) => { if (msg?.t === 'state') applyState(msg); else if (msg?.t === 'rec-start') recStart(String(msg.inst || '')); else if (msg?.t === 'tr-start') trStart(String(msg.inst || '')); });
     port.onDisconnect.addListener(() => setTimeout(connect, 2000));
   } catch (e) { console.warn('connectNative 失败', e); setTimeout(connect, 2000); }
 }
@@ -221,6 +222,11 @@ browser.runtime.onMessage.addListener((m, sender) => {
   // 实例菜单里的“录入登录”（扩展自己的页面发来）：转给这个实例正显示着的网页；没有就记下来，等下一个网页接手。
   if (t === 'rec-start' && !sender.tab?.url?.startsWith('http')) return recStart(String(m.inst || ''));
 });
+// 翻译此页：转给这个实例正显示着的网页（translate.js）。网页里没有内容脚本（内部页、刚打开还没载完）就算了。
+function trStart(inst) {
+  const tab = visTab.get(inst);
+  if (tab != null) browser.tabs.sendMessage(tab, { t: 'mt:translate' }).catch(() => {});
+}
 function recStart(inst) {
   const tab = visTab.get(inst);
   recWant.set(inst, Date.now());

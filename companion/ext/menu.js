@@ -88,6 +88,7 @@ export function menuView(st, nav) {
   const tool = (ic, tip, fn) => h('button', { class: 'ib sm', title: tip, 'aria-label': tip, onclick: fn }, icon(ic, 19));
   kids.push(h('div', { class: 'lbl' }, h('span', { title: MOBILE ? null : '直接打字就能搜索（编号 / 名称 / 邮箱），回车切换到第一个' }, `其它实例（${others.length}）`),
       h('span', { class: 'tools' },
+        nav.translate && tool('lang', '翻译此页 / 显示原文（Alt+T）', nav.translate), // 决策 UI-27
         tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), tool('gear', '设置', () => nav.open('settings')),
         me.kind !== 'normal' && tool('power', '关闭这个实例', () => run(() => api('POST', `/api/instances/${me.id}/stop`))),
         h('button', { class: 'btn tonal sm', title: '新建实例' + (MOBILE ? '' : '（Ctrl+M）'), onclick: () => newWizard(st, () => nav.render()) }, icon('add', 16), h('span', { class: 'bt' }, '新建实例')))), // 新建走向导（决策 UI-25）

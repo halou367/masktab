@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material 风格线条图标（和共用页面 ui.js 里的 lang 是同一份形状）：翻译此页（决策 UI-27） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="2.0" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M3 6h10M8 4v2M5.5 6c0.5 3.5 3 6.5 6.5 8M11 6c-0.5 3.5 -3.5 6.5 -7.5 8"/>
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="2.0" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M13 20l3.5 -9l3.5 9M14.2 17h4.6"/>
+</vector>
