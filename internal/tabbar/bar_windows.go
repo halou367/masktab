@@ -4,6 +4,7 @@ package tabbar
 
 import (
 	"fmt"
+	"log"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -170,21 +171,53 @@ func Focus(id string) {
 }
 
 // Release 把藏起来的窗口全部放出来，之后不再管窗口。程序退出前调用；哪个 goroutine 都可以调。
+//
+// 窗口的事不能握着 mu 做（2026-11-18 在需求方电脑上抓到的死锁，“退出”卡住不动）：
+// 藏实例栏要等管栏的那个线程来办，而那个线程每 10 / 250 毫秒就要拿一次 mu——
+// 它正等着 mu 的时候我们握着 mu 去等它，两边就永远等下去：核心服务退不掉，藏着的窗口也放不出来，
+// 升级时安装程序只能把它硬结束。所以：握着 mu 只记下要办哪些窗口，放开 mu 再办；
+// 办的过程最多等 3 秒（别的程序的窗口卡住时不该拖住退出）。
 func Release() {
 	mu.Lock()
-	defer mu.Unlock()
 	stopped = true
-	for h := range hidden {
-		_, _, _ = pShowWindow.Call(h, swShowNA)
-	}
+	hs, es, bs := keys(hidden), keys(edged), keys(bars)
 	clear(hidden)
-	for h := range edged {
-		resetEdge(h)
-	}
 	clear(edged)
-	for h := range bars {
-		_, _, _ = pShowWindow.Call(h, swHide)
+	mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, h := range hs {
+			show(h, swShowNA)
+		}
+		for _, h := range es {
+			resetEdge(h)
+		}
+		for _, h := range bs { // 这一步由管栏的线程办：它办到这里时，手上那一遍“对账”已经做完了
+			show(h, swHide)
+		}
+		// 上面放窗口的时候，管栏的线程可能正对到一半、又藏了一个（它只在每一遍开头看 stopped）：再放一次
+		mu.Lock()
+		again := keys(hidden)
+		clear(hidden)
+		mu.Unlock()
+		for _, h := range again {
+			show(h, swShowNA)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		log.Printf("合并窗口：退出前放出窗口 3 秒没办完（%d 个藏着的、%d 个栏），不等了", len(hs), len(bs))
 	}
+}
+
+func keys(m map[uintptr]bool) []uintptr {
+	out := make([]uintptr, 0, len(m))
+	for h := range m {
+		out = append(out, h)
+	}
+	return out
 }
 
 // Debug 返回现状（诊断、实机测试用）。
