@@ -567,8 +567,25 @@ func (a *App) Delete(id string) error {
 
 // Shutdown 程序退出：关闭全部实例（保留恢复列表）并停止 mihomo。
 func (a *App) Shutdown() {
-	a.shutOnce.Do(a.shutdown) // 可能同时被叫到两次（安装更新时自己退 + 安装程序让我们退）：只做一次，后来的等前一个做完
+	// 可能同时被叫到两次（安装更新时自己退 + 安装程序让我们退）：只做一次，后来的等前一个做完
+	a.shutOnce.Do(func() {
+		// 保底：收尾 shutdownLimit 还没做完（D-6 那样两边互相等、别的程序的窗口卡住……），就不等了，直接结束自己。
+		// 正常收尾最慢也就二十秒上下（每个实例 4 秒等它自己关 + 8 秒 + 5 秒，各实例同时进行）。
+		// 留下的内核进程下次启动时会清（CleanLeftovers）；锁文件先拿掉，免得下一个启动的来叫一个已经不在的服务。
+		t := time.AfterFunc(shutdownLimit, func() {
+			log.Printf("退出收尾 %v 没做完，不等了，直接结束", shutdownLimit)
+			a.dropLock()
+			exitNow(1)
+		})
+		defer t.Stop()
+		a.shutdown()
+	})
 }
+
+var (
+	shutdownLimit = 40 * time.Second
+	exitNow       = os.Exit // 测试里换掉
+)
 
 func (a *App) shutdown() {
 	tabbar.Release() // 合并窗口：藏着的窗口先放出来，之后不再管
