@@ -209,7 +209,8 @@ func memEx2(h syscall.Handle) (private, ws int64, ok bool) {
 	if r, _, _ := memInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&m)), uintptr(m.cb)); r == 0 {
 		return 0, 0, false
 	}
-	return int64(m.privateWorkingSetSize), int64(m.workingSetSize), true
+	// Windows 10 / Server 2022 上这个调用也“成功”，只是后面新加的那几格没人填、还是 0（CI 44317985625 在 windows-2022 上看到的）：算走不通
+	return int64(m.privateWorkingSetSize), int64(m.workingSetSize), m.privateWorkingSetSize > 0
 }
 
 func memNt(h syscall.Handle) (private, ws int64, ok bool) {
