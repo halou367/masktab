@@ -175,7 +175,8 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		for _, it := range a.vault.Near(id, site) {
 			items = append(items, m{it, nos[it.Inst], true, vault.Host(it.Site)})
 		}
-		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "no": no, "rule": a.vault.RuleOf(site), "needIcon": !a.vault.HasIcon(site)}, nil)
+		// email：本实例自己的邮箱（导入的实例以邮箱命名）；defEmail：设置里的默认邮箱。注册 / 登录页都用前者优先（decisions M-6）
+		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "defEmail": a.vault.DefaultEmail(), "no": no, "rule": a.vault.RuleOf(site), "needIcon": !a.vault.HasIcon(site)}, nil)
 	})
 	// 站点的网页图标：内容脚本在登录页取下来交上来（只收已经记住账号的站点的）；界面一次取全部。
 	mux.HandleFunc("PUT /api/vault/icon", func(w http.ResponseWriter, r *http.Request) {
@@ -259,12 +260,19 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		if !vt(w) {
 			return
 		}
-		var b struct{ Password string }
+		// password / email 各自可选：只改交来的那一项（以前只有密码；默认邮箱见 decisions M-6）
+		var b struct{ Password, Email *string }
 		if err := body(r, &b); err != nil {
 			reply(w, nil, err)
 			return
 		}
-		err := a.vault.SetDefault(b.Password)
+		var err error
+		if b.Email != nil {
+			err = a.vault.SetDefaultEmail(*b.Email)
+		}
+		if err == nil && b.Password != nil {
+			err = a.vault.SetDefault(*b.Password)
+		}
 		a.bump("state", "")
 		reply(w, nil, err)
 	})
@@ -379,4 +387,12 @@ func reorder(list []*model.Instance, ids []string) []*model.Instance {
 		return pi < pj
 	})
 	return out
+}
+
+// defEmailLocked 是给界面看的默认邮箱（设置页那一行显示它；密码不显示）。
+func (a *App) defEmailLocked() string {
+	if a.vault == nil {
+		return ""
+	}
+	return a.vault.DefaultEmail()
 }

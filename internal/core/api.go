@@ -291,7 +291,7 @@ func (a *App) State(me string) map[string]any {
 		"core":        map[string]any{"ok": a.coreOK, "version": kernel.MihomoVersion, "error": a.setup.CoreError},
 		"net":         a.netInfoLocked(),
 		"launchSteps": LaunchSteps,
-		"vault":       map[string]any{"hasDefault": a.vault != nil && a.vault.Default() != "", "error": a.vaultErr, "rules": a.ruleViewsLocked(), "icons": a.iconStamp()},
+		"vault":       map[string]any{"hasDefault": a.vault != nil && a.vault.Default() != "", "defEmail": a.defEmailLocked(), "error": a.vaultErr, "rules": a.ruleViewsLocked(), "icons": a.iconStamp()},
 	}
 }
 

@@ -1,7 +1,11 @@
 // 伴随扩展的内容脚本：识别登录 / 注册表单，自动填写、记住密码（计划 5.6 F-PWD-3/4/5）。
 // - 登录：本实例在该站点恰有一条记录 → 直接填入（只填，不替用户点“登录”）；有多条或只有别的实例的记录 → 聚焦时弹出选择。
 //   本实例是批量导入的邮箱实例、该站点还没有记录 → 用“邮箱 + 导入时的密码”填。
-// - 注册：页面有“新密码”框时，在旁边提示“用默认密码”，点了才填。
+// - 默认邮箱 + 默认密码（decisions M-6，设置里各填一次）：本实例在这个站点没有记住的账号时，
+//   注册页把邮箱框（含“确认邮箱”）和全部密码框（新密码 + 确认密码）填好；登录页把账号框和密码框填好；
+//   两步登录 / 邮箱和密码分两页的：第一页只有邮箱框就填邮箱，第二页只剩密码框、页面上显示的账号就是这个邮箱（或看不出来）才填密码。
+//   邮箱优先用本实例自己的（导入邮箱建的实例以邮箱命名），没有才用默认邮箱。只填不提交；填了右下角提示一句，可撤销。
+// - 注册：没自动填上的（默认密码没设、用户清掉了），聚焦新密码框时在旁边提示“用默认密码”，点了才填。
 // - 记住：提交表单、点登录按钮或回车时，密码框里有值就交给核心服务保存（同站点同用户名则更新），右下角提示，可撤销。
 // - 两步登录（先邮箱、下一步才是密码，如 arena.ai）：第一步提交时把用户名暂存到后台，第二步只剩密码框时取回来配对保存；
 //   填写时第一步填用户名、第二步按暂存的用户名挑对应密码。
@@ -57,6 +61,10 @@
     if (!st) return null;
     try { const all = qsa(st.sel).filter((e) => e instanceof HTMLInputElement && visible(e)); return all[st.n || 0] || all[0] || null; } catch { return null; }
   }
+  const SIGNUPISH = /sign.?up|register|join|create.?account|registration|注册|创建账号/i;
+  const PHONEISH = /phone|mobile|tel|手机|电话/i, MAILISH = /e-?mail|邮箱|mail/i, IDISH = /user|login|account|identifier|账号|帐号|用户/i;
+  // 能不能往这个框里填邮箱：手机号框不填；注册页只填明确是邮箱的框（纯“用户名”框可能不收 @）；登录页账号框也填（多数网站账号框收邮箱）。
+  const idOk = (u, signup) => { if (!u || u.type === 'tel' || u.type === 'password') return false; const t = hintOf(u); if (PHONEISH.test(t) && !MAILISH.test(t)) return false; return u.type === 'email' || MAILISH.test(t) || (!signup && (IDISH.test(t) || !t.trim())); };
   const signupPage = () => { const p = pwFields(); return p.length >= 2 || p.some(isNew) || (/sign.?up|register|join|create/i.test(location.pathname + document.title) && p.length >= 1); };
 
   // 按网页框架的要求“像人一样”写值：React / Vue 等监听 input 事件。
@@ -147,8 +155,8 @@
     b.onmousedown = (ev) => {
       ev.preventDefault();
       for (const f of pwFields()) setVal(f, pw);
-      const u = userFieldFor(pwFields()[0]);
-      if (u && !u.value && info?.email && /mail|user|login|account/i.test(u.name + u.id + u.type + u.autocomplete)) setVal(u, info.email);
+      const u = userFieldFor(pwFields()[0]), em = info?.email || info?.defEmail;
+      if (u && !u.value && em && idOk(u, true)) setVal(u, em);
       closePop();
     };
     pop.append(b); root.append(pop); place(pop, anchor);
@@ -176,7 +184,7 @@
     if (inf.needIcon && (mine.length || pws.length || lone)) grabIcon();
     const rid = ruleEl(ID), rpw = ruleEl(['pass']);
     if (!pws.length && !lone && !rid && !rpw) return;
-    if (signupPage()) return; // 注册页不自动填，聚焦时提示
+    if (signupPage()) { fillDefault(inf, true); return; } // 注册页：只用默认邮箱 / 默认密码（已记住的账号不往注册页填）
     // 已标记的网站、本实例还没有它的账号：自动进入录入，登录一次就记住。没标记过的登录页：问一句要不要录。
     if (inf.rule && !rec && !recOff && !mine.length) startRec(true);
     else maybeAsk(inf, pws, lone);
@@ -186,11 +194,46 @@
     const star = inf.items.filter((x) => x.mine && x.site === '*');
     let pick = mine.length === 1 ? mine[0] : !mine.length && star.length === 1 && !inf.items.some((x) => !x.mine) ? star[0] : null;
     // 第二步只剩密码框：按第一步的用户名挑（本实例在这个站点存了多个账号时也能对上）。
+    let who2 = '';
     if (pws.length && !userFieldFor(pws[0])) {
-      const who = shownUser(pws[0]) || pendingUser || (await send({ t: 'vault:pending-get' }))?.r || '';
+      const who = who2 = shownUser(pws[0]) || pendingUser || (await send({ t: 'vault:pending-get' }))?.r || '';
       if (who) pick = mine.find((x) => x.user.toLowerCase() === who.toLowerCase()) || (star[0]?.user.toLowerCase() === who.toLowerCase() ? star[0] : pick);
     }
     if (pick) fill(pick, true);
+    else if (!mine.length && !inf.items.some((x) => !x.near && x.mine)) fillDefault(inf, false, pws, lone, who2);
+  }
+
+  // 默认邮箱 + 默认密码（decisions M-6）。signup = 注册页。只填空着的框、每个框只填一次；不点任何按钮。
+  function fillDefault(inf, signup, pws = pwFields(), lone = loneUserField(), who2 = '') {
+    const email = (inf.email || inf.defEmail || '').trim(), pass = inf.default || '';
+    if (!email && !pass) return;
+    // 只有一个邮箱框的那一页（两步登录 / 两步注册的第一页）：看起来得是登录或注册页，免得把首页的“订阅邮件”框也填上
+    if (!pws.length && !(loginPage(pws, lone) || SIGNUPISH.test(location.pathname + ' ' + document.title))) return;
+    const done = [];
+    const put = (e, v) => { if (e && v && !e.value && !filled.has(e)) { setVal(e, v); filled.add(e); done.push(e); } };
+    if (email) {
+      if (signup) {
+        const scope = pws[0]?.form || document;
+        const boxes = [...(scope.querySelectorAll ? scope.querySelectorAll('input') : [])].filter((i) => visible(i) && idOk(i, true) && !/search|captcha|code|otp|newsletter|subscribe/i.test(hintOf(i)));
+        (boxes.length ? boxes : [pws.length ? userFieldFor(pws[0]) : lone]).forEach((u) => idOk(u, true) && put(u, email));
+      } else {
+        const u = ruleEl(ID) || (pws.length ? userFieldFor(pws[0]) : lone);
+        if (idOk(u, false)) put(u, email);
+      }
+    }
+    if (pass && pws.length) {
+      let targets = signup ? pws : pws.slice(0, 1);
+      if (!signup && !userFieldFor(pws[0])) { // 第二步只剩密码框：页面上显示的账号得是这个邮箱
+        const who = shownUser(pws[0]) || pendingUser || who2;
+        if (who && email && who.toLowerCase() !== email.toLowerCase()) targets = [];
+      }
+      targets.forEach((p) => put(p, pass));
+    }
+    if (!done.length) return;
+    const nE = done.filter((e) => e.type !== 'password').length, nP = done.length - nE;
+    const what = [nE && (inf.email ? '本实例的邮箱' : '默认邮箱'), nP && '默认密码'].filter(Boolean).join('和');
+    done[done.length - 1].blur?.(); // 不把光标留在框里：免得弹出别的提示，也不像是替用户点了什么
+    toast(`已填好${what}（没有提交）`, () => { for (const e of done) setVal(e, ''); done[0]?.blur?.(); });
   }
 
   document.addEventListener('focusin', async (ev) => {
@@ -204,6 +247,7 @@
     // “录入”按钮：这个网站还没有规则、本实例也没有它的账号时，在像登录框的输入框旁边出现。
     if (!rec && !recOff && !askEl && !signup && !inf.rule && !own(inf).length && isField(t)) showBtn(t);
     if (!isPw && !isUser) return;
+    if (filled.has(t) && t.value) return; // 刚自动填好的框：不再弹提示
     if (isPw && signup && inf.default) { suggestDefault(t, inf.default); return; }
     if (inf.items.length > 1 || (inf.items.length === 1 && (!inf.items[0].mine || inf.items[0].near))) chooser(t, inf.items);
   }, true);

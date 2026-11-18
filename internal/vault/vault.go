@@ -48,6 +48,7 @@ type Rule struct {
 
 type data struct {
 	Default string  `json:"default,omitempty"` // 默认密码（批量导入、注册新站时用）
+	Email   string  `json:"email,omitempty"`   // 默认邮箱（注册 / 登录页自动填，decisions M-6）。和密码一样只在加密的库里，不进明文配置
 	Items   []*Item `json:"items"`
 	Rules   []*Rule `json:"rules,omitempty"` // 录入规则，全部实例共用
 	Icons   []*Icon `json:"icons,omitempty"` // 记住了账号的站点的网页图标（界面上画在实例卡片下面）
@@ -154,6 +155,31 @@ func (v *Vault) SetDefault(p string) error {
 	defer v.mu.Unlock()
 	v.d.Default = p
 	return v.saveLocked()
+}
+
+// DefaultEmail 是设置里填的默认邮箱（空 = 没设）。
+func (v *Vault) DefaultEmail() string { v.mu.Lock(); defer v.mu.Unlock(); return v.d.Email }
+
+// SetDefaultEmail 改默认邮箱：去掉首尾空白；不像邮箱的不收（空 = 清除）。
+func (v *Vault) SetDefaultEmail(e string) error {
+	e = strings.TrimSpace(e)
+	if e != "" && !LooksEmail(e) {
+		return errors.New("不像邮箱地址：" + e)
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.d.Email = e
+	return v.saveLocked()
+}
+
+// LooksEmail 粗略判断是不是邮箱：有且只有一个 @，两边都有字，域名里有点，没有空白。
+func LooksEmail(s string) bool {
+	at := strings.Index(s, "@")
+	if at <= 0 || at != strings.LastIndex(s, "@") || strings.ContainsAny(s, " \t\r\n,;<>") {
+		return false
+	}
+	dom := s[at+1:]
+	return len(dom) >= 3 && strings.Contains(dom, ".") && !strings.HasPrefix(dom, ".") && !strings.HasSuffix(dom, ".")
 }
 
 // Upsert 新增或更新：同一实例、同一站点、同一用户名视为同一条（F-PWD-3 同站点同用户名则更新密码）。

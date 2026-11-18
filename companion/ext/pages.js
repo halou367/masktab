@@ -7,6 +7,7 @@ import { face } from './menu.js';
 // 电脑版由 app.js 放进设置页（左边导航），安卓版由 main.js 放进对应的路由。两边画的是同一份代码、同一套接口，改这里两端一起变。
 // 2026-11-15 起照 Chrome 设置页的样子（决策 UI-1）：分组标题 + 一行一项，点开是选择框或输入框。
 // c = { st, act, open(路由), back? }：st = 核心服务的状态；act(fn, 提示) = 执行并重新取状态；open = 去另一页；back = 顶栏的返回（没有就不画）。
+const keyNote = (st) => (hosted(st) ? '加密保存在本机（密钥在系统密钥库里）。' : '加密保存在本机（Windows 用系统凭据保护）。');
 const hosted = (st) => !!st.host;
 const set = (c, k, v, ok) => c.act(() => api('PATCH', '/api/settings', { [k]: v }), ok);
 const ENGINES = [['https://www.bing.com/search?q=%s', 'Bing'], ['https://www.google.com/search?q=%s', 'Google'], ['https://duckduckgo.com/?q=%s', 'DuckDuckGo'], ['https://www.baidu.com/s?wd=%s', '百度']];
@@ -41,8 +42,14 @@ export function settingsHome(c) {
       const u = await ask('自定义搜索地址', { value: s.searchUrl, placeholder: 'https://…?q=%s', note: '%s 换成搜索的关键词' });
       if (u && u.includes('%s')) set(c, 'searchUrl', u.trim()); else if (u) toast('地址里要有 %s', true);
     } }),
-    row({ ic: 'key', t: '密码管理工具', s: `每个实例各自保存 · 默认密码${st.vault?.hasDefault ? '已设置' : '未设置'}`, chev: true, onclick: async () => {
-      const v = await ask(st.vault?.hasDefault ? '修改默认密码' : '设置默认密码', { type: 'password', note: '批量导入邮箱、注册新站时用；留空 = 清除。' + (hosted(st) ? '加密保存在本机（密钥在系统密钥库里）。' : '加密保存在本机（Windows 用系统凭据保护）。') });
+    // 默认邮箱 + 默认密码（decisions M-6）：各填一次；注册页、登录页（含两步登录、邮箱和密码分两页）自动填进去，只填不提交。
+    // 两样都只存在加密的密码库里，不进明文配置；实例自己有邮箱（导入邮箱建的）时先用实例自己的。
+    row({ ic: 'mail', t: '默认邮箱', s: st.vault?.defEmail || '未设置 · 注册、登录时自动填', chev: true, onclick: async () => {
+      const v = await ask(st.vault?.defEmail ? '修改默认邮箱' : '设置默认邮箱', { type: 'email', value: st.vault?.defEmail || '', placeholder: 'name@example.com', note: '注册、登录页自动填进邮箱 / 账号框（两步登录、邮箱和密码分两页的也认），只填不提交。导入邮箱建的实例用它自己的邮箱。留空 = 清除。' + keyNote(st) });
+      if (v != null) c.act(() => api('PUT', '/api/vault/default', { email: v.trim() }), v.trim() ? '已保存' : '已清除');
+    } }),
+    row({ ic: 'key', t: '默认密码', s: st.vault?.hasDefault ? '已设置 · 注册、登录、批量导入邮箱时用' : '未设置 · 注册、登录、批量导入邮箱时用', chev: true, onclick: async () => {
+      const v = await ask(st.vault?.hasDefault ? '修改默认密码' : '设置默认密码', { type: 'password', note: '注册新站时自动填进密码框（两个密码框都填），登录页上本实例还没记住账号时也用它；批量导入邮箱没写密码的用它。只填不提交。留空 = 清除。' + keyNote(st) });
       if (v != null) c.act(() => api('PUT', '/api/vault/default', { password: v }), v ? '已保存' : '已清除');
     } }),
     row({ ic: 'palette', t: '外观', s: themeName(s.theme), drop: true, onclick: () => pick('外观', THEMES, s.theme || 'system', 'theme') }),

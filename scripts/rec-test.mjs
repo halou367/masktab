@@ -63,6 +63,14 @@ const PAGES = {
     <script>document.getElementById('go').onclick = () => { if (document.getElementById('f2').value === 'right') document.getElementById('box').innerHTML = '<h1>欢迎</h1>'; else document.getElementById('err').textContent = '密码不对'; };</script>`),
   // 四、不是登录页：只有一个订阅邮件的框
   'blog.test/': html('<h1>博客</h1><input type="email" name="email" placeholder="订阅邮件"><button>订阅</button>'),
+  // 九、默认邮箱 + 默认密码（decisions M-6）：注册页、登录页、两步登录
+  'reg.test/signup': html(`<title>Create account</title><form action="/created"><input name="username" placeholder="Username"><input type="tel" name="phone" placeholder="Phone">
+    <input type="email" name="email" placeholder="Email"><input type="email" name="email2" placeholder="Confirm email"><input type="password" name="p1" autocomplete="new-password"><input type="password" name="p2" autocomplete="new-password"><button>Sign up</button></form>`),
+  'reg.test/created': html('<h1>created</h1>'),
+  'acc.test/login': html('<title>Log in</title><form action="/in"><input name="login" placeholder="Email or username"><input type="password" name="pw"><button>Log in</button></form>'),
+  'acc.test/in': html('<h1>in</h1>'),
+  'two.test/signin': html('<title>Sign in</title><form action="/password"><input type="email" name="identifier" placeholder="Email"><button>Next</button></form>'),
+  'two.test/password': html('<title>Sign in</title><form action="/in" onsubmit="return false"><input type="password" name="pw"><button>Sign in</button></form>'),
   // 五、登录用的弹出窗口：登上就关
   'pop.test/login': html('<title>Login</title><form onsubmit="return false"><input name="user"><input type="password" name="pass"><button>Log in</button></form>'),
 };
@@ -243,6 +251,48 @@ await sleep(400);
 await page.close();
 const s7 = await until(async () => (await items(A)).find((x) => x.user === 'popuser'));
 check('窗口关掉后账号照样入库', s7?.site === 'https://pop.test' && s7?.pass === 'poppass', JSON.stringify(await items(A)));
+
+console.log(`[${kind}] 九 默认邮箱 + 默认密码：注册页、登录页、两步登录都只填不提交`);
+{
+  const C = (await api('POST', '/api/instances', {})).id, c = await newInst(C);
+  await api('PUT', '/api/vault/default', { email: 'reg.me@example.com', password: 'Def#Pass9' });
+  let p9 = await c.open(); const u9 = ui(p9);
+  await p9.goto('https://reg.test/signup');
+  const v = () => p9.evaluate(() => Object.fromEntries([...document.querySelectorAll('input')].map((i) => [i.name, i.value])));
+  let got = await until(async () => { const x = await v(); return x.p2 ? x : null; }, 5000) || await v();
+  check('注册页：邮箱、确认邮箱、两个密码框都填好（默认邮箱 + 默认密码）', got.email === 'reg.me@example.com' && got.email2 === 'reg.me@example.com' && got.p1 === 'Def#Pass9' && got.p2 === 'Def#Pass9', JSON.stringify(got));
+  check('注册页：用户名框、手机号框不填', got.username === '' && got.phone === '', JSON.stringify(got));
+  await sleep(600);
+  check('注册页：没有提交（还在注册页）', p9.url().endsWith('/signup'), p9.url());
+  check('注册页：右下角提示“已填好默认邮箱和默认密码（没有提交）”', /已填好默认邮箱和默认密码（没有提交）/.test(await u9.toast.innerText().catch(() => '')), await u9.toast.innerText().catch(() => ''));
+  await shot(p9, '9-signup');
+  await u9.toast.locator('button').click();
+  got = await v();
+  check('注册页：点“撤销”清空刚填的', got.email === '' && got.p1 === '' && got.p2 === '', JSON.stringify(got));
+  await p9.goto('https://acc.test/login');
+  got = await until(async () => { const x = await v(); return x.pw ? x : null; }, 5000) || await v();
+  check('登录页（本实例没记住这个站的账号）：账号框填默认邮箱、密码框填默认密码', got.login === 'reg.me@example.com' && got.pw === 'Def#Pass9', JSON.stringify(got));
+  check('登录页：没有提交', p9.url().endsWith('/login'), p9.url());
+  await p9.goto('https://two.test/signin');
+  got = await until(async () => { const x = await v(); return x.identifier ? x : null; }, 5000) || await v();
+  check('两步登录第一页（只有邮箱框）：填默认邮箱，不点下一步', got.identifier === 'reg.me@example.com' && p9.url().endsWith('/signin'), JSON.stringify(got));
+  await Promise.all([p9.waitForURL('**/password**'), p9.click('button')]);
+  got = await until(async () => { const x = await v(); return x.pw ? x : null; }, 5000) || await v();
+  check('两步登录第二页（只剩密码框，上一步是这个邮箱）：填默认密码', got.pw === 'Def#Pass9', JSON.stringify(got));
+  await p9.goto('https://two.test/signin');
+  await sleep(800);
+  await p9.locator('input[name=identifier]').fill('');
+  await p9.locator('input[name=identifier]').pressSequentially('someone.else@example.com');
+  await Promise.all([p9.waitForURL('**/password**'), p9.click('button')]);
+  await sleep(1500);
+  got = await v();
+  check('两步登录：第一页换成了别的邮箱，第二页不填默认密码', got.pw === '', JSON.stringify(got));
+  await p9.goto('https://blog.test/');
+  await sleep(1000);
+  got = await v();
+  check('不是登录 / 注册页（只有订阅邮件框）：不填默认邮箱', got.email === '', JSON.stringify(got));
+  await c.ctx.close();
+}
 
 console.log(`[${kind}] 八 不是登录页`);
 page = await a.open(); u = ui(page);

@@ -832,6 +832,7 @@
  "vault": {
   "error": "",
   "hasDefault": true,
+  "defEmail": "reg.me@example.com",
   "rules": [
    {
     "site": "https://passport.jd.com",

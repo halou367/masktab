@@ -166,3 +166,31 @@ func TestIcons(t *testing.T) {
 		t.Fatal("账号删了，图标不该再给出")
 	}
 }
+
+// 默认邮箱（decisions M-6）：只存在加密的库里；不像邮箱的不收；清空可以。
+func TestDefaultEmail(t *testing.T) {
+	dir := t.TempDir()
+	v, _ := Open(dir)
+	if err := v.SetDefaultEmail("  me.reg+shop@example.co  "); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "vault.bin"))
+	if containsStr(b, "example.co") {
+		t.Fatal("默认邮箱不能明文落盘")
+	}
+	v2, _ := Open(dir)
+	if v2.DefaultEmail() != "me.reg+shop@example.co" {
+		t.Fatalf("重开后应还在：%q", v2.DefaultEmail())
+	}
+	for _, bad := range []string{"abc", "a@b", "a b@c.com", "@x.com", "a@@x.com", "a@x.com,b@y.com", "a@.com"} {
+		if err := v2.SetDefaultEmail(bad); err == nil {
+			t.Fatalf("%q 不该收", bad)
+		}
+	}
+	if v2.DefaultEmail() != "me.reg+shop@example.co" {
+		t.Fatal("填错时不能把原来的冲掉")
+	}
+	if err := v2.SetDefaultEmail(""); err != nil || v2.DefaultEmail() != "" {
+		t.Fatal("空 = 清除")
+	}
+}
