@@ -134,16 +134,17 @@ type App struct {
 	scanPool  chan int
 	setupMu   sync.Mutex
 	// 在线更新（update.go）
-	upd       UpdateState
-	updRel    *update.Release
-	updFile   string     // 下载好的安装包
-	updBusy   sync.Mutex // 检查和下载一次只做一件
-	shutOnce  sync.Once
-	kernelUp  chan struct{} // 内核就绪后关闭
-	kernelExe string
-	adapter   kernel.Adapter
-	apiPort   int
-	token     string
+	upd        UpdateState
+	updRel     *update.Release
+	updFile    string     // 下载好的安装包
+	updBusy    sync.Mutex // 检查和下载一次只做一件
+	shutOnce   sync.Once
+	kernelUp   chan struct{} // 内核就绪后关闭
+	kernelExe  string
+	kernelOrig string // 内核原来的文件（kernelExe 可能是它旁边那份 MaskTab 副本，见 brandexe.go）；副本起不来时退回它
+	adapter    kernel.Adapter
+	apiPort    int
+	token      string
 }
 
 func (a *App) p(parts ...string) string { return filepath.Join(append([]string{a.Dir}, parts...)...) }

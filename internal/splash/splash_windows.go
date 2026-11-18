@@ -3,7 +3,10 @@
 package splash
 
 import (
+	"fmt"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -261,6 +264,17 @@ func CloseSetup() bool {
 	return true
 }
 
+// RunDemo 把“正在打开实例 n / total”从头到尾演一遍（核对样子用：masktab.exe -splash demo）。
+func RunDemo(total int, step time.Duration) {
+	Show(fmt.Sprintf("正在打开实例 0 / %d", total))
+	for i := 0; i <= total; i++ {
+		Show(fmt.Sprintf("正在打开实例 %d / %d", i, total))
+		Progress(i, total)
+		time.Sleep(step)
+	}
+	Close()
+}
+
 // RunStandalone 显示提示卡，直到有人把它关掉（WM_CLOSE）或者过了 limit。安装程序那一段用：masktab.exe -splash update。
 func RunStandalone(t string, limit time.Duration) {
 	mu.Lock()
@@ -302,9 +316,16 @@ func run(title string, ready, closed chan struct{}) {
 			dpi = int(d)
 		}
 	}
+	// 核对样子用的两个开关（没有深色模式 / 高分屏的机器上也能看一眼）：MASKTAB_SPLASH_SCALE=200 按 200% 画，MASKTAB_SPLASH_DARK=1 / 0 强制深 / 浅
+	if v, _ := strconv.Atoi(os.Getenv("MASKTAB_SPLASH_SCALE")); v >= 100 && v <= 400 {
+		dpi = 96 * v / 100
+	}
 	px := func(n int) int32 { return int32(n * dpi / 96) }
 	shown, phase = 0, 0
 	isDark := dark()
+	if v := os.Getenv("MASKTAB_SPLASH_DARK"); v != "" {
+		isDark = v == "1"
+	}
 	bg, fg, sub, track, bar, edge := rgb(255, 255, 255), rgb(32, 33, 36), rgb(95, 99, 104), rgb(232, 234, 237), rgb(46, 134, 255), rgb(218, 220, 224)
 	if isDark {
 		bg, fg, sub, track, edge = rgb(41, 42, 45), rgb(232, 234, 237), rgb(154, 160, 166), rgb(60, 64, 67), rgb(70, 73, 78)

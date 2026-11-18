@@ -416,16 +416,20 @@ func (a *App) Launch(id string) error {
 		return nil
 	}
 	a.step(id, 8)
-	if err := cmd.Start(); err != nil {
-		if cmd.SysProcAttr == nil {
-			return fail("启动内核失败：" + err.Error())
-		}
+	// 先记在公共上级名下起；起不来就平常地起；还起不来、而且起的是 MaskTab 副本，就退回内核原文件再试一次
+	err = cmd.Start()
+	if err != nil && cmd.SysProcAttr != nil {
 		log.Printf("实例 #%d 记在公共上级名下起不来（%v），改成平常的起法", in.No, err)
 		a.dropAnchor()
 		cmd = mkCmd(false)
-		if err := cmd.Start(); err != nil {
-			return fail("启动内核失败：" + err.Error())
-		}
+		err = cmd.Start()
+	}
+	if err != nil && a.kernelFallback(err) {
+		cmd = mkCmd(false)
+		err = cmd.Start()
+	}
+	if err != nil {
+		return fail("启动内核失败：" + err.Error())
 	}
 	a.mu.Lock()
 	if r.gen != gen { // 就在拉起进程的这一下被叫停了
@@ -698,6 +702,10 @@ func (a *App) Shutdown() {
 			exitNow(1)
 		})
 		defer t.Stop()
+		if os.Getenv("MASKTAB_TEST_HANG_QUIT") != "" { // 实机核对保底用：装作收尾卡住了
+			log.Printf("测试：收尾装作卡住（MASKTAB_TEST_HANG_QUIT），等保底在 %v 后结束进程", shutdownLimit)
+			select {}
+		}
 		a.shutdown()
 	})
 }
@@ -955,18 +963,36 @@ func (a *App) WaitIdle() {
 	}
 }
 
+// kernelFallback：起的是内核的 MaskTab 副本、起不来——以后改用内核原文件。返回有没有换。
+func (a *App) kernelFallback(err error) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.kernelOrig == "" || a.kernelOrig == a.kernelExe {
+		return false
+	}
+	log.Printf("内核的 MaskTab 副本起不来（%v），这次运行改用原文件 %s", err, a.kernelOrig)
+	a.kernelExe = a.kernelOrig
+	return true
+}
+
 // isKernelProcess 判断 pid 是否仍是我们启动的内核进程（防止 pid 被系统复用后误杀别的程序）。
 func isKernelProcess(pid int, profileDir string) bool {
-	return isOurProcess(pid, kernel.ExeName(), profileDir)
+	return isOurProcess(pid, profileDir, kernel.ExeName(), brandKernelExe)
 }
 
 // isOurProcess：Windows 上按可执行文件的名字判断，其他系统按命令行里是否含 marker 判断。
-func isOurProcess(pid int, exeName, marker string) bool {
+func isOurProcess(pid int, marker string, exeNames ...string) bool {
 	if pid <= 0 {
 		return false
 	}
 	if runtime.GOOS == "windows" { // 直接问系统这个进程是哪个文件，不另起 tasklist（会闪黑窗口）
-		return strings.EqualFold(filepath.Base(procs.ExePath(pid)), exeName)
+		base := filepath.Base(procs.ExePath(pid))
+		for _, n := range exeNames {
+			if strings.EqualFold(base, n) {
+				return true
+			}
+		}
+		return false
 	}
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
 	if err != nil { // macOS 没有 /proc

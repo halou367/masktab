@@ -17,15 +17,30 @@ import (
 	"github.com/halou367/masktab/internal/procs"
 )
 
-// 把浏览器内核、代理内核在系统里显示的名字和图标换成 MaskTab 的（决策 UI-30；怎么换见 internal/brand）。
+// 浏览器内核、代理内核在系统里显示成 MaskTab 的（决策 UI-30；怎么改 exe 见 internal/brand）：
+// 任务管理器“进程”页里的名字和图标，“详细信息”页里的文件名。
+//
+// 做法：不动原来的文件，在它旁边做一份副本——
+//
+//	chrome.exe  →  masktab-browser.exe（名字“MaskTab”）       要和 chrome.dll 在一个目录里才跑得起来
+//	mihomo.exe  →  masktab-net.exe（名字“MaskTab 网络组件”）
+//
+// 以后起的是副本。副本做不成（目录写不了、改完试着跑不起来）就照旧用原来的文件，只是名字还是原来的。
 //
 // 小心的地方：
-//   - 改的是副本；副本先试着跑一下（内核：起一个 crashpad-handler 看它站不站得住；代理内核：-v），跑得了才换上去。
-//     内核原来的文件留着，叫 chrome.orig.exe（4 MB），出了事能手动换回去。
-//   - 换过以后在旁边记一笔（masktab-brand.json：这套名字图标的版本 + 文件大小和时间）。对得上就不再碰；
-//     内核升级、文件被换过，大小时间对不上，下次启动重新换。试过不成的也记下来，不每次启动都试。
-//   - 用户自己在设置里指定的内核（kernelPath）不是我们的文件，不动。
+//   - 副本先试着跑一下（内核：起一个 crashpad-handler 看它站不站得住；代理内核：-v），跑得了才用。
+//   - 旁边记一笔（masktab-browser.brand.json：这套名字图标的版本 + 原文件的大小和时间）。对得上就直接用现成的副本；
+//     原文件换过（升级）、名字图标的版本变了，就重做。试过不成的也记下来，不每次启动都试。
+//   - 真起浏览器时副本起不来，当场退回原文件（launch.go）。
+//   - 用户自己在设置里指定的内核（kernelPath）不是我们的目录，不往里写东西。
 //   - 只在 Windows 上做。环境变量 MASKTAB_NO_BRAND=1 可以关掉。
+//
+// 0.1.206、0.1.209 是直接把 chrome.exe 换掉、原文件留作 chrome.orig.exe；这一版起改成副本，顺手把原文件放回去（restoreKernel）。
+
+const (
+	brandKernelExe = "masktab-browser.exe"
+	brandMihomoExe = "masktab-net.exe"
+)
 
 type brandMark struct {
 	V      int    `json:"v"`
@@ -36,16 +51,18 @@ type brandMark struct {
 
 func brandable() bool { return runtime.GOOS == "windows" && os.Getenv("MASKTAB_NO_BRAND") == "" }
 
-// brandKernel 在找到内核、还没宣布“准备好了”的时候叫（setup.go 的 ensureKernel）。
-// 这时可能还有上次留下的内核进程开着这个文件：不要紧，开着的 exe 可以改名，只是上一份 chrome.orig.exe 删不掉时这次就不换。
-func (a *App) brandKernel(exe, override string) {
+// brandKernel 在找到内核、还没宣布“准备好了”的时候叫（setup.go 的 ensureKernel）。返回该起哪个文件。
+func (a *App) brandKernel(exe, override string) string {
 	if !brandable() || a.hosted() || exe == "" || exe == "host" {
-		return
+		return exe
 	}
 	if override != "" && strings.EqualFold(filepath.Clean(override), filepath.Clean(exe)) {
-		return // 用户自己指定的内核不是我们的文件，不动
+		if os.Getenv("MASKTAB_BRAND_ANY") == "" { // 开发时用：自己指定的内核也做副本
+			return exe // 用户自己指定的内核不是我们的目录，不往里写
+		}
+	} else {
+		restoreKernel(exe)
 	}
-	dir := filepath.Dir(exe)
 	probe := func(file string) bool { // 起得来、站得住 = 这个文件是好的
 		tmp, err := os.MkdirTemp("", "masktab-probe")
 		if err != nil {
@@ -69,22 +86,48 @@ func (a *App) brandKernel(exe, override string) {
 		<-exited
 		return ok
 	}
-	did, err := brandFile(exe, filepath.Join(dir, "chrome.mt-new.exe"), filepath.Join(dir, "chrome.orig.exe"), true,
-		map[string]string{"FileDescription": brand.Name, "ProductName": brand.Name}, probe)
+	use, did, err := brandedCopy(exe, brandKernelExe, map[string]string{"FileDescription": brand.Name, "ProductName": brand.Name, "CompanyName": brand.Name,
+		"InternalName": "masktab-browser", "OriginalFilename": brandKernelExe}, probe)
 	switch {
 	case err != nil:
-		log.Printf("内核的名字和图标没换成：%v（不影响使用，任务管理器里还叫 Chromium）", err)
+		log.Printf("内核的 MaskTab 副本没做成：%v（不影响使用，任务管理器里还叫 Chromium）", err)
 	case did:
-		log.Printf("内核的名字和图标已换成 MaskTab 的（%s；原文件留作 chrome.orig.exe）", exe)
+		log.Printf("内核的 MaskTab 副本做好了：%s", use)
 	}
+	return use
 }
 
-// brandMihomo 在代理内核启动前叫。
-func brandMihomo(bin string) {
-	if !brandable() || bin == "" {
+// restoreKernel：0.1.206、0.1.209 把 chrome.exe 直接换掉了、原文件留作 chrome.orig.exe。放回去，那两版留下的记号删掉。
+func restoreKernel(exe string) {
+	dir := filepath.Dir(exe)
+	stem := strings.TrimSuffix(filepath.Base(exe), ".exe")
+	orig, trash := filepath.Join(dir, stem+".orig.exe"), filepath.Join(dir, stem+".replaced.exe")
+	_ = os.Remove(trash) // 上次没删掉的（那时还有进程开着它）
+	_ = os.Remove(filepath.Join(dir, stem+".mt-new.exe"))
+	if _, err := os.Stat(orig); err != nil {
 		return
 	}
-	dir, base := filepath.Dir(bin), strings.TrimSuffix(filepath.Base(bin), ".exe")
+	if err := os.Rename(exe, trash); err != nil {
+		return
+	}
+	if err := os.Rename(orig, exe); err != nil {
+		_ = os.Rename(trash, exe)
+		return
+	}
+	_ = os.Remove(trash)
+	_ = os.Remove(filepath.Join(dir, stem+".masktab-brand.json"))
+	log.Printf("内核原文件放回去了（%s；前两版是直接换掉它，现在改成在旁边做副本）", exe)
+}
+
+// brandMihomo 在代理内核启动前叫。返回该起哪个文件。
+func brandMihomo(bin string) string {
+	if !brandable() || bin == "" {
+		return bin
+	}
+	dir, stem := filepath.Dir(bin), strings.TrimSuffix(filepath.Base(bin), ".exe")
+	for _, f := range []string{stem + ".masktab-brand.json", stem + ".mt-new.exe", stem + ".orig.exe"} { // 前两版留下的
+		_ = os.Remove(filepath.Join(dir, f))
+	}
 	probe := func(file string) bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
@@ -93,44 +136,50 @@ func brandMihomo(bin string) {
 		out, err := cmd.Output()
 		return err == nil && strings.Contains(strings.ToLower(string(out)), "mihomo")
 	}
-	did, err := brandFile(bin, filepath.Join(dir, base+".mt-new.exe"), filepath.Join(dir, base+".orig.exe"), false,
-		map[string]string{"FileDescription": brand.Name + " 网络组件", "ProductName": brand.Name}, probe)
+	use, did, err := brandedCopy(bin, brandMihomoExe, map[string]string{"FileDescription": brand.Name + " 网络组件", "ProductName": brand.Name, "CompanyName": brand.Name,
+		"InternalName": "masktab-net", "OriginalFilename": brandMihomoExe}, probe)
 	switch {
 	case err != nil:
-		log.Printf("代理内核的名字和图标没换成：%v（不影响使用）", err)
+		log.Printf("代理内核的 MaskTab 副本没做成：%v（不影响使用）", err)
 	case did:
-		log.Printf("代理内核的名字和图标已换成 MaskTab 的（%s）", bin)
+		log.Printf("代理内核的 MaskTab 副本做好了：%s", use)
 	}
+	return use
 }
 
-// brandFile 给 exe 换名字和图标。did = 这次真的换了。keepOrig = 原文件留不留。
-func brandFile(exe, tmp, orig string, keepOrig bool, set map[string]string, probe func(string) bool) (did bool, err error) {
-	st, err := os.Stat(exe)
+// brandedCopy 在 src 旁边做一份叫 name 的副本，名字和图标按 set 改。use = 该起哪个文件（副本用不了就是 src）；did = 这次新做的。
+func brandedCopy(src, name string, set map[string]string, probe func(string) bool) (use string, did bool, err error) {
+	st, err := os.Stat(src)
 	if err != nil {
-		return false, err
+		return src, false, err
 	}
-	markPath := filepath.Join(filepath.Dir(exe), strings.TrimSuffix(filepath.Base(exe), ".exe")+".masktab-brand.json")
+	dir, stem := filepath.Dir(src), strings.TrimSuffix(name, ".exe")
+	dst, tmp, old := filepath.Join(dir, name), filepath.Join(dir, stem+".new.exe"), filepath.Join(dir, stem+".old.exe")
+	markPath := filepath.Join(dir, stem+".brand.json")
+	_, dstErr := os.Stat(dst)
 	var m brandMark
 	if b, e := os.ReadFile(markPath); e == nil && json.Unmarshal(b, &m) == nil && m.V == brand.Version && m.Size == st.Size() && m.Mod == st.ModTime().UnixNano() {
-		if m.Failed == "" {
-			friendlyName(exe, set["FileDescription"]) // 系统记着的旧名字每次启动都对一下（便宜；见 muicache_windows.go）
+		if m.Failed != "" {
+			return src, false, nil // 这个文件试过，不成
 		}
-		return false, nil // 换过了，或者这个文件试过不成
+		if dstErr == nil {
+			friendlyName(dst, set["FileDescription"]) // 系统记着的名字每次启动都对一下（便宜；见 muicache_windows.go）
+			return dst, false, nil
+		}
 	}
 	note := func(failed string) {
-		if s, e := os.Stat(exe); e == nil {
-			b, _ := json.Marshal(brandMark{V: brand.Version, Size: s.Size(), Mod: s.ModTime().UnixNano(), Failed: failed})
-			_ = os.WriteFile(markPath, b, 0o644)
-		}
+		b, _ := json.Marshal(brandMark{V: brand.Version, Size: st.Size(), Mod: st.ModTime().UnixNano(), Failed: failed})
+		_ = os.WriteFile(markPath, b, 0o644)
 	}
-	fail := func(e error) (bool, error) {
+	fail := func(e error) (string, bool, error) {
 		_ = os.Remove(tmp)
 		note(e.Error())
-		return false, e
+		return src, false, e
 	}
 	_ = os.Remove(tmp)
-	if err := copyFile(exe, tmp); err != nil {
-		return false, err // 目录写不了之类：不记“试过不成”，下次再试
+	_ = os.Remove(old)
+	if err := copyFile(src, tmp); err != nil {
+		return src, false, err // 目录写不了之类：不记“试过不成”，下次再试
 	}
 	if err := brand.Patch(tmp, brand.ICO(), set); err != nil {
 		return fail(err)
@@ -141,22 +190,25 @@ func brandFile(exe, tmp, orig string, keepOrig bool, set map[string]string, prob
 	if !probe(tmp) {
 		return fail(fmt.Errorf("改过的文件试着跑不起来"))
 	}
-	_ = os.Remove(orig)
-	if err := os.Rename(exe, orig); err != nil {
-		_ = os.Remove(tmp)
-		return false, fmt.Errorf("原文件挪不开（还有进程在用？）：%w", err)
-	}
-	if err := os.Rename(tmp, exe); err != nil {
-		_ = os.Rename(orig, exe)
-		_ = os.Remove(tmp)
-		return false, err
-	}
-	if !keepOrig {
-		_ = os.Remove(orig)
+	if err := os.Rename(tmp, dst); err != nil {
+		// 旧副本还有进程开着（上次留下的）：开着的 exe 删不掉、盖不掉，但可以改名挪开
+		if e := os.Rename(dst, old); e != nil {
+			_ = os.Remove(tmp)
+			if dstErr == nil {
+				return dst, false, nil // 挪不开：这次先用旧副本，下次启动再换
+			}
+			return src, false, err
+		}
+		if e := os.Rename(tmp, dst); e != nil {
+			_ = os.Rename(old, dst)
+			_ = os.Remove(tmp)
+			return src, false, e
+		}
+		_ = os.Remove(old)
 	}
 	note("")
-	friendlyName(exe, set["FileDescription"])
-	return true, nil
+	friendlyName(dst, set["FileDescription"])
+	return dst, true, nil
 }
 
 func copyFile(src, dst string) error {

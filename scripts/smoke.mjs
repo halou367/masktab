@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i < 0 ? d : (process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : true); };
 const BIN = path.resolve(arg('bin', process.platform === 'win32' ? 'masktab.exe' : './masktab'));
@@ -267,6 +267,14 @@ try {
     const us = await api('GET', '/api/usage'), ua = us.instances?.[a.id];
     check(ua && ua.n >= 3 && ua.mem > 50 * 1024 * 1024 && ua.kinds?.main?.n === 1 && ua.kinds?.page?.n >= 1, `运行情况：实例名下数得出进程和内存（${ua?.n} 个进程，${Math.round((ua?.mem || 0) / 1048576)} MB，分类 ${Object.entries(ua?.kinds || {}).map(([k, v]) => k + v.n).join(' ')}）`);
     check(ua?.windows >= 1 && ua.tabs >= 1 && ua.list?.some((t) => t.h), `运行情况：伴随扩展报了窗口和标签页（${ua?.windows} 个窗口，${ua?.tabs} 个标签页）`);
+    if (process.platform === 'win32') {
+      // 内核、代理内核起的是旁边那份 MaskTab 副本（决策 UI-30）：任务管理器“详细信息”里的文件名不再是 chrome.exe、mihomo.exe
+      const kp = (await api('GET', '/api/state')).kernel?.path || '';
+      const names = execSync('tasklist /FO CSV /NH', { encoding: 'utf8' }).split(/\r?\n/).map((l) => (l.split('","')[0] || '').replace(/"/g, '').toLowerCase());
+      const count = (n) => names.filter((x) => x === n).length;
+      check(/masktab-browser\.exe$/i.test(kp) && count('masktab-browser.exe') >= 3 && count('masktab-net.exe') === 1 && count('mihomo.exe') === 0,
+        `进程的文件名是 MaskTab 的：masktab-browser.exe ${count('masktab-browser.exe')} 个，masktab-net.exe ${count('masktab-net.exe')} 个`, JSON.stringify({ kp, chrome: count('chrome.exe'), mihomo: count('mihomo.exe') }));
+    }
     check(us.warm && us.service.n === 1 && us.service.mem > 0 && us.total.n >= ua.n + 1 && us.total.cpu >= 0 && us.total.cpu <= 100, `运行情况：核心服务单算，合计 ${us.total.n} 个进程 ${Math.round(us.total.mem / 1048576)} MB，处理器 ${us.total.cpu.toFixed(1)}%（代理内核 ${us.proxy.n} 个，其它 ${us.other.n} 个）`);
     // 网页每 0.3 秒改一次标题（聊天、行情类网站常这样）：标签页的变化照样报得出去，不会因为“每次都重新计时”永远等下去
     // （evalPage 自己开一个标签页、算完就关：所以让这段脚本在页面里待满 6 秒，这期间来问）

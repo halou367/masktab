@@ -40,6 +40,10 @@ func main() {
 	open := flag.String("open", "", "打开这个实例（实例 id）；MaskTab 没在运行就先启动。任务栏上固定的实例图标用它")
 	splashMode := flag.String("splash", "", "只显示屏幕中间的提示卡，别的什么都不做（update = 在线更新期间；更新时由旧程序拿自己的一份副本来跑）")
 	flag.Parse()
+	if *splashMode == "demo" { // 核对提示卡的样子用
+		splash.RunDemo(7, 1200*time.Millisecond)
+		return
+	}
 	if *splashMode != "" {
 		splash.RunStandalone("正在更新 MaskTab…", 3*time.Minute) // 新程序起来后会把它关掉；万一没人关，三分钟后自己走
 		return

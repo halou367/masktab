@@ -113,13 +113,13 @@ func (a *App) ensureCore() {
 	}
 	pidFile := a.p("core", "mihomo.pid")
 	if b, err := os.ReadFile(pidFile); err == nil { // 上次异常退出遗留的 mihomo
-		if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); isOurProcess(pid, kernel.MihomoName(), a.p("core")) {
+		if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); isOurProcess(pid, a.p("core"), kernel.MihomoName(), brandMihomoExe) {
 			log.Printf("清理上次遗留的 mihomo 进程 %d", pid)
 			terminate(pid, true)
 		}
 	}
 	if !a.hosted() {
-		brandMihomo(bin) // 任务管理器里显示成“MaskTab 网络组件”，带 MaskTab 的图标（brandexe.go）
+		bin = brandMihomo(bin) // 起的是旁边那份 masktab-net.exe：任务管理器里是“MaskTab 网络组件”，带 MaskTab 的图标（brandexe.go）
 	}
 	c := &proxy.Core{Bin: bin, Dir: a.p("core"), Port: freePort(), Secret: randToken(16)}
 	c.OnRestart = func() {
@@ -186,12 +186,13 @@ func (a *App) ensureKernel(onDownload func()) error {
 			return errors.New(a.setup.Error)
 		}
 	}
-	// 名字和图标换成 MaskTab 的（brandexe.go）。要在宣布“内核准备好了”之前做完：换的那一下 chrome.exe 有一瞬间不在原位，
-	// 这时候有人去起内核会扑空（CI 44304925442 上冒烟测试就是紧跟着“准备好了”去起内核，撞上了）。
-	a.brandKernel(exe, override)
+	// 在旁边做一份名字、图标、文件名都是 MaskTab 的副本，以后起的是它（brandexe.go）。要在宣布“内核准备好了”之前做完：
+	// 做副本要试着跑一下，要一秒钟。
+	orig := exe
+	exe = a.brandKernel(exe, override)
 	a.mu.Lock()
 	first := a.kernelExe == ""
-	a.kernelExe = exe
+	a.kernelExe, a.kernelOrig = exe, orig
 	a.clearRefusedLocked()
 	a.setup.Stage, a.setup.Error, a.setup.Done, a.setup.Total, a.setup.Source = "ready", "", 0, 0, ""
 	a.bumpLocked("setup", "")

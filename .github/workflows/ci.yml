@@ -32,6 +32,10 @@ on:
         description: '跑完全套后发布到 Releases（只在 main 上有效）。不勾 = 只跑全套检查'
         type: boolean
         default: true
+      winrunner:
+        description: 'Windows 那一路用哪种机器（默认 windows-latest；填 windows-2022 = Windows 10 那一代的系统，核对老系统用，不发布）'
+        type: string
+        default: windows-latest
 
 permissions:
   contents: write # 发布安装程序到 Releases
@@ -79,7 +83,7 @@ jobs:
   windows:
     name: 安装程序与冒烟测试（Windows，有界面）
     if: github.event_name == 'workflow_dispatch'
-    runs-on: windows-latest
+    runs-on: ${{ inputs.winrunner || 'windows-latest' }}
     timeout-minutes: 45
     env:
       VER: 0.1.${{ github.run_number }}
@@ -265,6 +269,7 @@ jobs:
           Start-Process -Wait -FilePath C:\mt\uninstall.exe -ArgumentList '/S', '_?=C:\mt'
           Need (-not (Test-Path C:\mt\masktab.exe)) '卸载删除了程序'
           Need (-not (Test-Path C:\mt\kernel)) '卸载删除了内核'
+          Need (-not (Test-Path C:\mt\masktab-net.exe)) '卸载删除了代理内核的 MaskTab 副本'
           Need (Test-Path C:\mt\data\config\instances.json) '卸载保留了数据'
       - name: 收集测试结果
         if: always()

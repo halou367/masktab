@@ -20,6 +20,7 @@ import (
 	"github.com/halou367/masktab/internal/kernel"
 	"github.com/halou367/masktab/internal/netx"
 	"github.com/halou367/masktab/internal/proxy"
+	"github.com/halou367/masktab/internal/splash"
 	"github.com/halou367/masktab/internal/update"
 )
 
@@ -431,8 +432,11 @@ func (a *App) UpdateInstall() error {
 	// 更新完重新打开时，把现在开着的实例都开回来（不管“启动时恢复”设置开没开）
 	mark := a.p("state", "restore-once")
 	_ = os.WriteFile(mark, []byte("update\n"), 0o600)
+	// 提示卡马上出来（自己这张）；副本那张要复制十几 MB，晚一两秒才出来，出来后盖在同一个位置上，一直留到新程序接手
+	splash.Show("正在更新 MaskTab…")
 	if err := startInstaller(file, a.ExeDir); err != nil {
 		_ = os.Remove(mark)
+		splash.Close()
 		return fmt.Errorf("安装程序没能启动：%w", err)
 	}
 	a.updateSplash()

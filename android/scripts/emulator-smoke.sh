@@ -48,6 +48,10 @@ A shell am force-stop com.google.android.apps.nexuslauncher || true
 A shell input keyevent KEYCODE_WAKEUP
 A shell wm dismiss-keyguard || true
 
+# 0. 系统“应用信息”页：看一眼启动图标在系统里画出来的样子（图标是矢量图，造型和电脑版同一个，decisions UI-30）
+A shell am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:$PKG > /dev/null || true
+sleep 6; shot 0-app-info-icon || true
+
 # 1. 启动进度（mt_hold：启动完成后启动页先不收起，便于截到每一步的结果）
 T=90 A shell am start -W -n $ACT --ez mt_hold true
 sleep 4; shot 1-startup-progress

@@ -13,3 +13,4 @@ func Close()                                         {}
 func CloseSetup() bool                               { return false }
 func SetupShowing() bool                             { return false }
 func RunStandalone(text string, limit time.Duration) {}
+func RunDemo(total int, step time.Duration)          {}
