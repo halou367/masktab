@@ -475,6 +475,10 @@ html.pc .mi { min-height: 44px; gap: 14px; }
 .mdiv { display: none; }
 .amenu .lbl { padding: 16px calc(var(--gut) + 14px) 8px; font-size: 13px; font-weight: 500; gap: 4px; }
 .amenu .lbl .tools { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; color: var(--on2); }
+/* 标题不折行；图标到了五个（多了“翻译”，决策 UI-27）一行放不下，“新建实例”只留加号（悬停有字）。2026-11-18 在 Windows 上看到标题折成两行、按钮顶到右边 */
+.amenu .lbl > span:first-child { white-space: nowrap; flex: none; }
+html.pc .amenu .lbl .tools:has(> .ib:nth-of-type(5)) .btn.sm .bt { display: none; }
+html.pc .amenu .lbl .tools:has(> .ib:nth-of-type(5)) .btn.sm { padding: 0 8px; }
 .ib.sm, html.pc .ib.sm { width: 32px; height: 32px; }
 .btn.sm { height: 32px; padding: 0 12px 0 8px; font-size: 13px; gap: 4px; margin-left: 6px; }
 .qs { margin: 0 var(--gut) 6px; }
