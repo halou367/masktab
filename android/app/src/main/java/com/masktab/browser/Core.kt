@@ -33,6 +33,8 @@ class Tab(val inst: String, val session: GeckoSession) {
     var pageColor: Int? = null
     /** 标签页切换器里的缩略图（切换器打开时截的，只留在内存里）。 */
     var thumb: android.graphics.Bitmap? = null
+    /** 开这个标签页之前显示的是哪个标签页（这个标签页如果只是为了下载一个文件而开的，下载一开始就切回去，见 Core 的 onExternalResponse）。 */
+    var opener: Tab? = null
 }
 
 /**
@@ -85,6 +87,10 @@ interface CoreUi {
     fun closeSheet()
     fun showPopup(session: GeckoSession)
     fun toast(msg: String)
+    /** 网页上长按链接 / 图片 / 视频。 */
+    fun contextMenu(t: Tab, e: GeckoSession.ContentDelegate.ContextElement) {}
+    /** 一个下载开始了，或者结束了（看 it.state）。 */
+    fun onDownload(it: Downloads.Item) {}
     /** 页面（内置页面 / 新标签页）报上来：盖了一层遮罩（dim）、底部有表单（sheet），状态栏和导航栏跟着变色（决策 UI-4）。 */
     fun pageBars(src: String, dim: Boolean, sheet: Boolean) {}
     /** 一个标签页加载完了（下拉刷新收起指示器用）。 */
@@ -116,6 +122,7 @@ object Core {
         CoreProc.init(app)
         Host.init(app)
         Host.onChange = { old -> onState(old) }
+        bg { Uploads.sweep(app) }
         CoreProc.onDied = { coreDied() }
     }
 
@@ -211,6 +218,7 @@ object Core {
     fun openTab(instId: String, url: String? = null, activate: Boolean = true, raw: Boolean = false): Tab? {
         val i = Host.get(instId) ?: return null
         val t = Tab(i.id, newSession(i))
+        t.opener = active[i.id]
         attach(t)
         tabsOf(i.id).add(t)
         t.session.loadUri(if (raw && url != null) url else bootUrl(i.id, url))
@@ -221,9 +229,10 @@ object Core {
     }
 
     /** onNewSession（网页 window.open / target=_blank）：同一实例里开新标签，保留 opener 关系。 */
-    private fun popupTab(instId: String): GeckoSession? {
+    private fun popupTab(instId: String, opener: Tab? = null): GeckoSession? {
         val i = Host.get(instId) ?: return null
         val t = Tab(i.id, newSession(i))
+        t.opener = opener
         // 不在这里 open：GeckoView 要求 onNewSession 返回未打开的会话，由它来打开
         t.session.navigationDelegate = Nav(t)
         t.session.progressDelegate = Progress(t)
@@ -302,6 +311,7 @@ object Core {
     /** 删除实例之前：关会话、清容器数据。实例本身（连同它的账号密码）由核心服务删，删完状态里没有它了，[onState] 会换到别的实例。 */
     fun dropInst(id: String) {
         closeAll(id)
+        Downloads.dropInst(id)
         runtime?.storageController?.clearDataForSessionContext("mt-$id")
         ui?.onTabsChanged()
         saveTabs()
@@ -545,7 +555,7 @@ object Core {
         }
         override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) { t.canBack = canGoBack }
         override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) { t.canFwd = canGoForward }
-        override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? = popupTab(t.inst)?.let { GeckoResult.fromValue(it) }
+        override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? = popupTab(t.inst, t)?.let { GeckoResult.fromValue(it) }
         override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
             if (Addons.isXpi(request.uri)) { Addons.install(request.uri); return GeckoResult.deny() }
             return null
@@ -575,11 +585,25 @@ object Core {
         override fun onCloseRequest(session: GeckoSession) { closeTab(t) }
         override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
             val type = response.headers.entries.firstOrNull { it.key.equals("content-type", true) }?.value ?: ""
-            if (type.contains("x-xpinstall")) Addons.install(response.uri) else ui?.toast("暂不支持下载文件")
+            if (type.contains("x-xpinstall")) { Addons.install(response.uri); return }
+            // 下载（决策 A-14）：内容是内核在这个实例的线路上取回来的，交给 Downloads 存进系统的下载文件夹。
+            // 这个标签页如果只是为了这次下载开的（新窗口打开的下载链接、从外面点进来的下载地址），它会一直是空白的：
+            // 先切回原来那个标签页，等下完了再把它关掉（下载途中关会话怕把内核那头的连接一起掐掉，所以等下完）。
+            val spare = spareTab(t)
+            if (spare && active[t.inst] === t) t.opener?.takeIf { it !== t && tabsOf(t.inst).contains(it) }?.let { selectTab(it) }
+            Downloads.fromResponse(t.inst, response, if (spare) t.opener?.url ?: "" else t.url) {
+                if (spare && spareTab(t) && tabsOf(t.inst).contains(t)) { closeTab(t); logi("下载用的空标签页已关掉") }
+            }
+        }
+        override fun onContextMenu(session: GeckoSession, screenX: Int, screenY: Int, element: GeckoSession.ContentDelegate.ContextElement) {
+            if (t.url.startsWith("http")) ui?.contextMenu(t, element)
         }
         override fun onCrash(session: GeckoSession) { ui?.toast("页面崩溃了，已重新加载"); session.close(); attachAgain(t) }
         override fun onKill(session: GeckoSession) { attachAgain(t) }
     }
+
+    /** 这个标签页里什么网页都没有：刚开出来还是空的，或者停在引导页上等着跳转（跳过去的是个下载，所以永远不会变成网页）。 */
+    private fun spareTab(t: Tab) = t.url.isEmpty() || t.url == "about:blank" || (isInternal(t.url) && t.url.contains("&go="))
 
     private fun attachAgain(t: Tab) {
         val url = t.url
@@ -608,6 +632,12 @@ object PromptBridge : GeckoSession.PromptDelegate {
     override fun onButtonPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.ButtonPrompt) = Core.ui?.prompts?.button(prompt)
     override fun onTextPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.TextPrompt) = Core.ui?.prompts?.text(prompt)
     override fun onChoicePrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.ChoicePrompt) = Core.ui?.prompts?.choice(prompt)
+    override fun onFilePrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.FilePrompt) = Core.ui?.prompts?.file(prompt)
+    override fun onAuthPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.AuthPrompt) = Core.ui?.prompts?.auth(prompt)
+    override fun onDateTimePrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.DateTimePrompt) = Core.ui?.prompts?.dateTime(prompt)
+    override fun onColorPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.ColorPrompt) = Core.ui?.prompts?.color(prompt)
+    override fun onSharePrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.SharePrompt) = Core.ui?.prompts?.share(prompt)
+    override fun onRepostConfirmPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.RepostConfirmPrompt) = Core.ui?.prompts?.repost(prompt)
     override fun onBeforeUnloadPrompt(session: GeckoSession, prompt: GeckoSession.PromptDelegate.BeforeUnloadPrompt) =
         GeckoResult.fromValue(prompt.confirm(AllowOrDeny.ALLOW))
 }

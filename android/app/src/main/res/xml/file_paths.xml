@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 能交出去的目录：只有下载目录（安卓 8、9 上下载的文件存在这里，见 Downloads.kt） -->
+<paths>
+    <external-files-path name="dl" path="Download/" />
+    <files-path name="dl-int" path="Download/" />
+</paths>

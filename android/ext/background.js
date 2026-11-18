@@ -45,7 +45,7 @@ function connect() {
   try {
     const port = browser.runtime.connectNative(NATIVE);
     // rec-start：头像菜单（app 原生画的）里的“录入登录”；tr-start：三点菜单里的“翻译此页”（决策 UI-27）
-    port.onMessage.addListener((msg) => { if (msg?.t === 'state') applyState(msg); else if (msg?.t === 'rec-start') recStart(String(msg.inst || '')); else if (msg?.t === 'tr-start') trStart(String(msg.inst || '')); });
+    port.onMessage.addListener((msg) => { if (msg?.t === 'state') applyState(msg); else if (msg?.t === 'rec-start') recStart(String(msg.inst || '')); else if (msg?.t === 'tr-start') trStart(String(msg.inst || '')); else if (msg?.t === 'dl-cookies') dlCookies(msg); });
     port.onDisconnect.addListener(() => setTimeout(connect, 2000));
   } catch (e) { console.warn('connectNative 失败', e); setTimeout(connect, 2000); }
 }
@@ -250,6 +250,20 @@ function recStart(inst) {
   recWant.set(inst, Date.now());
   if (tab == null) return Promise.resolve({ ok: true, later: true });
   return browser.tabs.sendMessage(tab, { t: 'mt:rec-start' }).then(() => { recWant.delete(inst); return { ok: true }; }, () => ({ ok: true, later: true }));
+}
+
+// ---------- 下载要带的 Cookie（决策 A-14） ----------
+// 长按“下载链接 / 保存图片”是 app 自己去取的（内核没有“把这个地址下载下来”的接口），走的是这个实例的线路；
+// 它还要带上这个实例访问那个网址时会带的 Cookie，登录后才看得到的图片、文件才下得下来。app 来问，这里按实例的容器查了回话。
+// 只给不分区的那些（和在地址栏里直接打开这个网址时带的一样）。
+async function dlCookies(m) {
+  let cookie = '';
+  try {
+    await ready;
+    const all = await browser.cookies.getAll({ url: String(m.url || ''), storeId: csOf(String(m.inst || '')) });
+    cookie = all.map((c) => `${c.name}=${c.value}`).join('; ');
+  } catch (e) { console.warn('MaskTab 取下载用的 Cookie 失败', e?.message || e); }
+  native('POST', '/ui/dl-cookies', { n: m.n, cookie }).catch(() => {});
 }
 
 // ---------- Cookie 汇总 ----------

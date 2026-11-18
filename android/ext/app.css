@@ -10,3 +10,15 @@ body.pg-idle { background: var(--bg); }
 .oops > .ic { color: var(--bad); } .oops b { font-size: 18px; font-weight: 400; } .oops .sub { line-height: 1.6; word-break: break-word; max-width: 420px; }
 .oops .row { margin-top: 8px; gap: 10px; justify-content: center; min-height: 0; width: auto; padding: 0; }
 .amenu { padding-top: 8px; }
+/* 下载内容（决策 A-14）：一行一个文件，点一下打开，右边是分享 / 删除；正在下的下面有一条进度 */
+.dlrow { display: flex; align-items: center; padding-right: 6px; }
+.dlrow .nrow { flex: 1; min-width: 0; border-radius: 0; padding: 8px 4px 8px 16px; }
+.dlrow .nrow:disabled { opacity: 1; cursor: default; }
+.dlrow .lic { display: flex; flex: none; width: 28px; justify-content: center; color: var(--on2); }
+.dlrow .t2 { font-size: 12.5px; color: var(--on2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlrow.bad .lic, .dlrow.bad .t2 { color: var(--bad); }
+.dlrow .ib { flex: none; }
+.dlbar { height: 3px; border-radius: 2px; background: var(--div); margin-top: 7px; overflow: hidden; }
+.dlbar i { display: block; height: 100%; background: var(--acc); border-radius: 2px; transition: width .4s; }
+.dlbar.any i { animation: dlany 1.1s ease-in-out infinite alternate; }
+@keyframes dlany { from { margin-left: 0; } to { margin-left: 70%; } }

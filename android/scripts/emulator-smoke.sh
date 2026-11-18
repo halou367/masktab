@@ -134,7 +134,9 @@ tap_desc() {
   # shellcheck disable=SC2046
   set -- $(echo "$b" | grep -o '[0-9]\+')
   echo "点“$UI_LABEL”：($(( ($1 + $3) / 2 )),$(( ($2 + $4) / 2 - off )))（WebView 顶边 ${wt:-?}，$OFFMODE）"
-  A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 - off ))
+  # HOLD=<毫秒>：长按（原地“滑动”这么久）
+  if [ -n "${HOLD:-}" ]; then A shell input swipe $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 - off )) $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 - off )) "$HOLD"
+  else A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 - off )); fi
 }
 # 原生控件（工具栏、头像菜单、三点菜单）：坐标就是实际位置
 tap_native() { local s=$OFFMODE r; OFFMODE=none; tap_desc "$1"; r=$?; OFFMODE=$s; return $r; }
@@ -531,6 +533,169 @@ update_phase() {
 }
 update_phase || fail=1
 A shell setprop debug.masktab.update '""' || true
+
+# ---------- 下载、长按保存、选择文件、日期（决策 A-14）：在模拟器上真的下、真的存、真的点 ----------
+# 测试网站是 android/scripts/dl-server.py，跑在这台机器上；网址用这台机器的局域网地址（不用 10.0.2.2），
+# 这样经实例 #1（走测试节点）访问时，节点服务端的日志里会留下一条“→ 这台机器:18081”，据此确认下载走的是实例的线路。
+download_phase() {
+  local W=/tmp/mt-node D=/tmp/mt-node/dl HOSTIP B R k n0 c0 sum got sz L="$OUT/logcat-live.txt"
+  HOSTIP=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [ -n "$HOSTIP" ] || { echo "失败：下载：取不到这台机器的地址"; return 1; }
+  B="http://$HOSTIP:18081"; R=$D/requests.log
+  setsid nohup python3 "$(dirname "$0")/dl-server.py" 18081 $D > $W/dl-server.log 2>&1 < /dev/null & BGPIDS+=($!)
+  sleep 2
+  curl -fs -m 5 -o /dev/null "$B/dl/page.html" || { echo "失败：下载：测试网站没起来"; cat $W/dl-server.log; return 1; }
+  : > $R
+  # 等 logcat 里某一行比原来多：dlwait <文字> <最多几秒> <原来几条>
+  dlwait() { local k; for k in $(seq 1 "$2"); do [ "$(count "$1")" -gt "$3" ] && return 0; sleep 1; done; return 1; }
+  devsum() { A shell "sha256sum '/sdcard/Download/$1'" 2>/dev/null | awk '{print $1}'; }
+  nodehits() { grep -c "$HOSTIP:18081" $W/server.log; }
+  # 网页里的控件：先按无障碍标签找；找不到就按测试页定死的版面算（纵坐标 = 网页区域顶边 + CSS 像素 × 屏幕密度）
+  local DPR; DPR=$(A shell wm density | grep -o '[0-9]\+' | tail -1); DPR=${DPR:-420}
+  tap_page() { # tap_page <标签> <控件中心的 CSS 纵坐标>
+    tap_desc "$1" && return 0
+    local wt y; wt=$(grep -o '<node[^>]*class="android.webkit.WebView"[^>]*>' "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]' | grep -o '[0-9]*\]$' | tr -d ']')
+    [ "$OFFMODE" = half ] && wt=$(( ${wt:-256} / 2 )); y=$(( ${wt:-128} + $2 * DPR / 160 ))
+    echo "说明：无障碍信息里没找到“$1”，按版面位置点 (540,$y)"
+    if [ -n "${HOLD:-}" ]; then A shell input swipe 540 $y 540 $y "$HOLD"; else A shell input tap 540 $y; fi
+  }
+  tap_id() { # 按 resource-id 点系统界面上的控件
+    local b; A shell uiautomator dump /sdcard/mt-ui.xml > /dev/null 2>&1; A shell cat /sdcard/mt-ui.xml > "$OUT/ui-dump.xml" 2>/dev/null
+    b=$(grep -o "<node[^>]*resource-id=\"$1\"[^>]*>" "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1)
+    [ -n "$b" ] || return 1
+    # shellcheck disable=SC2046
+    set -- $(echo "$b" | grep -o '[0-9]\+'); A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
+  }
+  A shell "am start -n $ACT --es mt_inst p1" > /dev/null; sleep 10; closepanel
+
+  # 1. 下载一个文件（从外面打开一个下载地址，和在网页里点下载链接走的是内核的同一个回调）：
+  #    文件名取自响应头（中文、带空格），存进系统的下载文件夹，内容一个字节不差；走的是实例 #1 的节点；为它开的空标签页下完就关
+  n0=$(count "下载完成 测试 报告.bin"); c0=$(nodehits)
+  A shell am start -a android.intent.action.VIEW -d "$B/dl/file" -n $ACT > /dev/null
+  # 第一次下载时 app 会问一次通知权限（安卓 13 起）：截图，点“允许”
+  sleep 3; shot 26-notify-ask
+  if tap_id "com.android.permissioncontroller:id/permission_allow_button"; then echo "通过：第一次下载时问了通知权限（已点允许）"; sleep 2
+  else echo "失败：第一次下载时没有问通知权限"; fail=1; A shell pm grant $PKG android.permission.POST_NOTIFICATIONS; fi
+  dlwait "下载完成 测试 报告.bin" 45 "$n0"; shot 26-download-done
+  sum=$(sha256sum $D/file.bin | awk '{print $1}'); got=$(devsum "测试 报告.bin")
+  if [ -n "$got" ] && [ "$got" = "$sum" ]; then echo "通过：下载：3 MB 的文件存进了系统下载文件夹，名字是响应头里的“测试 报告.bin”，内容一个字节不差"
+  else echo "失败：下载：文件没存对（手机上的校验和 ${got:-没有这个文件}，应为 $sum）"; fail=1; A shell ls -la /sdcard/Download 2>&1 | head -12; grep "MaskTab.*下载" "$L" | tail -6 | cut -c1-260; fi
+  if [ "$(nodehits)" -gt "$c0" ]; then echo "通过：下载：请求是经实例 #1 的节点出去的（节点服务端日志里有这条连接）"; else echo "失败：下载：节点服务端日志里没有这次下载的连接（没走实例的线路？）"; fail=1; fi
+  sleep 2
+  if [ "$(count "下载用的空标签页已关掉")" -ge 1 ]; then echo "通过：下载：为这次下载开的空标签页下完就关掉了"; else echo "失败：下载：为下载开的空标签页没有关"; fail=1; fi
+
+  # 2. 测试页（种下 Cookie；图片要带 Cookie 才给）→ 长按图片 → 保存图片
+  n0=$(count "MTDL page ok")
+  A shell am start -a android.intent.action.VIEW -d "$B/dl/page.html" -n $ACT > /dev/null
+  if ! dlwait "MTDL page ok" 40 "$n0"; then echo "失败：下载：测试页没有打开（图片没出来）"; shot 27-download-page; fail=1; return 0; fi
+  sleep 3; shot 27-download-page
+  n0=$(count "长按菜单已打开")
+  HOLD=1300 tap_page "测试图片" 110
+  dlwait "长按菜单已打开" 8 "$n0"; sleep 1; shot 28-longpress-menu
+  if [ "$(count "长按菜单已打开")" -gt "$n0" ]; then echo "通过：长按图片弹出菜单（$(grep "长按菜单已打开" "$L" | tail -1 | sed 's/.*长按菜单已打开 //' | tr -d '\r')）"
+  else echo "失败：长按图片没有弹出菜单"; fail=1; fi
+  n0=$(count "下载完成 pic"); c0=$(nodehits)
+  if tap_native "保存图片"; then
+    dlwait "下载完成 pic" 30 "$n0"; shot 29-image-saved
+    sum=$(sha256sum $D/pic.png | awk '{print $1}'); got=$(devsum "pic.png")
+    if [ -n "$got" ] && [ "$got" = "$sum" ]; then echo "通过：长按 → 保存图片：图片存进了下载文件夹，内容一致"; else echo "失败：长按 → 保存图片：没存对（${got:-没有这个文件}）"; fail=1; grep "MaskTab.*下载" "$L" | tail -4 | cut -c1-260; fi
+    if [ "$(nodehits)" -gt "$c0" ]; then echo "通过：保存图片：app 自己取的这一次也是经实例 #1 的节点出去的"; else echo "失败：保存图片：节点服务端日志里没有这次连接"; fail=1; fi
+    # app 自己取的那一次（Accept-Encoding: identity）：带着这个实例的 Cookie、来源页，UA 和网页自己取图时一样
+    python3 - "$R" "$B" <<'P' || fail=1
+import json, sys
+rows = [json.loads(x) for x in open(sys.argv[1]) if x.strip()]
+pic = [r for r in rows if r['p'].startswith('/dl/pic.png')]
+web = [r for r in pic if r['ae'] != 'identity' and r['st'] == 200]
+app = [r for r in pic if r['ae'] == 'identity']
+ok = bool(app) and bool(web) and app[-1]['st'] == 200 and 'mt=1' in app[-1]['cookie'] and app[-1]['ref'] == sys.argv[2] + '/dl/page.html' and app[-1]['ua'] == web[-1]['ua']
+print(('通过' if ok else '失败') + '：保存图片：app 取图时带了这个实例的 Cookie 和来源页，UA 和网页一样' + ('' if ok else ' ' + json.dumps({'app': app[-1:], 'web': web[-1:]}, ensure_ascii=False)[:600]))
+sys.exit(0 if ok else 1)
+P
+  else echo "失败：长按菜单里没找到“保存图片”"; fail=1; A shell input keyevent KEYCODE_BACK; fi
+
+  # 2b. 在网页里点下载链接（最常见的情形）：文件下下来，网页留在原地不变
+  sleep 6; n0=$(count "下载完成 测试 报告"); c0=$(count "下载用的空标签页已关掉")
+  tap_page "下载测试文件" 275
+  dlwait "下载完成 测试 报告" 30 "$n0"; sleep 1; shot 29-link-download
+  if [ "$(count "下载完成 测试 报告")" -gt "$n0" ]; then echo "通过：在网页里点下载链接：下下来了（$(grep "下载完成 测试 报告" "$L" | tail -1 | sed 's/.*下载完成 //' | cut -c1-60 | tr -d '\r')）"; else echo "失败：在网页里点下载链接：没有下载"; fail=1; grep "MaskTab.*下载" "$L" | tail -4 | cut -c1-260; fi
+  if [ "$(count "下载用的空标签页已关掉")" = "$c0" ]; then echo "通过：在网页里点下载链接：原来的网页没有被关掉"; else echo "失败：在网页里点下载链接：把正在看的网页关掉了"; fail=1; fi
+
+  # 3. 三点菜单 → 下载内容：列表里有刚才两个文件；点图片那一条用别的应用打开
+  sleep 6; closepanel; n0=$(ready downloads)
+  if tap_native "更多选项"; then sleep 2; shot 30-appmenu
+    tap_native "下载内容" || { echo "失败：三点菜单里没找到“下载内容”"; fail=1; A shell input keyevent KEYCODE_BACK; }
+  fi
+  for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready downloads)" -gt "$n0" ] && break; done
+  sleep 2; shot 31-downloads-page
+  if [ "$(ready downloads)" -gt "$n0" ]; then echo "通过：三点菜单 → 下载内容"; else echo "失败：三点菜单 → 下载内容：页面没有就绪"; fail=1; fi
+  n0=$(count "打开下载的文件 pic")
+  if tap_desc "打开 pic"; then sleep 5; shot 32-open-file
+    if [ "$(count "打开下载的文件 pic")" -gt "$n0" ]; then echo "通过：下载内容：点一条，交给别的应用打开了"
+    elif grep -q "没有能打开这种文件的应用 pic" "$L"; then echo "说明：下载内容：模拟器里没有能打开图片的应用，“打开”没法验证"
+    else echo "失败：下载内容：点了一条，没有交给别的应用"; fail=1; fi
+    A shell am start -n $ACT > /dev/null; sleep 3
+  else echo "失败：下载内容页里没找到 pic.png 那一条"; fail=1; fi
+
+  # 4. 慢的下载（4 MB，16 秒）：列表里看得到进度；下载途中有前台服务和通知栏进度；下完服务停掉
+  closepanel; n0=$(count "下载完成 slow.bin")
+  A shell am start -a android.intent.action.VIEW -d "$B/dl/slow" -n $ACT > /dev/null
+  sleep 6; A shell am start -n $ACT --es mt_open downloads > /dev/null; sleep 4; shot 33-downloading
+  A shell dumpsys activity services $PKG > "$OUT/dl-services.txt" 2>&1
+  A shell dumpsys notification --noredact > "$OUT/dl-notification.txt" 2>&1
+  if grep -q "DownloadService" "$OUT/dl-services.txt" && grep -q "isForeground=true" "$OUT/dl-services.txt"; then echo "通过：下载途中前台服务开着（切到别的应用也不会被系统收走）"; else echo "失败：下载途中前台服务没开"; fail=1; grep "下载保活" "$L" | tail -3 | cut -c1-240; fi
+  if grep -q "正在下载" "$OUT/dl-notification.txt"; then echo "通过：通知栏里有下载进度"; else echo "失败：通知栏里没有下载进度"; fail=1; fi
+  A shell cmd statusbar expand-notifications; sleep 2; shot 34-notification; A shell cmd statusbar collapse; sleep 1
+  dlwait "下载完成 slow.bin" 45 "$n0"; sleep 2; shot 35-slow-done
+  sz=$(A shell "stat -c %s /sdcard/Download/slow.bin" 2>/dev/null | tr -d '\r')
+  if [ "$sz" = "4194304" ]; then echo "通过：慢的下载下完了，大小对（4194304）"; else echo "失败：慢的下载没下完（大小 ${sz:-没有文件}）"; fail=1; fi
+  sleep 3; A shell dumpsys activity services $PKG > "$OUT/dl-services-after.txt" 2>&1
+  if grep -q "DownloadService" "$OUT/dl-services-after.txt"; then echo "失败：下完以后前台服务还开着"; fail=1; else echo "通过：下完以后前台服务停了"; fi
+
+  # 5. 取消：再下一次，下到一半在列表里点“取消下载”，存了一半的文件要删掉
+  closepanel; n0=$(count "下载没成 slow")
+  A shell am start -a android.intent.action.VIEW -d "$B/dl/slow" -n $ACT > /dev/null
+  sleep 5; A shell am start -n $ACT --es mt_open downloads > /dev/null; sleep 4
+  if tap_desc "取消下载"; then dlwait "下载没成 slow" 10 "$n0"; sleep 2; shot 36-cancelled
+    k=$(A shell "ls -a /sdcard/Download" 2>/dev/null | grep -c "slow")
+    if [ "$(count "下载没成 slow")" -gt "$n0" ] && [ "$k" = "1" ]; then echo "通过：取消下载：停了，存了一半的文件删掉了"; else echo "失败：取消下载（日志 $n0 → $(count "下载没成 slow")，下载文件夹里 slow 开头的文件 $k 个，应为 1）"; fail=1; fi
+  else echo "失败：下载内容页里没找到“取消下载”"; shot 36-cancelled; fail=1; fi
+  sleep 3; closepanel; sleep 1
+
+  # 6. 网页的“选择文件”：点上传按钮 → 系统的文件选择界面 → 选刚下的 pic.png → 网页拿到文件名和大小
+  n0=$(count "MTDL upload"); sz=$(stat -c %s $D/pic.png)
+  if tap_page "上传测试" 385; then sleep 5; shot 37-file-picker
+    if [ "$(count "选择文件 类型")" -ge 1 ]; then echo "通过：点网页的上传按钮，开出了系统的文件选择界面"; else echo "失败：点网页的上传按钮没有反应"; fail=1; fi
+    tap_native "pic.png" || { tap_native "Show roots" && sleep 2 && tap_native "Downloads" && sleep 3 && tap_native "pic.png"; } || { echo "说明：文件选择界面里没找到 pic.png"; cp "$OUT/ui-dump.xml" "$OUT/ui-picker.xml" 2>/dev/null; }
+    dlwait "MTDL upload pic.png $sz" 15 "$n0"; shot 38-file-picked
+    if [ "$(count "MTDL upload pic.png $sz")" -ge 1 ]; then echo "通过：选的文件交给了网页（文件名、大小都对）"
+    else echo "失败：选的文件没有交给网页"; fail=1; grep "MTDL upload\|选了 \|选的文件" "$L" | tail -3 | cut -c1-200
+      # 还停在系统的文件选择界面上：退回来
+      A shell dumpsys window 2>/dev/null | grep -q "mCurrentFocus.*$PKG" || { A shell input keyevent KEYCODE_BACK; sleep 2; A shell am start -n $ACT > /dev/null; sleep 2; }
+    fi
+  else echo "失败：测试页上没找到上传按钮"; shot 37-file-picker; fail=1; fi
+
+  # 7. 日期输入框：点一下弹出系统的日期选择，确定后网页拿到日期
+  n0=$(count "MTDL date 20")
+  if tap_page "生日测试" 495; then sleep 3; shot 39-date-picker
+    tap_native "OK" || tap_native "确定" || tap_native "Set" || true
+    dlwait "MTDL date 20" 8 "$n0"; shot 40-date-set
+    if [ "$(count "MTDL date 20")" -gt "$n0" ]; then echo "通过：日期输入框：弹出系统的日期选择，选的日期交给了网页"; else echo "失败：日期输入框：网页没拿到日期"; fail=1; A shell input keyevent KEYCODE_BACK; fi
+  else echo "失败：测试页上没找到日期输入框"; fail=1; fi
+
+  # 8. 三点菜单顶排的“下载此页”：把当前网址的内容存下来（这里是测试页的 HTML）
+  n0=$(count "下载完成 page")
+  if tap_native "更多选项"; then sleep 2
+    if tap_native "下载此页"; then dlwait "下载完成 page" 20 "$n0"; shot 41-save-page
+      if [ "$(count "下载完成 page")" -gt "$n0" ]; then echo "通过：三点菜单 → 下载此页"; else echo "失败：三点菜单 → 下载此页：没下成"; fail=1; grep "MaskTab.*下载" "$L" | tail -3 | cut -c1-240; fi
+    else echo "失败：三点菜单里没找到“下载此页”"; fail=1; A shell input keyevent KEYCODE_BACK; fi
+  else echo "失败：没找到三点菜单按钮"; fail=1; fi
+  sleep 2; A shell am start -n $ACT --es mt_open downloads > /dev/null; sleep 5; shot 42-downloads-final; closepanel
+  A shell "ls -la /sdcard/Download" > "$OUT/dl-files.txt" 2>&1
+  cp $R "$OUT/dl-requests.log" 2>/dev/null; cp $W/dl-server.log "$OUT/dl-server.log" 2>/dev/null
+  grep "MaskTab.*\(下载\|长按\|选择文件\|选了\)" "$L" | sed 's/.*MaskTab *: //' | cut -c1-200 | tail -30
+  return 0
+}
+download_phase || fail=1
 
 A logcat -d > "$OUT/logcat-round2-all.txt"
 if ourcrash < "$OUT/logcat-round2-all.txt" > "$OUT/crash-proxy.txt"; then echo "第二轮 logcat 里有崩溃："; cat "$OUT/crash-proxy.txt"; fail=1; else rm -f "$OUT/crash-proxy.txt"; fi

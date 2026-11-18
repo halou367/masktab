@@ -14,7 +14,7 @@ const [dir, out, desk] = process.argv.slice(2).filter((a) => !a.startsWith('--')
 // 分段跑（--only=段名,段名）：整套要两分多钟，改哪一块就只跑哪一段；scripts/check.sh pages 会把各段分给几个进程同时跑。
 // 段名见下面每一段开头的 want('…')；不带 --only 就全跑。新加的检查放进合适的段，或者新开一段（记得写进 scripts/check.sh 的 PAGE_SECTIONS）。
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean);
-const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp'];
+const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads'];
 for (const s of ONLY) if (!SECTIONS.includes(s)) { console.error(`没有这一段：${s}（有：${SECTIONS.join(' ')}）`); process.exit(2); }
 const took = []; let cur = null;
 const want = (name) => { const t = Date.now(); if (cur) took.push(`${cur.name} ${((t - cur.t) / 1000).toFixed(0)}s`); cur = null; const ok = !ONLY.length || ONLY.includes(name); if (ok) cur = { name, t }; return ok; };
@@ -80,6 +80,11 @@ const mock = (state) => {
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol.very.long.mailbox.name30827@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const addons = [{ id: 'ublock0@raymondhill.net', name: 'uBlock Origin', version: '1.62.0', enabled: true, desc: '高效的广告拦截器', action: true, options: true }];
   const recent = [{ url: 'https://github.com/halou367/masktab', title: 'halou367/masktab', at: Date.now() - 180e3 }, { url: 'https://ippure.com/', title: 'IPPure · 浏览器指纹检测', at: Date.now() - 720e3 }, { url: 'https://mail.google.com/mail/u/0/', title: 'Gmail - 收件箱', at: Date.now() - 3600e3 }];
+  // 下载内容页（决策 A-14）：一个正在下的、一张图片、一个名字很长的文件、一个没下成的
+  const downloads = [{ id: 'd1', inst: 'p2', name: 'ubuntu-26.04-desktop-amd64.iso', url: 'https://releases.ubuntu.com/26.04/ubuntu-26.04-desktop-amd64.iso', mime: 'application/x-iso9660-image', total: 6114656256, got: 2201276252, state: 'run', err: '', at: Date.now() - 60e3 },
+    { id: 'd2', inst: 'p2', name: 'IMG_20261112_184502.jpg', url: 'https://pbs.twimg.com/media/GaBcDeF.jpg', mime: 'image/jpeg', total: 2415919, got: 2415919, state: 'done', err: '', at: Date.now() - 900e3 },
+    { id: 'd3', inst: 'p2', name: '2026 年第三季度财务报告（合并报表，含附注与审计意见）最终版-已盖章扫描件.pdf', url: 'https://files.example.com/report.pdf', mime: 'application/pdf', total: 18874368, got: 18874368, state: 'done', err: '', at: Date.now() - 7200e3 },
+    { id: 'd4', inst: 'p2', name: 'setup-x64.exe', url: 'https://dl.example.org/setup-x64.exe', mime: 'application/octet-stream', total: 73400320, got: 1048576, state: 'fail', err: '只收到一部分（1.0 MB / 70.0 MB），连接断了', at: Date.now() - 86400e3 }];
   const reply = (m, p, b) => {
     const k = `${m} ${p.split('?')[0]}`;
     // 改线路的请求照着记到状态里（只记模式、国家、选了哪个；代理开关不记，后面的检查要它一直开着），这样能看到“自动 / 手动”两种排法
@@ -97,6 +102,7 @@ const mock = (state) => {
     if (k === 'GET /api/diag') return { text: 'MaskTab 诊断信息（示例）' };
     if (k === 'GET /api/events') return { seq: state.seq };
     if (k === 'GET /ui/recent') return recent;
+    if (k === 'GET /ui/downloads') return downloads;
     if (state.__reply && state.__reply[k]) return state.__reply[k]; // 个别检查要看“接口回了什么之后页面怎么说”
     return { ok: true };
   };
@@ -125,7 +131,7 @@ process.on('uncaughtException', (e) => { console.log(flow.join('\n')); console.l
 // 截图：[名字, 地址, 上下文]
 const shots = [['settings', 'app.html#settings'], ['node', 'app.html#node'], ['fp', 'app.html#fp'],
   ['instances', 'app.html#instances'], ['drawer', 'app.html#instances/p2'], ['import', 'app.html#instances/import'],
-  ['exits', 'app.html#exits'], ['addons', 'app.html#addons'], ['diag', 'app.html#diag'], ['history', 'app.html#history'],
+  ['exits', 'app.html#exits'], ['addons', 'app.html#addons'], ['diag', 'app.html#diag'], ['history', 'app.html#history'], ['downloads', 'app.html#downloads'],
   ['settings-adv', 'app.html#settings/adv'], ['settings-about', 'app.html#settings/about'], ['settings-ntp', 'app.html#settings/ntp'], ['menu-page', 'app.html#menu'], ['newtab', 'newtab.html#inst=p2']];
 // 规矩（决策 UI-7）：不能有“圆角 + overflow:auto/scroll”的元素，这个组合在安卓模拟器里让 GeckoView 的 GPU 进程卡死。
 // 输入框、文本框本身可滚动且带圆角，以前实测不受影响（run 43574923756），不算在内。返回违规元素的描述。
@@ -1489,6 +1495,39 @@ if (want('fp')) {
   check('诊断关掉画布 / 时区 / 核心数：这三样保持原样；语言默认不在页面里改（A-10，改由内核原生设置）', fp2.cv && fp2.tz && fp2.cores && fp2.lang === b0lang, fp2);
   console.log(flow[flow.length - 1]);
 }
+// 下载内容页（决策 A-14）：四种状态各一条；窄屏上长文件名省略、右边的按钮不被挤出去；点一条 = 打开，按钮各发各的请求。
+const dl0 = flow.length;
+if (want('downloads')) for (const w of [412, 320]) {
+  const c = await br.newContext({ viewport: { width: w, height: 760 }, deviceScaleFactor: 1, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, fixture);
+  const pg = await c.newPage(); watch(pg, `downloads@${w}`);
+  await pg.goto(base + 'app.html#downloads'); await pg.waitForSelector('.dlrow');
+  const rows = await pg.evaluate(() => [...document.querySelectorAll('.dlrow')].map((r) => {
+    const b = r.getBoundingClientRect(), ib = [...r.querySelectorAll('.ib')], t1 = r.querySelector('.t1'), bar = r.querySelector('.dlbar i');
+    return { state: r.dataset.state, h: Math.round(b.height), sub: r.querySelector('.t2').textContent, btns: ib.map((x) => x.getAttribute('aria-label')),
+      inside: ib.every((x) => { const q = x.getBoundingClientRect(); return q.right <= innerWidth && q.width >= 36; }), cut: t1.scrollWidth > t1.clientWidth,
+      dis: r.querySelector('.nrow').disabled, bar: bar ? Math.round(parseFloat(bar.style.width)) : null };
+  }));
+  check(`下载内容 ${w}：四条，状态依次是 正在下 / 好了 / 好了 / 没成`, rows.map((r) => r.state).join() === 'run,done,done,fail', rows.map((r) => r.state));
+  check(`下载内容 ${w}：正在下的写着进度（35%）、有进度条、只有“取消下载”、点不开`, /2\.05 GB \/ 5\.69 GB · 35%/.test(rows[0].sub) && rows[0].bar === 35 && rows[0].btns.join() === '取消下载' && rows[0].dis, rows[0]);
+  check(`下载内容 ${w}：下好的有“分享”“删除文件”，写着大小和来源网站`, rows[1].btns.join() === '分享,删除文件' && /2\.3 MB · pbs\.twimg\.com/.test(rows[1].sub) && !rows[1].dis, rows[1]);
+  check(`下载内容 ${w}：没下成的写着原因，有“重新下载”“从列表里去掉”`, /^没下成：只收到一部分/.test(rows[3].sub) && rows[3].btns.join() === '重新下载,从列表里去掉', rows[3]);
+  check(`下载内容 ${w}：长文件名省略成一行，每行不超过 80 高，按钮都在屏幕里`, rows[2].cut && rows.every((r) => r.h <= 80 && r.inside), rows.map((r) => [r.h, r.inside, r.cut]));
+  const calls = () => pg.evaluate(() => window.__calls.filter((x) => /^\/ui\/downloads\//.test(x.p) && x.m === 'POST').map((x) => x.p));
+  await pg.click('.dlrow[data-state="done"] .nrow'); await pg.waitForTimeout(150);
+  await pg.click('.dlrow[data-state="done"] .ib[aria-label="分享"]'); await pg.waitForTimeout(150);
+  await pg.click('.dlrow[data-state="run"] .ib[aria-label="取消下载"]'); await pg.waitForTimeout(150);
+  await pg.click('.dlrow[data-state="fail"] .ib[aria-label="重新下载"]'); await pg.waitForTimeout(150);
+  await pg.click('.dlrow[data-state="done"] .ib[aria-label="删除文件"]'); await pg.waitForSelector('.dlg');
+  const before = await calls();
+  await pg.click('.dlg .btn.danger'); await pg.waitForTimeout(200);
+  const all = await calls();
+  check(`下载内容 ${w}：点一条 = 打开；分享、取消、重新下载各发各的请求；删除先问一句，确认了才删`,
+    before.join() === '/ui/downloads/d2/open,/ui/downloads/d2/share,/ui/downloads/d1/cancel,/ui/downloads/d4/retry' && all[all.length - 1] === '/ui/downloads/d2/delete', all);
+  for (const x of await roundScroll(pg)) check(`下载内容 ${w}：没有圆角滚动容器`, false, x);
+  if (w === 320) await pg.screenshot({ path: path.join(out, 'downloads-narrow.png') });
+  await c.close();
+}
+if (flow.length > dl0) console.log(flow.slice(dl0).join('\n'));
 want('');
 if (took.length) console.log('用时：' + took.join('，'));
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');

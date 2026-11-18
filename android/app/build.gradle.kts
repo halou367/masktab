@@ -65,6 +65,8 @@ android {
 
 dependencies {
     implementation("org.mozilla.geckoview:geckoview:$geckoviewVersion")
+    // FileProvider（把下载好的文件交给别的应用，Downloads.kt）。GeckoView 本来就带着这个库，版本和它要的一致，这里只是写明我们自己也在用。
+    implementation("androidx.core:core:1.19.1")
 }
 
 // 内置扩展：桌面伴随扩展里能复用的文件（界面工具、站点图标、实例菜单、实例卡片、自动填写、国旗）

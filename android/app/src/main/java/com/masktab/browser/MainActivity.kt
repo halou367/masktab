@@ -47,6 +47,9 @@ import org.mozilla.geckoview.GeckoView
 // 全面屏（决策 UI-4）：内容贴着系统给的 insets（状态栏、刘海、导航栏 / 手势条、键盘）摆，露出来的那一圈由 [BarsLayout] 按当前页面和主题涂色；
 // 状态栏、导航栏的图标深浅跟着底色换。浮层盖住整个窗口（连两条栏），遮罩压暗时两条栏一起变暗。
 
+private const val REQ_FILE = 7201
+private const val REQ_NOTIFY = 7202
+
 class MainActivity : Activity(), CoreUi {
     private var lastShownInst: String? = null // 上一次显示的是哪个实例的标签页（换实例时淡入）
     private lateinit var root: BarsLayout
@@ -85,7 +88,7 @@ class MainActivity : Activity(), CoreUi {
         super.onCreate(savedInstanceState)
         Core.init(this)
         Core.ui = this
-        prompts = Prompts(this)
+        prompts = Prompts(this) { i, done -> pickFiles(i, done) }
         edgeToEdge()
         hold = intent?.getBooleanExtra("mt_hold", false) == true
         pal = Theme.pal(this, seedColor())
@@ -394,6 +397,126 @@ class MainActivity : Activity(), CoreUi {
     override fun onPageStopped(t: Tab) { if (t === Core.curTab()) pull.done() }
 
     override fun toast(msg: String) = ui { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
+
+    // ---------- 下载、长按菜单、选择文件（决策 A-14） ----------
+
+    /** 底部的一条提示，可以带一个按钮（“已下载 xxx · 打开”）；6 秒后自己收起。 */
+    private var snackView: View? = null
+    private fun hideSnack() {
+        val v = snackView ?: return
+        snackView = null
+        v.animate().alpha(0f).translationY(dp(16).toFloat()).setDuration(Motion.S).withEndAction { (v.parent as? ViewGroup)?.removeView(v) }.start()
+    }
+    private fun snack(msg: String, act: String? = null, onAct: (() -> Unit)? = null) {
+        snackView?.let { root.removeView(it) }
+        val fg = if (pal.dark) Color.parseColor("#1f1f1f") else Color.WHITE
+        val bar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(if (pal.dark) Color.parseColor("#e3e3e8") else Color.parseColor("#2f3033"), dp(10).toFloat())
+            elevation = dp(6).toFloat()
+            isClickable = true
+            setPadding(dp(16), dp(2), dp(4), dp(2))
+        }
+        bar.addView(TextView(this).apply {
+            text = msg; textSize = 14f; setTextColor(fg); maxLines = 2; ellipsize = TextUtils.TruncateAt.MIDDLE
+            setPadding(0, dp(12), dp(8), dp(12))
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        if (act != null) bar.addView(TextView(this).apply {
+            text = act; textSize = 14f; typeface = Typeface.DEFAULT_BOLD; contentDescription = act
+            setTextColor(if (pal.dark) Color.parseColor("#0b57d0") else Color.parseColor("#a8c7fa"))
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setOnClickListener { hideSnack(); onAct?.invoke() }
+        }, LinearLayout.LayoutParams(-2, -2))
+        root.addView(bar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { leftMargin = inLeft + dp(12); rightMargin = inRight + dp(12); bottomMargin = inBottom + dp(12) })
+        bar.alpha = 0f; bar.translationY = dp(16).toFloat()
+        bar.animate().alpha(1f).translationY(0f).setDuration(Motion.M).setInterpolator(Motion.dec).start()
+        snackView = bar
+        bar.postDelayed({ if (snackView === bar) hideSnack() }, 6000)
+    }
+
+    override fun onDownload(it: Downloads.Item) {
+        when (it.state) {
+            Downloads.RUN -> { askNotify(); snack("开始下载 ${it.name}", "查看") { openSheet("downloads", true) } }
+            Downloads.DONE -> snack("已下载 ${it.name}", "打开") { Downloads.open(this, it)?.let { e -> toast(e) } }
+            else -> snack("没下成 ${it.name}：${it.err}", "查看") { openSheet("downloads", true) }
+        }
+    }
+
+    /** 第一次下载时问一次通知权限（安卓 13 起要问）：通知栏里的下载进度、“下载完成”要它；不给也照样能下。 */
+    private fun askNotify() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val perm = "android.permission.POST_NOTIFICATIONS"
+        if (checkSelfPermission(perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        val pref = getPreferences(MODE_PRIVATE)
+        if (pref.getBoolean("askedNotify", false)) return
+        pref.edit().putBoolean("askedNotify", true).apply()
+        try { requestPermissions(arrayOf(perm), REQ_NOTIFY) } catch (e: Exception) { logw("通知权限没问成", e) }
+    }
+
+    private fun copyText(label: String, text: String) {
+        (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(label, text))
+        if (Build.VERSION.SDK_INT < 33) toast("已复制") // 安卓 13 起系统自己会提示
+    }
+
+    private fun shareText(text: String) {
+        try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "分享")) } catch (e: Exception) { toast("没有可用的应用") }
+    }
+
+    /** 网页上长按链接 / 图片 / 视频：新标签页打开、复制地址、下载、分享。下载走这个标签页所在实例的线路。 */
+    override fun contextMenu(t: Tab, e: GeckoSession.ContentDelegate.ContextElement) {
+        val inst = Host.get(t.inst) ?: return
+        val link = e.linkUri?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+        val src = e.srcUri?.takeIf { it.isNotEmpty() }
+        val kind = when (e.type) {
+            GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE -> "图片"
+            GeckoSession.ContentDelegate.ContextElement.TYPE_VIDEO -> "视频"
+            GeckoSession.ContentDelegate.ContextElement.TYPE_AUDIO -> "音频"
+            else -> null
+        }
+        val acts = ArrayList<Pair<String, () -> Unit>>()
+        fun add(label: String, f: () -> Unit) { acts.add(label to f) }
+        if (link != null) {
+            add("在新标签页中打开") { Core.openTab(t.inst, link) }
+            add("在后台标签页中打开") { Core.openTab(t.inst, link, activate = false); toast("已在后台打开") }
+            add("复制链接地址") { copyText("链接", link) }
+            add("下载链接") { Downloads.fromUrl(inst, link, t.url) }
+            add("分享链接") { shareText(link) }
+        }
+        if (kind != null && src != null) {
+            add("保存$kind") { Downloads.fromUrl(inst, src, t.url, kind) }
+            if (src.startsWith("http")) {
+                add("在新标签页中打开$kind") { Core.openTab(t.inst, src) }
+                add("复制${kind}地址") { copyText(kind, src) }
+            }
+        }
+        if (acts.isEmpty()) return
+        val title = (link ?: src ?: "").let { u -> if (u.startsWith("data:")) kind ?: "" else u.removePrefix("https://").removePrefix("http://") }.let { if (it.length > 90) it.take(88) + "…" else it }
+        Theme.dialog(this).setTitle(title).setItems(acts.map { it.first }.toTypedArray()) { _, k -> acts[k].second() }.show()
+        logi("长按菜单已打开 ${acts.joinToString("、") { it.first }}")
+    }
+
+    /** 网页的“选择文件”：打开系统的文件选择界面，结果在 onActivityResult 里交回去（见 Prompts.file）。 */
+    private var filePick: ((List<android.net.Uri>?) -> Unit)? = null
+    private fun pickFiles(i: Intent, done: (List<android.net.Uri>?) -> Unit) {
+        filePick?.invoke(null)
+        filePick = done
+        try { @Suppress("DEPRECATION") startActivityForResult(i, REQ_FILE) } catch (e: Exception) { filePick = null; toast("手机上没有能选文件的应用"); done(null) }
+    }
+
+    @Deprecated("选择文件的结果")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION") super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_FILE) return
+        val cb = filePick ?: return
+        filePick = null
+        val uris = ArrayList<android.net.Uri>()
+        if (resultCode == RESULT_OK && data != null) {
+            val clip = data.clipData
+            if (clip != null) for (k in 0 until clip.itemCount) clip.getItemAt(k).uri?.let { uris.add(it) }
+            if (uris.isEmpty()) data.data?.let { uris.add(it) }
+        }
+        cb(uris.takeIf { it.isNotEmpty() })
+    }
 
     // ---------- 启动 ----------
 
@@ -712,7 +835,8 @@ class MainActivity : Activity(), CoreUi {
         topBtn("back", "后退", t?.canBack == true, pal.surf3, pal.on, 24) { t?.session?.goBack() }
         topBtn("fwd", "前进", t?.canFwd == true, pal.surf3, pal.on, 24) { t?.session?.goForward() }
         topBtn(if (marked) "star" else "starO", if (marked) "取消书签" else "添加书签", web, if (pal.dark) Color.parseColor("#3a3f55") else pal.tonal, pal.on, 16) { toggleBookmark(t!!) }
-        topBtn("dl", "下载（暂不支持）", false, pal.surf3, pal.on, 24) {}
+        // 下载此页（决策 A-14）：把当前网址的文件存下来——正在看的图片、视频、PDF；普通网页存下来的是它的 HTML
+        topBtn("dl", "下载此页", web, pal.surf3, pal.on, 24) { Host.get(t!!.inst)?.let { Downloads.fromUrl(it, t.url, t.url, "网页") } }
         topBtn("refresh", "刷新", t != null, if (pal.dark) Color.parseColor("#121318") else Color.parseColor("#1f1f1f"), Color.WHITE, 24) { t?.session?.reload() }
         top.removeViewAt(top.childCount - 1)
         box.addView(top)
@@ -726,7 +850,7 @@ class MainActivity : Activity(), CoreUi {
         item("history", "历史记录") { openSheet("history", true) }
         item("del", "删除浏览数据") { clearData() }
         box.addView(divider(pal))
-        item("dlDone", "下载内容", enabled = false) { toast("暂不支持下载文件") }
+        item("dlDone", "下载内容") { openSheet("downloads", true) }
         item("starO", "书签") { openSheet("bookmarks", true) }
         item("devices", "最近打开的标签页") { recentClosed() }
         box.addView(divider(pal))

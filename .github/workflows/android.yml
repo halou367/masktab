@@ -87,7 +87,7 @@ jobs:
       # 不存快照（-no-snapshot），这一步限时、失败不中断，是否通过由下一步按 shots/result.txt 判定。
       - name: 启动模拟器并测试
         id: emu
-        timeout-minutes: 25
+        timeout-minutes: 33
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -99,7 +99,7 @@ jobs:
           ram-size: 4096M
           disable-animations: true
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: timeout 1200 bash android/scripts/emulator-smoke.sh out/MaskTab-android-x86_64.apk shots
+          script: timeout 1650 bash android/scripts/emulator-smoke.sh out/MaskTab-android-x86_64.apk shots
       - name: 判定冒烟结果
         run: |
           r=$(cat shots/result.txt 2>/dev/null || echo "没有结果文件")

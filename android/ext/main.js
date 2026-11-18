@@ -9,6 +9,7 @@
 //   addons          扩展：从 addons.mozilla.org 安装的火狐扩展（手机内核是 GeckoView，用不了 Chrome 扩展，这一页两端不同）
 //   diag            诊断——共用 pages.js，复制的文字由 app 收集
 //   history         最近访问（app 按实例记）
+//   downloads       下载内容（app 按实例记，文件在系统的“下载”文件夹里；决策 A-14）
 //   new             新建实例向导（头像菜单的“新建实例”打开它，决策 UI-25）
 //   menu            头像菜单的页面版（平时头像菜单是 app 原生画的、浮在网页上，决策 UI-2；这个路由留作兜底）
 //   __back          app 的系统返回键：由页面按自己的返回栈处理（见 goBack）
@@ -141,6 +142,47 @@ function historyPage() {
     h('div', { class: 'foot noic' }, '每个实例各记各的。')];
 }
 
+// 下载内容（三点菜单 → 下载内容；决策 A-14）。下载、存文件都是 app 做的，这里只是它的列表：点一条用别的应用打开，旁边是分享 / 删除，正在下的能取消。
+let dls = null, dlTimer = 0;
+async function loadDls() {
+  clearTimeout(dlTimer);
+  try { dls = await api('GET', `/ui/downloads?inst=${encodeURIComponent(st.me.id)}`); } catch { dls = dls || []; }
+  if (pageOf() !== 'downloads') return;
+  render(true);
+  if (dls.some((d) => d.state === 'run')) dlTimer = setTimeout(loadDls, 1000); // 有在下的：一秒看一次进度
+}
+const fmtSize = (n) => (n < 0 ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB');
+function downloadsPage() {
+  const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+  const act = (d, o, msg) => run(async () => { await api('POST', `/ui/downloads/${d.id}/${o}`); await loadDls(); }, msg);
+  const kindIc = (d) => (/^image\//.test(d.mime) || /\.(png|jpe?g|gif|webp|svg|bmp|heic)$/i.test(d.name) ? 'palette' : /^(video|audio)\//.test(d.mime) || /\.(mp4|mkv|webm|mov|mp3|m4a|flac|wav|ogg)$/i.test(d.name) ? 'play' : 'dlDone');
+  const rowOf = (d) => {
+    const run1 = d.state === 'run', bad = d.state === 'fail';
+    const pct = run1 && d.total > 0 ? Math.min(100, Math.floor(d.got * 100 / d.total)) : -1;
+    const sub = run1 ? (d.total > 0 ? `${fmtSize(d.got)} / ${fmtSize(d.total)} · ${pct}%` : `已下载 ${fmtSize(d.got)}`)
+      : bad ? '没下成：' + (d.err || '原因不明')
+        : [fmtSize(d.total >= 0 ? d.total : d.got), hostOf(d.url || d.from), d.at ? new Date(d.at).toLocaleString() : ''].filter(Boolean).join(' · ');
+    return h('div', { class: 'dlrow' + (bad ? ' bad' : ''), 'data-state': d.state },
+      h('button', { class: 'nrow', disabled: d.state !== 'done' ? true : null, 'aria-label': (d.state === 'done' ? '打开 ' : '') + d.name, onclick: () => act(d, 'open') },
+        h('span', { class: 'lic' }, icon(run1 ? 'dl' : bad ? 'warn' : kindIc(d), 22)),
+        h('span', { class: 'tx' }, h('div', { class: 't1' }, d.name), h('div', { class: 't2' }, sub),
+          run1 && h('div', { class: 'dlbar' + (pct < 0 ? ' any' : '') }, h('i', { style: { width: (pct < 0 ? 30 : pct) + '%' } })))),
+      run1 ? ibtn('close', '取消下载', () => act(d, 'cancel', '已取消'))
+        : [d.state === 'done' && ibtn('share', '分享', () => act(d, 'share')),
+          bad && /^https?:/.test(d.url) && ibtn('refresh', '重新下载', () => act(d, 'retry')),
+          ibtn('del', bad ? '从列表里去掉' : '删除文件', async () => {
+            if (bad) return act(d, 'remove');
+            if (await confirmDlg(`删除“${d.name}”？`, '文件会从手机里删掉。', '删除', true)) act(d, 'delete', '已删除');
+          })]);
+  };
+  return [appBar(['下载内容', dls?.length > 0 && h('span', { class: 'cnt' }, String(dls.length))], back, dls?.some((d) => d.state !== 'run') && ibtn('del', '清空这个实例的下载记录', async () => {
+    if (await confirmDlg('清空下载记录？', `只清掉 #${st.me.no} 的记录，文件还留在手机里。`, '清空', true)) { await api('POST', `/ui/downloads/clear?inst=${encodeURIComponent(st.me.id)}`).catch(() => {}); loadDls(); }
+  })),
+    dls == null ? h('div', { class: 'empty' }, '读取中…') : !dls.length ? h('div', { class: 'empty' }, '还没有下载过文件。在网页上点下载链接，或者长按图片、链接。')
+      : dls.map(rowOf),
+    h('div', { class: 'foot noic' }, '文件存在手机的“下载”文件夹里。每个实例各记各的，下载走的是这个实例自己的线路。')];
+}
+
 // ---------- 画页面 ----------
 function render(force) {
   const p = pageOf();
@@ -153,7 +195,7 @@ function render(force) {
     const view = {
       settings: () => settingsHome(c), 'settings/adv': () => settingsAdv(c), 'settings/about': () => settingsAbout(c), 'settings/ntp': () => settingsNtp(c), 'settings/verify': () => verifyView(c),
       node: () => panel.kids(), fp: () => panel.kids(), instances: () => instancesView({ st, act, load, render: () => render(true), lite: true, back, openNode: (id) => open('node/' + id), open }),
-      exits: () => exitsView(c), addons: addonsPage, diag: () => diagView(c), history: historyPage,
+      exits: () => exitsView(c), addons: addonsPage, diag: () => diagView(c), history: historyPage, downloads: downloadsPage,
       menu: () => [appBar('', back), menuView(st, { node: () => open('node'), fp: () => open('fp'), open, render: () => render(true) })],
       // 新建实例向导（头像菜单的“新建实例”由 app 打开这一页，决策 UI-25）：建好后 app 收起页面并切到新实例；取消 = 收起
       new: () => wizardPage({ st, onDone: () => {}, onCancel: () => (stack.length ? goBack() : closeMe()) }),
@@ -187,6 +229,7 @@ function enter() {
   lastPage = p;
   if (p === 'addons') { addons = null; loadAddons(); }
   if (p === 'history') { recent = null; loadRecent(); }
+  if (p === 'downloads') { dls = null; loadDls(); } else clearTimeout(dlTimer);
   scrollTo(0, 0);
   render(true);
   // 换页动效（决策 UI-26）：点进下一页从右边滑进来，返回从左边，app 从外面直接打开的一页淡入。和 Chrome 安卓设置页一样
