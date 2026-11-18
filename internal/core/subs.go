@@ -287,7 +287,9 @@ func (a *App) rescanET() {
 	}
 	a.mu.Unlock()
 	for _, id := range ids {
-		for i := 0; i < 100; i++ {
+		// 最多等 5 分钟。以前只等 20 秒：订阅里有两三百个地址时一轮要测一分多钟，
+		// 等不到它结束，Scan 见“正在测”直接返回，新加的地址（刚导入的列表）就一直是“还没探测”（2026-11-18 需求方电脑上实测到）。
+		for i := 0; i < 1500; i++ {
 			a.mu.Lock()
 			busy := a.scanning[id]
 			a.mu.Unlock()
