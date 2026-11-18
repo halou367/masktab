@@ -46,6 +46,11 @@ SetCompressorDictSize 64
 !else
   !define SEP "/"
 !endif
+; 安装程序、卸载程序自己的图标：和 masktab.exe 同一个（CI 用 go run ./cmd/winres -ico 写到 SRC 目录里）。没有这个文件就用 NSIS 自带的。
+!if /FileExists "${SRC}${SEP}masktab.ico"
+  !define MUI_ICON "${SRC}${SEP}masktab.ico"
+  !define MUI_UNICON "${SRC}${SEP}masktab.ico"
+!endif
 !define APP "MaskTab"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MaskTab"
 
@@ -201,6 +206,9 @@ Section "MaskTab" SecMain
   ${GetSize} "$INSTDIR" "/S=0K /G=0" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
+
+  ; 让资源管理器重新读图标：masktab.exe 以前没有图标，快捷方式上是个白板，不通知的话换了图标它也照旧显示缓存里的
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 
   ; ---- 在线更新：带 /RELAUNCH 时装完把 MaskTab 重新打开（有界面安装时由最后一页的“运行 MaskTab”负责）----
   ${GetParameters} $R0

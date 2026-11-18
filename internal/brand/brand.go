@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -311,6 +312,22 @@ func newVersion(set map[string]string) []byte {
 	fixed := make([]byte, 52)
 	binary.LittleEndian.PutUint32(fixed[0:], 0xFEEF04BD)
 	binary.LittleEndian.PutUint32(fixed[4:], 0x00010000)
+	// 数字版本号（资源管理器“详细信息”里的“文件版本”看的是它）：从 FileVersion 那条文字里取前四段数字
+	var n [4]uint32
+	for i, part := range strings.SplitN(set["FileVersion"], ".", 4) {
+		v := 0
+		for _, c := range part {
+			if c < '0' || c > '9' {
+				break
+			}
+			v = v*10 + int(c-'0')
+		}
+		n[i] = uint32(v & 0xFFFF)
+	}
+	for _, off := range []int{8, 16} { // 文件版本、产品版本各一份
+		binary.LittleEndian.PutUint32(fixed[off:], n[0]<<16|n[1])
+		binary.LittleEndian.PutUint32(fixed[off+4:], n[2]<<16|n[3])
+	}
 	binary.LittleEndian.PutUint32(fixed[24:], 0x3F)    // dwFileFlagsMask
 	binary.LittleEndian.PutUint32(fixed[32:], 0x40004) // VOS_NT_WINDOWS32
 	binary.LittleEndian.PutUint32(fixed[36:], 1)       // VFT_APP

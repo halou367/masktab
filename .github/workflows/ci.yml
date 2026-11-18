@@ -99,10 +99,15 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist, out | Out-Null
           go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$env:VER" -o dist/masktab.exe ./cmd/masktab
+          # 图标和版本信息（decisions UI-30）：Go 编出来的 exe 没有，任务管理器里只显示文件名、快捷方式是白板图标
+          go run ./cmd/winres -version $env:VER dist/masktab.exe
+          if ($LASTEXITCODE -ne 0) { throw "masktab.exe 的图标和版本信息没写上" }
+          go run ./cmd/winres -ico dist/masktab.ico
+          & dist/masktab.exe -version | Out-Host
           Get-Item dist/masktab.exe | Format-List Name, Length
       - name: 按完整路径找进程、结束进程（安装程序升级时靠它，decisions D-5）
         shell: pwsh
-        run: go test -count=1 -v ./internal/procs ./internal/tabbar
+        run: go test -count=1 -v ./internal/procs ./internal/tabbar ./internal/brand
       - name: 缓存浏览器内核与代理内核
         uses: actions/cache@v4
         with:

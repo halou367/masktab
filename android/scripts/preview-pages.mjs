@@ -1079,6 +1079,31 @@ if (want('a11y')) {
     await c2.close();
   }
 }
+// ---------- 正在关闭的实例：写出来，这时候点“打开”= 关完重新打开（决策 UI-29）----------
+// 以前：关闭要等几秒到十几秒，这期间卡片还是“运行中”，点“打开”没有反应也没有提示。
+if (want('heal')) {
+  const s = JSON.parse(JSON.stringify(fixture));
+  const ids = s.instances.filter((x) => x.rt?.running).map((x) => x.id).slice(0, 2);
+  for (const i of s.instances) {
+    if (i.id === ids[0]) i.rt = { ...i.rt, running: true, stopping: true };
+    if (i.id === ids[1]) i.rt = { ...i.rt, running: true, stopping: true, reopen: true };
+  }
+  for (const [name, hash] of [['手机', 'app.html#instances']]) {
+    const c = await mkctx(s);
+    const pg = await c.newPage(); watch(pg, 'stopping');
+    await pg.goto(base + hash); await pg.waitForTimeout(700);
+    const read = (id) => pg.evaluate((id) => { const e = document.querySelector(`.cardi[data-id="${id}"]`); return { line: e?.querySelector('.stp.stop')?.innerText || '', btns: [...(e?.querySelectorAll('.ct button') || [])].map((b) => b.title) }; }, id);
+    const a = await read(ids[0]), b = await read(ids[1]);
+    check(`${name}实例页：正在关闭的实例写着“正在关闭”，按钮是“关完后重新打开”`, ids.length === 2 && /正在关闭/.test(a.line) && !/重新打开/.test(a.line) && a.btns.length === 1 && /关完后重新打开/.test(a.btns[0]), a);
+    check(`${name}实例页：已经点过“打开”的写着“关完重新打开”，按钮换成“不重新打开了”`, /关完重新打开/.test(b.line) && b.btns.length === 1 && /不重新打开/.test(b.btns[0]), b);
+    await pg.evaluate(() => window.__calls.splice(0));
+    await pg.evaluate((id) => document.querySelector(`.cardi[data-id="${id}"] .ct button`).click(), ids[0]); await pg.waitForTimeout(300);
+    const calls = await pg.evaluate(() => window.__calls.splice(0).filter((x) => x.m && x.m !== 'GET' && !x.p.startsWith('/ui/')).map((x) => `${x.m} ${x.p}`));
+    check(`${name}实例页：正在关闭时点“打开”，发的是打开这个实例`, calls.length === 1 && calls[0] === `POST /api/instances/${ids[0]}/launch`, calls);
+    await pg.screenshot({ path: path.join(out, 'stopping.png') });
+    await c.close();
+  }
+}
 // ---------- 订阅 / 节点没了也改得了（决策 F-HEAL，2026-11-17 用户反馈的死循环）----------
 // 以前：订阅删了 → 实例打不开 → 节点面板只在实例自己的窗口里 → 改不了。现在实例管理的抽屉里就能进这个实例的“节点与出口”，它不用开着。
 if (want('heal')) {

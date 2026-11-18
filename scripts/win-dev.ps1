@@ -79,6 +79,8 @@ switch ($cmd) {
     "source: $a1 " + ((& tar -tzf $tgz 2>$null | select -First 1) -replace '.*-([0-9a-f]{7})[0-9a-f]*/$', '$1'); Remove-Item $tgz
     $out = (& "$dev\go\bin\go.exe" build -ldflags "-H=windowsgui -X main.version=0.1.0-dev" -o $exe ./cmd/masktab 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { "BUILD FAILED`n$out"; exit 1 }
+    # icon + version info, same as the CI build (decisions UI-30); a failure here is not fatal for a dev build
+    $wr = (& "$dev\go\bin\go.exe" run ./cmd/winres -version 0.1.0 $exe 2>&1 | Out-String).Trim(); "winres: $wr"
     "built: " + (Get-Item $exe).Length + " bytes"
   }
   'start' {
