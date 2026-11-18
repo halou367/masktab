@@ -566,3 +566,19 @@ v0.1.55 只套了 UI-9 的四条规则，页面还是旧样子，需求方不认
 - 改动：见 decisions N-4、UI-22。`internal/exits`（新类型、`RewriteChain`、`/video/` 加密）、`proxyflow.go`（`chainKey`）、`api.go`（`ping`，以及改 path 写法时重载配置）、`fastscan.go`（`Ping`，入口补纯净度）、`pages.js`（地址库行、高级设置）、`panel.js`（点延迟、入口和出口第二行统一）、`ui.css`。
 - 检查：`go test ./...` 通过，Windows 交叉编译通过；`/video/` 串用 edgetunnel 源码解回来是一致的。页面以 CI 为准。
 - 未验证：真服务端加 VPN Gate SSTP 能不能连上；真机上的界面。
+
+## 2026-11-18 分支 iter/polish 第 3 轮（一次性全量；没合并 main、没发版）
+
+- 需求方原话见 decisions “iter/polish 第 3 轮”一节开头（04:21 那一段，以及 09:53 “一次性完成所有修改”）。
+- 这一轮的提交（都在 iter/polish）：
+  - 动效统一（decisions UI-26）
+  - 新建实例向导（UI-25，取代 UI-24；修了接口里写错的变量，补了页面检查）
+  - 默认邮箱 + 默认密码（M-6）
+  - 网页翻译（UI-27）
+  - 手机三键导航时导航栏颜色跟着网页（UI-23 补充）
+  - 入口优选智能化（N-6）
+  - 文档
+- 本地检查：`check.sh fast` 通过（go test 16 个包）；`check.sh pages` 202 项通过（新增 `tune` 段）；`check.sh ext` 通过（含默认邮箱密码第九段、网页翻译、真 mihomo 下“换入口不断开已有连接”）。
+- CI、Windows 开发版实测：见本节后面的补记。
+- 没验证：安卓真机（Kotlin 改动只靠 CI 编译和模拟器冒烟）；入口优选要跑几天才有完整的 24 小时记录，效果要需求方看。
+

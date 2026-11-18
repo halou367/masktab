@@ -38,7 +38,7 @@
 | 实例打开、关闭、重启、删除 | `internal/core/launch.go`；手机上的对应部分 `host.go`；开机提速 `fastboot.go` |
 | “这个实例现在该走哪条线、通不通、为什么不通” | `internal/core/proxyflow.go`（`resolveLocked` 定线路和断网原因，`applyConfig` 写给 mihomo，`refresh` 探出口） |
 | 订阅：添加、刷新、改、删 | `internal/core/subs.go`；解析在 `internal/subscription`（纯逻辑） |
-| 入口 / 出口 / 节点列表，自动选线 | `internal/core/scan.go`；选线规则本身在 `pick.go`（纯逻辑，有测试）；edgetunnel 的直接探测 `fastscan.go` + `internal/cfprobe`；VPN Gate 源 `internal/core/vpngate.go` + `internal/vpngate`（decisions N-5） |
+| 入口 / 出口 / 节点列表，自动选线 | `internal/core/scan.go`；选线规则本身在 `pick.go`（纯逻辑，有测试）；edgetunnel 的直接探测 `fastscan.go` + `internal/cfprobe`；VPN Gate 源 `internal/core/vpngate.go` + `internal/vpngate`（decisions N-5）；入口优选（后台测速、按小时记、自动换）`tune.go`，打分 `tunescore.go`（decisions N-6） |
 | 删了东西以后实例指向空处、编号 | `internal/core/heal.go`（**实例指向订阅 / 节点 / 出口 / 入口的收拾都在这里**，decisions F-HEAL） |
 | 组件准备（下载内核、mihomo） | `internal/core/setup.go`、`internal/kernel/fetch.go`（版本、校验值） |
 | 内核启动参数（唯一知道内核细节的地方） | `internal/kernel` |
