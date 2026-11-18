@@ -150,7 +150,9 @@ async function waitRunning(id, ms = 60000) {
   return null;
 }
 // 等实例真的关掉：“关闭”的请求马上返回，内核要过几秒才退（无头模式下是 4 秒后被结束），这期间再点“打开”只会把还没关完的窗口切到前面。
-async function waitStopped(id, ms = 20000) {
+// 最慢的一路：伴随扩展后台还没连上（刚开 3 秒就关）→ 等 4 秒 → 发关闭消息等 8 秒 → 硬结束再等 5 秒，机器慢时二十多秒。
+// 20 秒等不够的那次（CI 44281049610）：这边以为关完了去点“打开”，其实还没关完，点了等于没点，后面两项跟着失败。
+async function waitStopped(id, ms = 45000) {
   const end = Date.now() + ms;
   while (Date.now() < end) { const i = await inst(id); if (!i || (!i.rt.running && !i.rt.starting)) return true; await sleep(300); }
   return false;
