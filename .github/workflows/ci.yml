@@ -117,6 +117,7 @@ jobs:
           $moved = { $w = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; ($want -eq 'top' -and $w.Top -gt 0) -or ($want -eq 'left' -and $w.Left -gt 0) }
           for ($i = 0; $i -lt 30 -and -not (& $moved); $i++) { Start-Sleep 1 }
           "可用区域：$before → $([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea)"
+          Get-Content (Join-Path $env:TEMP 'masktab-appbar.log') -ErrorAction SilentlyContinue
           if (-not (& $moved)) { throw "可用区域的左上角没有挪开（$want）" }
       - name: 构建 masktab.exe
         shell: pwsh

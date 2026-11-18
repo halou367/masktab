@@ -24,11 +24,18 @@ $f.Add_Shown({
   $d.cbSize = [Runtime.InteropServices.Marshal]::SizeOf([type][AB+APPBARDATA]); $d.hWnd = $f.Handle; $d.uCallbackMessage = 0x8001
   [void][AB]::SHAppBarMessage(0, [ref]$d)   # ABM_NEW
   $d.uEdge = $edge
-  $d.rc.L = $b.Left; $d.rc.T = $b.Top; $d.rc.R = $b.Right; $d.rc.B = $b.Bottom
-  if ($edge -eq 1) { $d.rc.B = $b.Top + 48 } else { $d.rc.R = $b.Left + 62 }
+  # 注意：$d.rc 取出来的是一份拷贝（结构体），直接写 $d.rc.L = … 改不到 $d 上；要整个赋回去
+  $r = New-Object AB+RECT
+  $r.L = $b.Left; $r.T = $b.Top; $r.R = $b.Right; $r.B = $b.Bottom
+  if ($edge -eq 1) { $r.B = $b.Top + 48 } else { $r.R = $b.Left + 62 }
+  $d.rc = $r
   [void][AB]::SHAppBarMessage(2, [ref]$d)   # ABM_QUERYPOS：系统按别的栏调整
-  if ($edge -eq 1) { $d.rc.B = $d.rc.T + 48 } else { $d.rc.R = $d.rc.L + 62 }
+  $r = $d.rc
+  if ($edge -eq 1) { $r.B = $r.T + 48 } else { $r.R = $r.L + 62 }
+  $d.rc = $r
   [void][AB]::SHAppBarMessage(3, [ref]$d)   # ABM_SETPOS
-  [void][AB]::MoveWindow($f.Handle, $d.rc.L, $d.rc.T, $d.rc.R - $d.rc.L, $d.rc.B - $d.rc.T, $true)
+  $r = $d.rc
+  [void][AB]::MoveWindow($f.Handle, $r.L, $r.T, $r.R - $r.L, $r.B - $r.T, $true)
+  "appbar $edgeName at $($r.L),$($r.T),$($r.R),$($r.B); work area now $([Windows.Forms.Screen]::PrimaryScreen.WorkingArea)" | Out-File -Encoding utf8 (Join-Path $env:TEMP 'masktab-appbar.log')
 })
 [Windows.Forms.Application]::Run($f)
