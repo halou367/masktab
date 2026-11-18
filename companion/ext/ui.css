@@ -672,3 +672,9 @@ html.wzwin body { overflow: hidden; } html.wzwin .pnav { display: none; } html.w
   *, *::before, *::after { animation-duration: 0ms !important; animation-delay: 0ms !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }
   .spin, .dotspin, .boot i, .prog i.ind, .av .dot.st, .face .run.st { animation-duration: 1.6s !important; }
 }
+/* 入口优选（decisions N-6）：列表里“本时段最佳”的小标签；节点页“当前时段最佳”那一行的理由可以折行、不截断 */
+.tag.tbest { display: inline-flex; align-items: center; gap: 2px; background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); flex: none; }
+.iprow .l2 .tag.tbest { font-size: 10px; padding: 1px 4px; }
+.iprow.on .l2 .tag.tbest { color: inherit; }
+.row.tbr .s { flex-wrap: wrap; white-space: normal; }
+.row.tbr .why { color: var(--on2); }

@@ -104,6 +104,7 @@ type instView struct {
 	Info   *fpInfo   `json:"fpInfo,omitempty"`
 	Acct   *acctView `json:"acct"`
 	Checks *checkSum `json:"checks,omitempty"` // 伪装一致性检查（checks.go）
+	Tune   *tuneBest `json:"tune,omitempty"`   // 入口优选：它这个出口国家里当前时段最好的入口和理由（decisions N-6）
 }
 
 // fpInfo 是界面上"指纹信息"展示的内容：按当前设置，下次启动时这个实例会呈现的样子。
@@ -182,7 +183,8 @@ type subView struct {
 	ScannedAt int64      `json:"scannedAt"`          // 上一轮测速结束的时刻；0 = 核心服务启动后还没测过
 	Speeding  bool       `json:"speeding"`           // 有下载测速在进行或排队
 	Template  any        `json:"template,omitempty"`
-	Profiles  []profView `json:"profiles"` // 盖住订阅里带凭据的 Profiles：界面只需要名字
+	Profiles  []profView `json:"profiles"`       // 盖住订阅里带凭据的 Profiles：界面只需要名字
+	Tune      *tuneView  `json:"tune,omitempty"` // 入口优选（edgetunnel）：当前时段最佳、各入口分数、用量（decisions N-6）
 }
 
 // profView 是订阅里的一套连接参数在界面上的样子（不带凭据）。
@@ -233,6 +235,9 @@ func (a *App) State(me string) map[string]any {
 			}
 			v.Checks = a.checksLocked(in, &r, v.Info)
 		}
+		if in.Proxy.EntryAuto() {
+			v.Tune = a.instTuneLocked(in)
+		}
 		insts = append(insts, v)
 		if in.ID == me {
 			mine = &v
@@ -268,6 +273,7 @@ func (a *App) State(me string) map[string]any {
 			v.Pips = append(v.Pips, pv)
 		}
 		v.NodeCount = len(v.Nodes)
+		v.Tune = a.tuneViewLocked(s)
 		subs = append(subs, v)
 	}
 	exts := []extView{}
@@ -664,6 +670,9 @@ func (a *App) routes(mux *http.ServeMux) {
 			reply(w, nil, a.RefreshSubscription(id, r.URL.Query().Get("force") == "1"))
 		case "test":
 			go a.Scan(id)
+			reply(w, nil, nil)
+		case "tune": // 入口优选：现在就做一轮（同样受每天的流量上限约束，decisions N-6）
+			go a.TuneRound(id)
 			reply(w, nil, nil)
 		case "ping": // 只测这几个地址的延迟：{keys: ["地址:端口" 或 "类型|值", …]}（界面上点延迟）
 			var b struct{ Keys []string }

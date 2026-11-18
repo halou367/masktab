@@ -33,7 +33,7 @@ const load = () => host.load();
 const render = () => host.render();
 const patch = (body) => run(async () => { await api('PATCH', `/api/instances/${cur().id}`, body); await load(); });
 const stop = (fn) => (ev) => { ev.stopPropagation(); fn(ev); };
-const go = (v) => () => { view = v; flt = ''; kindFlt = ''; typeFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; fresh = true; render(); };
+const go = (v) => () => { view = v; flt = ''; kindFlt = ''; typeFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; if (v === 'entry') sortBy = 'tune'; /* 入口列表默认按本时段的优选分数排（没有分数时退回延迟） */ fresh = true; render(); };
 const home = () => { if (view === 'fp' && fpDirect) { host.back?.(); return; } view = ''; fresh = true; render(); };
 
 // ---------- 小工具 ----------
@@ -119,14 +119,15 @@ function chips(items, countryOf, extra) {
     dead > 0 && h('button', { class: 'chip ico' + (flt === '~dead' ? ' on' : ''), title: '只看不通的', 'aria-label': '只看不通的', 'aria-pressed': flt === '~dead' ? 'true' : 'false', onclick: () => { flt = flt === '~dead' ? '' : '~dead'; render(); } }, icon('none', 15), h('i', {}, dead)),
     sortBtn());
 }
-const SORTS = { delay: ['delay', '延迟', '按延迟从低到高'], score: ['score', '纯净度', '按纯净度从高到低'], speed: ['speed', '下载', '按下载从快到慢'] };
+const SORTS = { tune: ['tune', '本时段', '按入口优选在当前时段的分数从高到低（下载为主、延迟为辅）'], delay: ['delay', '延迟', '按延迟从低到高'], score: ['score', '纯净度', '按纯净度从高到低'], speed: ['speed', '下载', '按下载从快到慢'] };
 let sortsNow = ['delay'];
+let tuneNow = null; // 入口列表：当前时段的优选分数（入口 id → 分数，decisions N-6）；别的列表是 null
 const sortBtn = () => sortsNow.length > 1 && h('button', { class: 'sortb', title: '排序', 'aria-label': '排序', 'aria-haspopup': 'listbox',
   onclick: async (ev) => { const v = await dropdown(ev.currentTarget, sortsNow.map((k) => [k, SORTS[k][1]]), sortBy); if (v && v !== sortBy) { sortBy = v; render(); } } }, icon('sort', 18), SORTS[sortBy][1]);
 function filtered(items, countryOf, ipOf) {
   const out = items.filter((it) => (flt === '~dead' ? it.delay < 0 : flt ? it.delay >= 0 && countryOf(it) === flt : true) && (!kindFlt || it.kind === kindFlt) && (!resOnly || !ipOf || ipq(ipOf(it))?.type === 'res'));
-  const sp = (x) => (x.speed > 0 ? x.speed : -1), sc = (x) => (ipOf ? scoreOf(ipOf(x)) : -1);
-  return out.sort((a, b) => (sortBy === 'speed' ? (sp(b) - sp(a)) || (rank(a) - rank(b)) : sortBy === 'score' ? ((b.delay > 0) - (a.delay > 0)) || (sc(b) - sc(a)) || (rank(a) - rank(b)) : rank(a) - rank(b)));
+  const sp = (x) => (x.speed > 0 ? x.speed : -1), sc = (x) => (ipOf ? scoreOf(ipOf(x)) : -1), ts = (x) => (x.delay > 0 ? tuneNow?.[x.id] ?? 0 : -1);
+  return out.sort((a, b) => (sortBy === 'tune' ? (ts(b) - ts(a)) || (rank(a) - rank(b)) : sortBy === 'speed' ? (sp(b) - sp(a)) || (rank(a) - rank(b)) : sortBy === 'score' ? ((b.delay > 0) - (a.delay > 0)) || (sc(b) - sc(a)) || (rank(a) - rank(b)) : rank(a) - rank(b)));
 }
 // 添加地址（edgetunnel 的地址库）：右下角的“+”。
 const addAddr = async () => {
@@ -135,13 +136,13 @@ const addAddr = async () => {
   run(async () => { const r = await api('POST', '/api/exits', { text: v }); toast(r.added ? `已添加 ${r.added} 条` : '没有新地址'); await load(); });
 };
 // 列表头：返回、标题、数量，右边是“测下载”（edgetunnel）和“测延迟”。
-function head(sub, title, n, rows, key) {
+function head(sub, title, n, rows, key, extra) {
   const pr = sub.progress;
   const sp = isET(sub) && key && (sub.speeding ? ibtn('stop', '停止测下载', () => speedStop(sub), 'on') : (() => {
     const todo = rows.filter((x) => x.delay > 0 && !(x.speed > 0)).slice(0, 8).map(key);
     return h('button', { class: 'ib', title: todo.length ? `批量测下载（延迟最低的 ${todo.length} 个）` : '都测过了', 'aria-label': '批量测下载', disabled: !todo.length, onclick: () => speedTest(sub, todo) }, icon('dl', 22));
   })());
-  return [appBar([title, h('span', { class: 'cnt' }, sub.scanning && pr ? `${pr.done} / ${pr.total}` : n)], { fn: home, title: '返回' }, sp, scanBtn(sub)), progBar(sub)];
+  return [appBar([title, h('span', { class: 'cnt' }, sub.scanning && pr ? `${pr.done} / ${pr.total}` : n)], { fn: home, title: '返回' }, extra, sp, scanBtn(sub)), progBar(sub)];
 }
 
 // 出口国家（首页的下拉栏）：有哪些国家可选。出口（反代）在这个国家的算一个；没有反代、但有入口的出口落在这个国家的也能选。
@@ -221,7 +222,8 @@ async function customAddr(me, sub, what) {
 function exitView(me, sub) {
   const pips = sub.pips || [], curId = pipIdOf(me.proxy), all = typeFlt ? pips.filter((p) => p.type === typeFlt) : pips;
   const ipOf = (p) => p.cf?.ip || p.exit?.ip, rows = filtered(all, pcc, ipOf);
-  sortsNow = ['delay', 'score', 'speed'];
+  sortsNow = ['delay', 'score', 'speed']; tuneNow = null;
+  if (!sortsNow.includes(sortBy)) sortBy = 'delay';
   const tipOf = (p) => [`${p.type === 'proxyip' ? p.value : p.type + '://' + p.value.replace(/^.*@/, '')}${p.label ? '   ' + p.label : ''}`,
     p.type !== 'proxyip' ? '全局出口：所有网站都从它出去' : null,
     p.cf?.ip ? `CF 网站看到：${p.cf.ip}  ${cname(pcc(p))} ${where(p.cf)}` : null,
@@ -254,16 +256,25 @@ function exitView(me, sub) {
 
 // 入口列表（优选 IP；通用订阅时是节点列表）。点一行 = 就用这个（手动）。
 function entryView(me, sub) {
-  const et = isET(sub), cur = et ? me.proxy.addressId : me.proxy.nodeKey, rows = filtered(sub.nodes, ecc), alive = sub.nodes.filter((n) => n.delay > 0).length;
-  sortsNow = et ? ['delay', 'speed'] : ['delay'];
-  if (!sortsNow.includes(sortBy)) sortBy = 'delay';
+  const et = isET(sub), cur = et ? me.proxy.addressId : me.proxy.nodeKey, tv = et ? sub.tune : null;
+  // 入口优选（decisions N-6）：有当前时段的分数时多一个“本时段”排序，最好的那一行标出来
+  tuneNow = tv?.scores || null;
+  sortsNow = et ? (tuneNow ? ['tune', 'delay', 'speed'] : ['delay', 'speed']) : ['delay'];
+  if (!sortsNow.includes(sortBy)) sortBy = sortsNow[0];
+  const rows = filtered(sub.nodes, ecc), alive = sub.nodes.filter((n) => n.delay > 0).length;
+  const bestId = (me.proxy.entryMode !== 'manual' && me.tune?.id) || tv?.best?.id || '', bestWhy = me.tune?.id === bestId ? me.tune.reason : tv?.best?.reason || '';
   const tipOf = (n) => [`${keyOf(n)}${n.label ? '   ' + n.label : ''}`,
     n.colo ? `机房 ${n.colo}，普通网站的出口在${cname(ecc(n))}` : (n.exit?.ip ? `出口：${n.exit.ip} ${where(n.exit)}` : null),
     n.speed > 0 ? `下载：峰值 ${n.speed} Mbps，平均 ${n.speedAvg} Mbps` : null,
+    tuneNow?.[n.id] != null ? `本时段分数 ${tuneNow[n.id]}（依据：${tv.known?.[n.id] || '本时段'}的下载记录）` : null,
+    n.id === bestId && bestWhy ? `当前时段最佳：${bestWhy}` : null,
     n.err ? `不通：${n.err}` : null, n.from === 'sub' ? (n.gone ? '已不在最新的订阅里，还通所以留用' : null) : '自己加的'].filter(Boolean).join('\n');
   const pickIt = (n) => { view = ''; patch({ proxy: et ? { nodeId: n.id, entryMode: 'manual', state: 'on' } : { nodeId: n.id, exitMode: 'manual', state: 'on' } }); };
   const kf = (k, t) => h('button', { class: 'chip' + (kindFlt === k ? ' on' : ''), title: '只看' + t, 'aria-pressed': kindFlt === k ? 'true' : 'false', onclick: () => { kindFlt = kindFlt === k ? '' : k; render(); } }, t);
-  return [head(sub, et ? '入口 优选 IP' : '节点', `${alive} / ${sub.nodes.length}`, rows, keyOf),
+  // 立即优选一轮（入口优选，decisions N-6）：测全部延迟 + 挑几个测下载、按小时记下；受每天的流量上限约束
+  const tuneB = tv && h('button', { class: 'ib' + (tv.busy ? ' on' : ''), title: tv.busy ? '正在优选…' : '立即优选一轮（测延迟，再挑几个测下载，按小时记下）', 'aria-label': '立即优选', disabled: tv.busy,
+    onclick: () => run(async () => { await api('POST', `/api/subscriptions/${sub.id}/tune`); await load(); }, '正在优选…') }, h('span', { class: tv.busy ? 'ic spin' : 'ic' }, icon(tv.busy ? 'refresh' : 'clock', 22)));
+  return [head(sub, et ? '入口 优选 IP' : '节点', `${alive} / ${sub.nodes.length}`, rows, keyOf, tuneB),
     chips(sub.nodes, ecc, et && [kf('cf', '优选'), kf('proxy', '反代')]),
     h('div', { class: 'ls', role: 'listbox' },
       rows.map((n) => { const on = n.id === cur; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (n.delay < 0 ? ' dead' : ''), role: 'option', 'aria-selected': on ? 'true' : 'false', title: tipOf(n), onclick: () => pickIt(n) },
@@ -273,7 +284,7 @@ function entryView(me, sub) {
           et && isV6(addrText(n)) ? ipSpan(addrText(n), 'ip mono', n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧'))
             : h('span', { class: 'ip' + (et ? ' mono' : '') }, et ? ipText(addrText(n)) : n.label || addrText(n), n.gone && h('small', { title: '已不在最新的订阅里，还通所以留用' }, ' · 旧')),
           h('span', { class: 'l2' }, n.delay < 0 ? h('span', { class: 'bad el' }, n.err || '不通')
-            : et ? [kindTag(n), tyIcon(n.exit?.ip, 15), pbar(scoreOf(n.exit?.ip)), scoreOf(n.exit?.ip) >= 0 && h('b', { class: scoreCls(scoreOf(n.exit?.ip)) }, scoreOf(n.exit?.ip)), n.colo && h('span', { class: 'cnt2 colo', title: 'Cloudflare 机房' }, n.colo), h('span', { class: 'el' }, where(n.exit) || n.label || '')] : h('span', { class: 'el mono' }, addrText(n)))),
+            : et ? [n.id === bestId && h('span', { class: 'tag tbest', title: bestWhy ? '当前时段最佳：' + bestWhy : '当前时段最佳' }, icon('bolt', 12), '本时段最佳'), kindTag(n), tyIcon(n.exit?.ip, 15), pbar(scoreOf(n.exit?.ip)), scoreOf(n.exit?.ip) >= 0 && h('b', { class: scoreCls(scoreOf(n.exit?.ip)) }, scoreOf(n.exit?.ip)), n.colo && h('span', { class: 'cnt2 colo', title: 'Cloudflare 机房' }, n.colo), h('span', { class: 'el' }, where(n.exit) || n.label || '')] : h('span', { class: 'el mono' }, addrText(n)))),
         speedCell(sub, n, keyOf(n)),
         dlyBtn(sub, n, et ? keyOf(n) : '')); }),
       !rows.length && h('div', { class: 'empty' }, sub.scanning ? '正在探测…' : '没有')),
@@ -378,7 +389,7 @@ function mainView(me, sub) {
   else if (noexit) kids.push(banner(true, noticeText(rt.notice, cname), lk('换国家', (ev) => pickRegion(ev.currentTarget, me, sub))));
   else if (pipGone) kids.push(banner(true, '出口不通：CF 网站连不上', lk('选别的', go('exit')), lk('改自动', allAuto)));
   else if (rt.cut || rt.error) kids.push(banner(true, [live && h('b', {}, '断网中（没有直连）：'), rt.error || rt.cut], fixes()));
-  else if (rt.notice && rt.notice !== 'switched') kids.push(banner(false, noticeText(rt.notice, cname)));
+  else if (rt.notice && rt.notice !== 'switched' && rt.notice !== 'tuned') kids.push(banner(false, noticeText(rt.notice, cname)));
   // 程序替用户改过选择（订阅被删、节点没了…）：说清楚改了什么，看过就收起
   if (rt.fixed) kids.push(banner(false, rt.fixed, lk('知道了', () => run(async () => { await api('POST', `/api/instances/${me.id}/ack`); await load(); }))));
 
@@ -421,6 +432,20 @@ function mainView(me, sub) {
       kids.push(sec('入口 优选 IP'));
       // 自动时“现在用的是哪个入口”写在开关的副标题里（不另起一行）；手动时写在正在用的那一行里。
       kids.push(row({ ic: 'tune', t: '自动选择', s: entryAuto ? (cur || '挑延迟最低的') : '固定一个，不自动换', trail: sw(entryAuto, '入口自动选择', (v) => patch({ proxy: { entryMode: v ? 'auto' : 'manual' } })) }));
+      // 当前时段最佳（入口优选，decisions N-6）：后台每小时按“下载为主、延迟为辅”给入口打分、分小时记下，
+      // 同一个出口国家里有明显更好的就自动换过去（不断开、出口不变）。这里写出它是谁、为什么。
+      const tv = sub.tune, tb = me.tune;
+      if (entryAuto && tv) {
+        const using = tb && tb.id === px.addressId, bn = tb && sub.nodes.find((n) => n.id === tb.id);
+        const why = tb ? h('span', { class: 'why' }, tb.reason) : null;
+        const tip = ['后台优选：只在入口自动、实例开着时测；每个订阅最多一小时一轮，每个地址最多下几 MB，IPv4、IPv6 都测',
+          `今天用了 ${fmtBytes(tv.used || 0)} / 每天最多 ${fmtBytes(tv.budget || 0)}`, tv.last ? `上一轮：${new Date(tv.last).toLocaleTimeString()}` : '还没测过',
+          tv.next ? `下一轮：${new Date(tv.next).toLocaleTimeString()} 之后` : null, '换入口时不断开已有的连接；出口国家不变'].filter(Boolean).join('\n');
+        // 点这一行看全部入口在这个时段的分数（列表默认按“本时段”排）；“立即优选”在列表顶上
+        kids.push(row({ ic: 'speed', t: '当前时段最佳', cls: 'tbr', title: tip, chev: true, aria: '当前时段最佳', onclick: go('entry'),
+          s: tb ? (using ? [h('span', { class: 'good' }, '正在用'), why] : [flagOf(ecc(bn || {}), ''), ipSpan(tb.key.replace(/:443$/, '')), why])
+            : tv.busy ? '正在测…' : '还没有下载记录 · 后台会自动测，点开可以现在测' }));
+      }
       if (entryAuto) {
         kids.push(row({ ic: 'flagI', t: '入口国家', trail: er ? [flag(er), cname(er)] : '跟随出口', drop: true, aria: '入口国家', onclick: (ev) => pickEntryRegion(ev.currentTarget, me, sub) }));
       } else {
@@ -534,6 +559,7 @@ function after() {
   } else scrollTo(0, keep);
   // 线路不通、程序自动换了一条：说一声（一次）
   if (me.rt.notice === 'switched' && told !== (me.rt.probe?.at || 1)) { told = me.rt.probe?.at || 1; toast('已自动换线路'); }
+  if (me.rt.notice === 'tuned' && told !== (me.rt.probe?.at || 1)) { told = me.rt.probe?.at || 1; toast('已换到这个时段更快的入口'); } // 入口优选，没断开
   // 核心服务启动后还没测过（或者上次测是很久以前）：打开面板时自动测一轮，直接探测只要几秒。
   if (!autoScanned && sub && isET(sub) && !sub.scanning && Date.now() - (sub.scannedAt || 0) > 10 * 60 * 1000) { autoScanned = true; api('POST', `/api/subscriptions/${sub.id}/test`).catch(() => {}); }
 }

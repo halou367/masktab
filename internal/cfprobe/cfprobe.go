@@ -111,21 +111,31 @@ func Trace(ctx context.Context, server string, port int, host string, useTLS boo
 // Download 经 server:port 从 Cloudflare 的测速端点下载，最多 limit 时长。
 // 返回峰值（任意连续 1 秒内的最高速率）和平均速率，单位 Mbps。tick 每 250 毫秒回调一次当前的峰值。
 func Download(ctx context.Context, server string, port int, useTLS bool, limit time.Duration, tick func(peak float64)) (peak, avg float64, err error) {
+	peak, avg, _, err = download(ctx, server, port, useTLS, limit, []string{"50000000", "20000000", "10000000"}, tick)
+	return
+}
+
+// DownloadCap 和 Download 一样，只是最多下 maxBytes 字节（后台优选用，控制流量，decisions N-6），另外返回实际收到的字节数。
+func DownloadCap(ctx context.Context, server string, port int, useTLS bool, limit time.Duration, maxBytes int64) (peak, avg float64, got int64, err error) {
+	return download(ctx, server, port, useTLS, limit, []string{strconv.FormatInt(maxBytes, 10)}, nil)
+}
+
+func download(ctx context.Context, server string, port int, useTLS bool, limit time.Duration, sizes []string, tick func(peak float64)) (peak, avg float64, got int64, err error) {
 	ctx, cancel := context.WithTimeout(ctx, limit+4*time.Second)
 	defer cancel()
 	// 端点对单次下载的大小有上限（超了返回 403），上限变过：从大到小试。
 	var c net.Conn
 	var resp *http.Response
-	for _, size := range []string{"50000000", "20000000", "10000000"} {
+	for _, size := range sizes {
 		if c, _, _, err = dial(ctx, server, port, SpeedHost, useTLS); err != nil {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
 		if _, err = fmt.Fprintf(c, "GET /__down?bytes=%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: close\r\n\r\n", size, SpeedHost); err == nil {
 			resp, err = http.ReadResponse(bufio.NewReader(c), nil)
 		}
 		if err != nil {
 			c.Close()
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
 		if resp.StatusCode == 200 {
 			break
@@ -134,11 +144,11 @@ func Download(ctx context.Context, server string, port int, useTLS bool, limit t
 		c.Close()
 		err = fmt.Errorf("这个地址不转发测速请求（HTTP %d），测不了下载", resp.StatusCode)
 		if resp.StatusCode != 403 {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
 	}
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	defer c.Close()
 	defer resp.Body.Close()
@@ -173,13 +183,13 @@ func DownloadVia(ctx context.Context, hc *http.Client, limit time.Duration, tick
 		return 0, 0, err
 	}
 	defer resp.Body.Close()
-	return measure(ctx, resp.Body, nil, limit, tick)
+	peak, avg, _, err = measure(ctx, resp.Body, nil, limit, tick)
+	return
 }
 
 // measure 读 body 最多 limit 时长，算峰值（任意连续 1 秒内的最高速率）和平均速率（Mbps）。arm 在每次读之前调用（设读超时）。
-func measure(ctx context.Context, body io.Reader, arm func(), limit time.Duration, tick func(peak float64)) (peak, avg float64, err error) {
+func measure(ctx context.Context, body io.Reader, arm func(), limit time.Duration, tick func(peak float64)) (peak, avg float64, total int64, err error) {
 	const step = 250 * time.Millisecond
-	var total int64
 	var marks []int64 // 每个 step 结束时的累计字节数
 	start := time.Now()
 	next := start.Add(step)
@@ -214,13 +224,13 @@ func measure(ctx context.Context, body io.Reader, arm func(), limit time.Duratio
 	}
 	el := time.Since(start)
 	if total == 0 {
-		return 0, 0, errors.New("没有收到数据")
+		return 0, 0, 0, errors.New("没有收到数据")
 	}
 	avg = mbps(total, el)
 	if peak < avg { // 不到 1 秒就下完了，或者速率很平
 		peak = avg
 	}
-	return peak, avg, nil
+	return peak, avg, total, nil
 }
 
 // NoIPv6 是连 IPv6 地址时“本机根本发不出去”的说法。地址本身没有问题，换到有 IPv6 的网络就能用。

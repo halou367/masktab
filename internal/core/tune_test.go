@@ -1,0 +1,335 @@
+package core
+
+import (
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/halou367/masktab/internal/model"
+)
+
+// 入口优选（decisions N-6）的打分：速度为主，延迟为辅；不通 0 分。
+func TestEntryScore(t *testing.T) {
+	if entryScore(100, 30) != 0+entryScore(1000, 30) || entryScore(100, 30) != 100 {
+		t.Fatalf("100 Mbps、30 ms 应满分且封顶：%v %v", entryScore(100, 30), entryScore(1000, 30))
+	}
+	if entryScore(50, 0) != 0 || entryScore(50, -1) != 0 {
+		t.Fatal("不通应为 0 分")
+	}
+	// 需求方：“优选 IP 决定起步上限”——快 10 倍、延迟高一倍的应当赢
+	if !(entryScore(40, 160) > entryScore(4, 80)) {
+		t.Fatalf("速度应当比延迟要紧：%v vs %v", entryScore(40, 160), entryScore(4, 80))
+	}
+	// 速度一样时延迟低的高
+	if !(entryScore(20, 60) > entryScore(20, 300)) {
+		t.Fatal("同速时延迟低的应更高")
+	}
+	// 没测过下载的只有延迟分（最多 30）
+	if entryScore(0, 10) != 30 {
+		t.Fatalf("没测过下载的满分应为 30：%v", entryScore(0, 10))
+	}
+}
+
+// 按小时记：本时段有记录用本时段；没有用相邻时段；再没有用其它时段（打九折）；本时段连续失败两次算 0。
+func TestHourEstimate(t *testing.T) {
+	nowMs := time.Now().UnixMilli()
+	h := &ipHist{}
+	h.add(21, 50, 80, true, nowMs)
+	h.add(9, 10, 80, true, nowMs)
+	if v, _, src, ok := h.estimate(21, nowMs); !ok || v != 50 || src != "本时段" {
+		t.Fatalf("21 点应取本时段 50：%v %s", v, src)
+	}
+	if v, _, src, _ := h.estimate(22, nowMs); v != 50 || src != "相邻时段" {
+		t.Fatalf("22 点应取相邻的 21 点：%v %s", v, src)
+	}
+	if v, _, src, _ := h.estimate(15, nowMs); src != "其它时段" || v != (50+10)/2.0*0.9 {
+		t.Fatalf("15 点应取全天平均打九折：%v %s", v, src)
+	}
+	// 滑动平均：新的一次占 0.4
+	h.add(21, 100, 60, true, nowMs)
+	if v, n, _, _ := h.estimate(21, nowMs); v != 70 || n != 2 {
+		t.Fatalf("滑动平均应为 70（n=2）：%v %d", v, n)
+	}
+	// 白天快、晚上慢：同一个 IP 两个时段分开记
+	if a, _, _, _ := h.estimate(9, nowMs); a != 10 {
+		t.Fatalf("9 点应为 10：%v", a)
+	}
+	h.add(21, 0, 0, false, nowMs)
+	h.add(21, 0, 0, false, nowMs)
+	if v, _, _, _ := h.estimate(21, nowMs); v != 0 {
+		t.Fatalf("本时段连续失败两次应算 0：%v", v)
+	}
+	h.add(21, 30, 70, true, nowMs)
+	if v, _, _, _ := h.estimate(21, nowMs); v == 0 {
+		t.Fatal("测成功一次应当恢复")
+	}
+	// 过期（超过 tuneHalfLifeDays 天）的不算
+	old := &ipHist{}
+	old.add(3, 80, 50, true, nowMs-int64(tuneHalfLifeDays+1)*24*3600*1000)
+	if _, _, _, ok := old.estimate(3, nowMs); ok {
+		t.Fatal("过期的记录不该算")
+	}
+	var nilH *ipHist
+	if _, _, _, ok := nilH.estimate(3, nowMs); ok {
+		t.Fatal("没有记录应为 ok=false")
+	}
+}
+
+func histOf(hour int, mbps float64) *ipHist {
+	h := &ipHist{}
+	h.add(hour, mbps, 80, true, time.Now().UnixMilli())
+	return h
+}
+
+// 要不要换：只在同一个出口国家里挑；明显更好才换；现在的不通了直接换；没测过下载的不会被换上去。
+func TestTuneDecide(t *testing.T) {
+	nowMs := time.Now().UnixMilli()
+	cs := []tuneCand{
+		{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: 90, Hist: histOf(21, 8)},
+		{ID: "b", Key: "[2606:4700::1]:443", Country: "JP", Delay: 120, V6: true, Hist: histOf(21, 60)},
+		{ID: "c", Key: "3.3.3.3:443", Country: "US", Delay: 40, Hist: histOf(21, 200)},
+		{ID: "d", Key: "4.4.4.4:443", Country: "JP", Delay: 20},                        // 没测过下载
+		{ID: "e", Key: "5.5.5.5:443", Country: "JP", Delay: -1, Hist: histOf(21, 300)}, // 不通
+	}
+	rs := rankTune(cs, 21, nowMs)
+	if rs[0].ID != "c" {
+		t.Fatalf("不分国家时最好的是 c：%+v", rs[0])
+	}
+	for _, r := range rs {
+		if r.ID == "e" {
+			t.Fatal("不通的不该参与")
+		}
+	}
+	best, cur, sw := tuneDecide(rs, "a", "JP")
+	if !sw || best.ID != "b" || cur.ID != "a" {
+		t.Fatalf("日本里应从 a 换到 IPv6 的 b：%v %v %v", sw, best.ID, cur.ID)
+	}
+	if why := tuneReason(best, cur, 21); why == "" || !strings.Contains(why, "IPv6") || !strings.Contains(why, "21 点") || !strings.Contains(why, "快 650%") {
+		t.Fatalf("理由不对：%q", why)
+	}
+	// 差一点点不换（防止来回跳）
+	cs2 := []tuneCand{
+		{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: 90, Hist: histOf(21, 30)},
+		{ID: "b", Key: "2.2.2.2:443", Country: "JP", Delay: 90, Hist: histOf(21, 33)},
+	}
+	if _, _, sw := tuneDecide(rankTune(cs2, 21, nowMs), "a", "JP"); sw {
+		t.Fatal("只快一点点不该换")
+	}
+	// 现在用的不通了：直接换到有记录的最好的
+	cs3 := []tuneCand{
+		{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: -1, Hist: histOf(21, 30)},
+		{ID: "b", Key: "2.2.2.2:443", Country: "JP", Delay: 90, Hist: histOf(21, 5)},
+	}
+	if b, _, sw := tuneDecide(rankTune(cs3, 21, nowMs), "a", "JP"); !sw || b.ID != "b" {
+		t.Fatal("现在的不通应换")
+	}
+	// 只有没测过下载的：不换
+	cs4 := []tuneCand{{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: 300}, {ID: "d", Key: "4.4.4.4:443", Country: "JP", Delay: 20}}
+	if _, _, sw := tuneDecide(rankTune(cs4, 21, nowMs), "a", "JP"); sw {
+		t.Fatal("没测过下载的不该被换上去")
+	}
+}
+
+// 这一轮测谁：正在用的先测；IPv4、IPv6 各挑最好的；留一个给这个小时没测过的；总数有上限。
+func TestTunePick(t *testing.T) {
+	nowMs := time.Now().UnixMilli()
+	cs := []tuneCand{
+		{ID: "u", Key: "u:443", Country: "JP", Delay: 300, Hist: histOf(21, 2)}, // 正在用，很慢
+		{ID: "v4a", Key: "v4a:443", Country: "JP", Delay: 50, Hist: histOf(21, 50)},
+		{ID: "v4b", Key: "v4b:443", Country: "JP", Delay: 60, Hist: histOf(21, 40)},
+		{ID: "v4c", Key: "v4c:443", Country: "JP", Delay: 70, Hist: histOf(21, 30)},
+		{ID: "v6a", Key: "v6a:443", Country: "JP", Delay: 90, V6: true, Hist: histOf(21, 45)},
+		{ID: "v6b", Key: "v6b:443", Country: "JP", Delay: 95, V6: true},
+		{ID: "new", Key: "new:443", Country: "JP", Delay: 40},
+		{ID: "dead", Key: "dead:443", Country: "JP", Delay: -1},
+	}
+	got := tunePick(rankTune(cs, 21, nowMs), map[string]bool{"u:443": true}, 5, 2, 1)
+	want := map[string]bool{"u:443": true, "v4a:443": true, "v6a:443": true}
+	if len(got) != 5 {
+		t.Fatalf("应测 5 个：%v", got)
+	}
+	if got[0] != "u:443" {
+		t.Fatalf("正在用的应先测：%v", got)
+	}
+	n6 := 0
+	for _, k := range got {
+		if k == "dead:443" {
+			t.Fatal("不通的不该测")
+		}
+		if k == "v6a:443" || k == "v6b:443" {
+			n6++
+		}
+		delete(want, k)
+	}
+	if len(want) != 0 || n6 == 0 {
+		t.Fatalf("v4、v6 都要有最好的：%v（缺 %v）", got, want)
+	}
+	if got[len(got)-1] != "new:443" {
+		t.Fatalf("最后一个留给没测过的（延迟最低的那个）：%v", got)
+	}
+	if g := tunePick(rankTune(cs, 21, nowMs), nil, 2, 2, 1); len(g) != 2 {
+		t.Fatalf("上限 2：%v", g)
+	}
+}
+
+// 有优选分数时，自动选入口按分数（下载为主）挑，不再只看延迟。
+func TestPickEntryByScore(t *testing.T) {
+	cs := []cand{
+		{ID: "fastping", Delay: 40, Country: "JP", Score: entryScore(3, 40)},
+		{ID: "fastdl", Delay: 120, Country: "JP", Score: entryScore(60, 120)},
+	}
+	if id, ok := pickEntry(cs, "JP", "", nil); !ok || id != "fastdl" {
+		t.Fatalf("应挑下载快的：%v", id)
+	}
+	// 当前的仍然可用就不换（换入口交给后台优选，按“明显更好”才换）
+	if id, _ := pickEntry(cs, "JP", "fastping", nil); id != "fastping" {
+		t.Fatal("当前的仍可用就不动")
+	}
+	// 都没有分数：照旧按延迟
+	if id, _ := pickEntry([]cand{{ID: "a", Delay: 90}, {ID: "b", Delay: 30}}, "", "", nil); id != "b" {
+		t.Fatal("没有分数时按延迟")
+	}
+}
+
+// 一个假的“入口”：/cdn-cgi/trace 回机房，/__down 按给定速度发数据。
+func fakeEntry(t *testing.T, colo string, perChunk time.Duration) (string, int) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cdn-cgi/trace", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "fl=1\nip=198.51.100.9\nts=1\ncolo=%s\nloc=JP\n", colo)
+	})
+	mux.HandleFunc("/__down", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("bytes"))
+		w.Header().Set("Content-Length", strconv.Itoa(n))
+		buf := make([]byte, 64<<10)
+		for sent := 0; sent < n; {
+			k := min(len(buf), n-sent)
+			if _, err := w.Write(buf[:k]); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			sent += k
+			time.Sleep(perChunk)
+		}
+	})
+	s := httptest.NewServer(mux)
+	t.Cleanup(s.Close)
+	h, p, _ := net.SplitHostPort(s.Listener.Addr().String())
+	port, _ := strconv.Atoi(p)
+	return h, port
+}
+
+// 整轮：测延迟 → 测下载（受流量上限约束）→ 按小时记下 → 入口自动的实例在同一个国家里换到明显更快的入口，不断流。
+func TestTuneRound(t *testing.T) {
+	a := healApp(t)
+	slowH, slowP := fakeEntry(t, "NRT", 60*time.Millisecond) // 约 8 Mbps
+	fastH, fastP := fakeEntry(t, "NRT", 0)
+	sub := &model.Subscription{ID: "s1", Name: "et", Kind: "edgetunnel", Hosts: []string{"h.example"},
+		Template: &model.Template{Base: map[string]any{"type": "vless"}, BasePath: "/"}}
+	a.Subs = append(a.Subs, sub)
+	a.Addresses = append(a.Addresses,
+		&model.Address{ID: "slow", Server: slowH, Port: slowP, Source: "subscription", SubscriptionID: "s1"},
+		&model.Address{ID: "fast", Server: fastH, Port: fastP, Source: "subscription", SubscriptionID: "s1"})
+	in := a.testInst(t)
+	a.mu.Lock()
+	in.Proxy.State, in.Proxy.SubscriptionID, in.Proxy.AddressID, in.Proxy.AddressMode, in.Proxy.EntryMode = "on", "s1", "slow", "custom", "auto"
+	r := a.rtLocked(in.ID)
+	r.active, r.Running = true, true
+	r.Probe = &model.ExitProbe{CF: &model.IPInfo{IP: "203.0.113.1", Country: "JP"}, Direct: &model.IPInfo{IP: "104.28.0.1", Country: "JP"}}
+	a.mu.Unlock()
+	probed := 0
+	tuneProbe = func(int, []string) model.ExitProbe {
+		probed++
+		return model.ExitProbe{At: now(), CF: &model.IPInfo{IP: "203.0.113.1", Country: "JP"}, Direct: &model.IPInfo{IP: "104.28.0.2", Country: "JP"}}
+	}
+	defer func() { tuneProbe = defaultTuneProbe }()
+
+	if n := a.TuneRound("s1"); n != 2 {
+		t.Fatalf("两个入口都该测下载：%d", n)
+	}
+	a.mu.Lock()
+	hour := time.Now().Hour()
+	hs, hf := a.tune.Hist[hostPort(slowH, slowP)], a.tune.Hist[hostPort(fastH, fastP)]
+	if hs == nil || hf == nil || hs.Hours[hour].N != 1 || hf.Hours[hour].N != 1 {
+		a.mu.Unlock()
+		t.Fatalf("两个入口都该按当前小时记一次：%+v %+v", hs, hf)
+	}
+	if !(hf.Hours[hour].Mbps > hs.Hours[hour].Mbps*1.5) {
+		a.mu.Unlock()
+		t.Fatalf("快的应明显更快：%v vs %v", hf.Hours[hour].Mbps, hs.Hours[hour].Mbps)
+	}
+	if a.tune.Used <= 0 || a.tune.Used > 2*tuneCap(false) {
+		a.mu.Unlock()
+		t.Fatalf("用量应在上限内：%d", a.tune.Used)
+	}
+	if in.Proxy.AddressID != "fast" || r.Notice != "tuned" || probed != 1 {
+		a.mu.Unlock()
+		t.Fatalf("应换到快的入口并确认一次：%s %q %d", in.Proxy.AddressID, r.Notice, probed)
+	}
+	if r.Cut != "" {
+		a.mu.Unlock()
+		t.Fatal("换入口不该断流")
+	}
+	v := a.tuneViewLocked(sub)
+	if v == nil || v.Best == nil || v.Best.ID != "fast" || v.Best.Reason == "" || v.Scores["fast"] <= v.Scores["slow"] {
+		a.mu.Unlock()
+		t.Fatalf("界面应显示当前时段最佳是 fast：%+v", v)
+	}
+	a.mu.Unlock()
+
+	// 记录落盘，重开还在
+	b, err := Open(a.Dir, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.tune.Hist[hostPort(fastH, fastP)] == nil {
+		t.Fatal("记录应落盘")
+	}
+
+	// 今天的流量用完了：只测延迟，不测下载
+	a.mu.Lock()
+	a.tune.Used = tuneBudget(false)
+	a.mu.Unlock()
+	if n := a.TuneRound("s1"); n != 0 {
+		t.Fatalf("用量到上限后不该再测下载：%d", n)
+	}
+
+	// 确认没通过（出口国家变了）：换回去
+	a.mu.Lock()
+	a.tune.Used = 0
+	in.Proxy.AddressID = "slow"
+	a.mu.Unlock()
+	tuneProbe = func(int, []string) model.ExitProbe {
+		return model.ExitProbe{At: now(), CF: &model.IPInfo{Country: "US"}, Direct: &model.IPInfo{Country: "US"}}
+	}
+	a.tuneApply("s1")
+	if in.Proxy.AddressID != "slow" {
+		t.Fatal("出口国家变了应换回去")
+	}
+}
+
+// 手动入口的实例不测、不换（不花流量）。
+func TestTuneOnlyAutoEntries(t *testing.T) {
+	a := healApp(t)
+	sub := etSub(a, "s1", "et", "192.0.2.10")
+	a.Subs = append(a.Subs, sub)
+	in := a.testInst(t)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	in.Proxy.State, in.Proxy.SubscriptionID, in.Proxy.EntryMode = "on", "s1", "manual"
+	a.rtLocked(in.ID).active = true
+	if len(a.tuneUsersLocked("s1")) != 0 {
+		t.Fatal("入口手动的不该算")
+	}
+	if v := a.tuneViewLocked(sub); v == nil || v.Next != 0 {
+		t.Fatalf("没有要测的实例时 next 应为 0：%+v", v)
+	}
+	in.Proxy.EntryMode = "auto"
+	if len(a.tuneUsersLocked("s1")) != 1 {
+		t.Fatal("入口自动、开着的应算")
+	}
+}

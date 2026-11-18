@@ -14,13 +14,14 @@ import (
 // cand 是参与自动选择的一条候选：入口地址（或通用节点），或反代。
 type cand struct {
 	ID        string
-	Key       string // 入口：server:port；反代：取值。用来判断"入口和反代是同一个地址"
-	Delay     int    // > 0 可用
-	Country   string // 入口：普通网站看到的出口所在国家；反代：Cloudflare 站点看到的出口所在国家
-	CFCountry string // 仅入口：不指定反代时，Cloudflare 站点看到的出口所在国家
-	Derived   bool   // 仅反代：来自入口地址列表（不是用户自己加进反代列表的）
-	Used      bool   // 仅反代：已被别的实例占用
-	Type      string // 仅反代：出口类型 proxyip | sstp | socks5 | http | https | turn
+	Key       string  // 入口：server:port；反代：取值。用来判断"入口和反代是同一个地址"
+	Delay     int     // > 0 可用
+	Country   string  // 入口：普通网站看到的出口所在国家；反代：Cloudflare 站点看到的出口所在国家
+	CFCountry string  // 仅入口：不指定反代时，Cloudflare 站点看到的出口所在国家
+	Derived   bool    // 仅反代：来自入口地址列表（不是用户自己加进反代列表的）
+	Used      bool    // 仅反代：已被别的实例占用
+	Type      string  // 仅反代：出口类型 proxyip | sstp | socks5 | http | https | turn
+	Score     float64 // 仅入口：入口优选给的当前时段分数（有下载记录才有，decisions N-6）；0 = 没有，只比延迟
 }
 
 // ofType 只留 typ 这一类出口（空 = 全部）。出口国家下拉里选了“出口类型”时，自动选择只在这一类里挑（decisions N-5）。
@@ -48,7 +49,7 @@ func findCand(cs []cand, id string) (cand, bool) {
 	return cand{}, false
 }
 
-// pickEntry 选入口：出口在 region（空 = 不限）的可用入口里延迟最低的。
+// pickEntry 选入口：出口在 region（空 = 不限）的可用入口里最好的（有优选分数的按分数，见 betterEntry；否则延迟最低）。
 // 当前入口仍然符合条件就不换（出口稳定比快更重要）。没有符合条件的返回 ok = false，调用方不得换到别的地区。
 func pickEntry(cs []cand, region, cur string, exclude map[string]bool) (string, bool) {
 	fit := func(c cand) bool {
@@ -59,11 +60,19 @@ func pickEntry(cs []cand, region, cur string, exclude map[string]bool) (string, 
 	}
 	best, found := cand{}, false
 	for _, c := range cs {
-		if fit(c) && (!found || c.Delay < best.Delay) {
+		if fit(c) && (!found || betterEntry(c, best)) {
 			best, found = c, true
 		}
 	}
 	return best.ID, found
+}
+
+// betterEntry：分数高的在前（入口优选的当前时段分数：下载为主、延迟为辅，decisions N-6）；分数一样（含都没有分数）比延迟。
+func betterEntry(c, best cand) bool {
+	if c.Score != best.Score {
+		return c.Score > best.Score
+	}
+	return c.Delay < best.Delay
 }
 
 // entryWant：入口自动时，要不要先在用户指定的入口国家（want）里挑。返回要用的国家代码；空 = 不管它，按"跟随出口"的老办法。

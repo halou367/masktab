@@ -280,6 +280,15 @@
       "ok": true
      }
     ]
+   },
+   "tune": {
+    "id": "c3f0a6b2-6e0a-4c55-9d7e-v6jp0000001",
+    "key": "[2606:4700:3030::6815:2001]:443",
+    "score": 86.1,
+    "mbps": 62,
+    "delay": 120,
+    "v6": true,
+    "reason": "IPv6 · 21 点下载 62 Mbps · 延迟 120 ms · 比现在用的快 340%"
    }
   },
   {
@@ -611,6 +620,15 @@
      "ok": true
     }
    ]
+  },
+  "tune": {
+   "id": "c3f0a6b2-6e0a-4c55-9d7e-v6jp0000001",
+   "key": "[2606:4700:3030::6815:2001]:443",
+   "score": 86.1,
+   "mbps": 62,
+   "delay": 120,
+   "v6": true,
+   "reason": "IPv6 · 21 点下载 62 Mbps · 延迟 120 ms · 比现在用的快 340%"
   }
  },
  "net": {
@@ -747,6 +765,28 @@
      "colo": "HKG",
      "tcp": 20,
      "at": 1794656746406
+    },
+    {
+     "id": "c3f0a6b2-6e0a-4c55-9d7e-v6jp0000001",
+     "server": "2606:4700:3030::6815:2001",
+     "port": 443,
+     "label": "",
+     "host": "et.test",
+     "type": "vless",
+     "from": "sub",
+     "delay": 120,
+     "exit": {
+      "ip": "",
+      "country": "JP",
+      "city": "Tokyo",
+      "org": "Cloudflare"
+     },
+     "kind": "cf",
+     "colo": "NRT",
+     "tcp": 60,
+     "at": 1794656746406,
+     "speed": 62,
+     "speedAvg": 48
     }
    ],
    "pips": [
@@ -814,7 +854,7 @@
      "at": 1794656746406
     }
    ],
-   "nodeCount": 3,
+   "nodeCount": 4,
    "scanning": false,
    "scannedAt": 1794656746454,
    "speeding": false,
@@ -826,7 +866,33 @@
      "type": "vless",
      "net": "ws"
     }
-   ]
+   ],
+   "tune": {
+    "hour": 21,
+    "best": {
+     "id": "c3f0a6b2-6e0a-4c55-9d7e-v6jp0000001",
+     "key": "[2606:4700:3030::6815:2001]:443",
+     "score": 86.1,
+     "mbps": 62,
+     "delay": 120,
+     "v6": true,
+     "reason": "IPv6 · 21 点下载 62 Mbps · 延迟 120 ms"
+    },
+    "scores": {
+     "c3f0a6b2-6e0a-4c55-9d7e-v6jp0000001": 86.1,
+     "8a6dcd25-bc37-4dde-942d-205e75f7a588": 52.3,
+     "be998848-98cd-4e51-9280-45cf60e9c389": 40.2
+    },
+    "known": {
+     "c3f0a6b2-6e0a-4c55-9d7e-v6jp0000001": "本时段",
+     "8a6dcd25-bc37-4dde-942d-205e75f7a588": "本时段",
+     "be998848-98cd-4e51-9280-45cf60e9c389": "相邻时段"
+    },
+    "last": 1763470000000,
+    "next": 1763473600000,
+    "used": 24117248,
+    "budget": 314572800
+   }
   }
  ],
  "vault": {

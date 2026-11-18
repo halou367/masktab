@@ -149,6 +149,7 @@ func (a *App) ensureCore() {
 	_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)
 	log.Printf("代理内核：%s", bin)
 	go a.statsLoop()
+	a.tuneOnce.Do(func() { go a.tuneLoop() }) // 入口优选（decisions N-6）
 	go func() { _ = a.applyConfig() }()
 }
 

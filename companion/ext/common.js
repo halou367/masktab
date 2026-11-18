@@ -26,6 +26,7 @@ export function noticeText(n, cname = (c) => c) {
   if (n.startsWith('noexit:')) return n.length > 7 ? `${cname(n.slice(7))}无可用出口` : '所选类型里没有可用的出口';
   if (n.startsWith('noentry:')) return `${cname(n.slice(8))}没有可用的入口，已跟随出口`;
   if (n === 'switched') return '线路不通，已自动换了一条';
+  if (n === 'tuned') return '已换到这个时段更快的入口（没有断开，出口没变）'; // 入口优选（decisions N-6）
   return n;
 }
 // 头像上的字：实例名里的第一个字母，或开头的那串数字（最多三位）；名字里没有就用编号（整个编号，不是第一位）。

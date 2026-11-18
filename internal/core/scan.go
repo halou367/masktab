@@ -636,9 +636,14 @@ func (a *App) bestNodeLocked(sub *model.Subscription, exclude map[string]bool) s
 
 func (a *App) entryCandsLocked(nodes []nodeRef) []cand {
 	out := make([]cand, 0, len(nodes))
+	t := time.Now()
 	for _, n := range nodes {
 		sc := a.scanLocked(n.Name)
 		c := cand{ID: n.ID, Key: n.key(), Delay: sc.Delay}
+		if sc.Delay > 0 { // 入口优选的当前时段分数（decisions N-6）：没测过下载的只按延迟算分，测过的加上速度
+			mbps, _, _, _ := a.tune.Hist[n.key()].estimate(t.Hour(), t.UnixMilli())
+			c.Score = entryScore(mbps, sc.Delay)
+		}
 		if sc.Exit != nil {
 			c.Country = sc.Exit.Country
 		}

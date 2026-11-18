@@ -14,7 +14,7 @@ const [dir, out, desk] = process.argv.slice(2).filter((a) => !a.startsWith('--')
 // 分段跑（--only=段名,段名）：整套要两分多钟，改哪一块就只跑哪一段；scripts/check.sh pages 会把各段分给几个进程同时跑。
 // 段名见下面每一段开头的 want('…')；不带 --only 就全跑。新加的检查放进合适的段，或者新开一段（记得写进 scripts/check.sh 的 PAGE_SECTIONS）。
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean);
-const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'fp'];
+const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'fp'];
 for (const s of ONLY) if (!SECTIONS.includes(s)) { console.error(`没有这一段：${s}（有：${SECTIONS.join(' ')}）`); process.exit(2); }
 const took = []; let cur = null;
 const want = (name) => { const t = Date.now(); if (cur) took.push(`${cur.name} ${((t - cur.t) / 1000).toFixed(0)}s`); cur = null; const ok = !ONLY.length || ONLY.includes(name); if (ok) cur = { name, t }; return ok; };
@@ -278,7 +278,7 @@ if (want('flow')) {
   // 首页不重复：没有“当前出口 / 当前入口”两行；自动时没有“从列表里选”
   const rowsNow = () => pg.evaluate(() => [...document.querySelectorAll('#root .row')].map((e) => ({ t: e.querySelector('.t')?.innerText.trim(), on: e.classList.contains('on') })));
   let rr = await rowsNow();
-  check('自动选择开着：只有国家那一行，没有“当前出口 / 当前入口”、没有“从列表里选”', !rr.some((r) => /当前|从列表里选|自定义/.test(r.t)) && rr.filter((r) => /国家$/.test(r.t)).length === 2, { rr });
+  check('自动选择开着：只有国家那一行，没有“当前出口 / 当前入口”、没有“从列表里选”', !rr.some((r) => /当前(出口|入口)|从列表里选|自定义/.test(r.t)) && rr.filter((r) => /国家$/.test(r.t)).length === 2, { rr });
   await pg.locator('button.sw[aria-label="出口自动选择"]').click();
   await pg.waitForTimeout(300);
   px = (await calls()).filter((c) => c.m === 'PATCH').pop()?.b?.proxy;
@@ -563,6 +563,9 @@ if (desk && want('desk')) {
   await dp.locator('button.mi', { hasText: '节点与出口' }).click();
   await dp.waitForTimeout(400);
   await dp.screenshot({ path: path.join(out, 'desk-node.png'), fullPage: true });
+  // 入口优选（decisions N-6）：电脑弹窗的节点页也有“当前时段最佳”和理由，不溢出
+  { const tb = await dp.evaluate(() => { const e = document.querySelector('.row.tbr'); if (!e) return null; const r = e.getBoundingClientRect(); return { t: e.innerText, w: r.right <= innerWidth + 1, lk: !!e.querySelector('button.lk'), tip: e.title }; });
+    check('电脑版节点页：“当前时段最佳”写出 IPv6 入口和理由，悬停说明流量上限', !!tb && /当前时段最佳/.test(tb.t) && /IPv6/.test(tb.t) && /比现在用的快 340%/.test(tb.t) && tb.w && /每天最多 300(\.0)? MB/.test(tb.tip), tb); }
   // 节点页上的文字（去掉会跳的流量数字和设备名）
   const words = (p) => p.evaluate(() => [...document.querySelectorAll('#root .sec, #root .row, #root .card, #root .warn')].map((e) => e.innerText.replace(/\s+/g, ' ').trim()).filter((t) => t && !/↑|Android|Windows|Linux|macOS/.test(t)));
   const mp = await ctx.newPage();
@@ -754,13 +757,46 @@ if (want('v6')) for (const w of [412, 320]) {
   await pg.locator('button.row[aria-label="选入口"]').click({ timeout: 5000 }); await pg.waitForTimeout(400);
   r = await rows('.ls .iprow');
   const dead = await pg.evaluate(() => [...document.querySelectorAll('.ls .iprow.dead')].map((e) => e.innerText).join(' | '));
-  check(`入口列表（${w} 宽）：两个 IPv6 都写全、带端口的加方括号、不通的写出“本机网络没有 IPv6”`, r.n === 5 && r.has.includes('A') && r.has.includes('B') && r.cut.length === 0 && r.wide.length === 0 && dead.includes(`[${V6B}]`) && dead.includes('本机网络没有 IPv6'), { r, dead });
+  check(`入口列表（${w} 宽）：两个 IPv6 都写全、带端口的加方括号、不通的写出“本机网络没有 IPv6”`, r.n === 6 && r.has.includes('A') && r.has.includes('B') && r.cut.length === 0 && r.wide.length === 0 && dead.includes(`[${V6B}]`) && dead.includes('本机网络没有 IPv6'), { r, dead });
   await pg.screenshot({ path: path.join(out, `v6-entry-${w}.png`) });
   await pg.reload(); await pg.waitForTimeout(700);
   await pg.locator('button.row[aria-label="选出口"]').click({ timeout: 5000 }); await pg.waitForTimeout(400);
   r = await rows('.ls .iprow');
   check(`出口列表（${w} 宽）：IPv6 的反代写全`, r.n === 5 && r.has.includes('B') && r.cut.length === 0 && r.wide.length === 0, { r });
   await pg.screenshot({ path: path.join(out, `v6-exit-${w}.png`) });
+  await c.close();
+}
+// 入口优选（decisions N-6，需求方：“优选 IP 决定起步上限……先决条件必须优选 IP 足够好”）：
+// 节点页“当前时段最佳”写出是谁、为什么，能“立即测”；入口列表多一个“本时段”排序，最佳那一行有标签；窄屏不溢出。
+if (want('tune')) for (const w of [412, 320]) {
+  const c = await br.newContext({ viewport: { width: w, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, fixture);
+  const pg = await c.newPage(); watch(pg, 'tune-' + w);
+  const wide = () => pg.evaluate(() => { const W = innerWidth; return [...document.querySelectorAll('#root *')].filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.right > W + 1 || r.left < -1); }).map((e) => e.className || e.tagName).slice(0, 3); });
+  await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(700);
+  const tb = await pg.evaluate(() => { const e = document.querySelector('.row.tbr'); return e ? { t: e.innerText, tip: e.title, ip6: !!e.querySelector('.ip6'), flag: !!e.querySelector('.flag') } : null; });
+  check(`节点页（${w} 宽）：入口自动时有“当前时段最佳”，写出 IPv6 地址、国旗和理由（下载、延迟、比现在快多少）`, !!tb && tb.ip6 && tb.flag && /IPv6 · 21 点下载 62 Mbps · 延迟 120 ms · 比现在用的快 340%/.test(tb.t), tb);
+  check(`节点页（${w} 宽）：悬停说明后台什么时候测、流量上限、不断开`, !!tb && /只在入口自动、实例开着时测/.test(tb.tip) && /今天用了 23\.0 MB/.test(tb.tip) && /不断开已有的连接/.test(tb.tip), tb?.tip);
+  check(`节点页（${w} 宽）：“当前时段最佳”这一行不横向溢出`, (await wide()).length === 0, await wide());
+  await pg.screenshot({ path: path.join(out, `tune-node-${w}.png`), fullPage: true });
+  // 点这一行 = 看全部入口：默认按“本时段”排，最佳那一行在最上面、带“本时段最佳”标签
+  await pg.locator('.row.tbr').click(); await pg.waitForTimeout(500);
+  const ls = await pg.evaluate(() => ({ n: document.querySelectorAll('.ls .iprow').length, first: document.querySelector('.ls .iprow')?.innerText || '', tag: document.querySelectorAll('.ls .iprow .tag.tbest').length, sort: document.querySelector('.sortb')?.innerText || '', tip: document.querySelector('.ls .iprow')?.title || '' }));
+  check(`入口列表（${w} 宽）：按“本时段”排，第一行是当前时段最佳的 IPv6 并带标签，悬停写分数和理由`, ls.n === 4 && /2606:4700:3030/.test(ls.first.replace(/\s/g, '')) && ls.tag === 1 && /本时段/.test(ls.sort) && /本时段分数 86\.1/.test(ls.tip) && /当前时段最佳：IPv6/.test(ls.tip), ls);
+  check(`入口列表（${w} 宽）：不横向溢出`, (await wide()).length === 0, await wide());
+  await pg.screenshot({ path: path.join(out, `tune-entry-${w}.png`) });
+  await pg.evaluate(() => window.__calls.splice(0));
+  await pg.locator('.appbar button[aria-label="立即优选"]').click(); await pg.waitForTimeout(300);
+  check(`入口列表（${w} 宽）：顶上“立即优选”调 /tune`, await pg.evaluate(() => window.__calls.some((x) => x.m === 'POST' && /\/api\/subscriptions\/[^/]+\/tune$/.test(x.p))), await pg.evaluate(() => window.__calls.map((x) => x.p)));
+  await c.close();
+}
+// 入口手动的实例：不显示“当前时段最佳”（手动不测、不换，不花流量）
+if (want('tune')) {
+  const man = JSON.parse(JSON.stringify(fixture));
+  for (const m of [man.me, man.instances.find((x) => x.id === man.me.id)]) { m.proxy.entryMode = 'manual'; delete m.tune; }
+  const c = await br.newContext({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, man);
+  const pg = await c.newPage(); watch(pg, 'tune-man');
+  await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(700);
+  check('节点页：入口手动时不显示“当前时段最佳”', await pg.locator('.row.tbr').count() === 0, {});
   await c.close();
 }
 // 在线更新（决策 N-3）：“组件与更新”页按 st.update 的各个阶段画；新标签页和设置首页有提示
