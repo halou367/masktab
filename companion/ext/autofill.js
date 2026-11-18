@@ -22,6 +22,7 @@
   window.__masktabFill = true;
   const send = (m) => new Promise((res) => { try { chrome.runtime.sendMessage(m, (r) => res(chrome.runtime.lastError ? null : r)); } catch { res(null); } });
   let info = null, infoAt = 0, lastSaved = '', pendingUser = '', hasRule = null;
+  const byDefault = new WeakMap(); // 默认密码自动填进去的框 → 填的值（用户改过就不算，见 capture）
   // 本实例在这个站点记住的账号（不含导入的邮箱账号，也不含同一网站别的子域名上记的——那些只作候选）。
   const own = (inf) => (inf?.items || []).filter((x) => x.mine && !x.near && x.site !== '*');
   const filled = new WeakSet(); // 每个输入框只自动填一次（两步登录的两页各填各的）
@@ -210,7 +211,7 @@
     // 只有一个邮箱框的那一页（两步登录 / 两步注册的第一页）：看起来得是登录或注册页，免得把首页的“订阅邮件”框也填上
     if (!pws.length && !(loginPage(pws, lone) || SIGNUPISH.test(location.pathname + ' ' + document.title))) return;
     const done = [];
-    const put = (e, v) => { if (e && v && !e.value && !filled.has(e)) { setVal(e, v); filled.add(e); done.push(e); } };
+    const put = (e, v) => { if (e && v && !e.value && !filled.has(e)) { setVal(e, v); filled.add(e); done.push(e); if (e.type === 'password') byDefault.set(e, v); } };
     if (email) {
       if (signup) {
         const scope = pws[0]?.form || document;
@@ -263,7 +264,10 @@
     send({ t: 'vault:pending-set', user: v });
   }
   // 先同步把值读出来（有的网页点了登录会立刻清空 / 换掉表单），再异步保存。
-  function capture() {
+  // hide = 离开页面时（pagehide）：用户没点提交。框里只是我们刚填的默认密码时不当成“登录了”去记住（decisions M-6：只填不提交，
+  // 用户没登录就不该多出一条账号；Firefox 上离开页面时会走到这里，CI 的 rec-test firefox 那一遍抓到过）。
+  function capture(hide) {
+    if (hide && pwFields().some((p) => p.value) && pwFields().filter((p) => p.value).every((p) => byDefault.get(p) === p.value)) return;
     stashUser();
     if (rec) { if (!elsewhere()) snap(); rec.submitAt = Date.now(); if (rec.pass?.val) rec.lock = true; paintBar(); syncRec(); return; } // 录入中：等登录成功再一起保存
     const pws = pwFields().filter((p) => p.value);
@@ -305,7 +309,7 @@
     if (ev.key === 'Enter' && t instanceof HTMLInputElement && (t.type === 'password' || (rec && slots.has(t)) || t === loneUserField() || t === userFieldFor(pwFields()[0]))) capture();
   }, true);
   // 录入中换页：没点过登录就不算提交（可能只是点了别的链接），只把已经录到的带到下一页。
-  addEventListener('pagehide', () => { if (rec) { if (rec.submitAt) snap(); syncRec(); return; } capture(); });
+  addEventListener('pagehide', () => { if (rec) { if (rec.submitAt) snap(); syncRec(); return; } capture(true); });
 
   // ---------- 录入模式 ----------
   // rec：{ auto 自动进入的, at 开始时间, submitAt 最近一次点登录的时间, lock 密码已提交后不再认新的账号框,

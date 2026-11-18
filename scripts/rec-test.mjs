@@ -280,6 +280,8 @@ console.log(`[${kind}] 九 默认邮箱 + 默认密码：注册页、登录页�
   got = await until(async () => { const x = await v(); return x.pw ? x : null; }, 5000) || await v();
   check('两步登录第二页（只剩密码框，上一步是这个邮箱）：填默认密码', got.pw === 'Def#Pass9', JSON.stringify(got));
   await p9.goto('https://two.test/signin');
+  await sleep(600);
+  check('离开只自动填了默认密码、没提交的页面：不当成登录了去记住账号', !(await items(C)).some((x) => x.site.includes('two.test')), JSON.stringify(await items(C)));
   await sleep(800);
   await p9.locator('input[name=identifier]').fill('');
   await p9.locator('input[name=identifier]').pressSequentially('someone.else@example.com');
