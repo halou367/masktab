@@ -566,6 +566,9 @@ download_phase() {
     # shellcheck disable=SC2046
     set -- $(echo "$b" | grep -o '[0-9]\+'); A shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
   }
+  # 安装时带了 -g（权限全给）：把通知权限收回去，好验证“第一次下载时问一次”。收回权限系统会把 app 关掉，重新打开
+  A shell pm revoke $PKG android.permission.POST_NOTIFICATIONS; A shell pm clear-permission-flags $PKG android.permission.POST_NOTIFICATIONS user-set user-fixed > /dev/null 2>&1 || true
+  sleep 2; A shell am start -n $ACT > /dev/null; sleep 25
   A shell "am start -n $ACT --es mt_inst p1" > /dev/null; sleep 10; closepanel
 
   # 1. 下载一个文件（从外面打开一个下载地址，和在网页里点下载链接走的是内核的同一个回调）：

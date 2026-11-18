@@ -75,7 +75,7 @@
 ## 手机外壳（`android/app/src/main/java/…`）
 
 `MainActivity.kt` 界面外壳；`Core.kt` GeckoView 和标签页；`Host.kt` 核心服务子进程和状态缓存；`Bridge.kt` 扩展 ↔ app ↔ 核心服务；
-`Chrome.kt`、`Views.kt` 原生小控件；`Updater.kt`、`Addons.kt`、`Prompts.kt`、`Diag.kt`。新接口不用改 Kotlin：`Bridge.kt` 原样转发。
+`Chrome.kt`、`Views.kt` 原生小控件；`Updater.kt`、`Addons.kt`、`Prompts.kt`、`Diag.kt`、`Downloads.kt`（下载，A-14；页面是 `android/ext/main.js` 的 `downloadsPage`）。新接口不用改 Kotlin：`Bridge.kt` 原样转发。
 
 ## 常见改动去哪改
 
@@ -103,6 +103,7 @@
 |---|---|---|---|
 | 秒级 | `scripts/check.sh fast` | Go 单元测试（`*_test.go`，逻辑都该在这一层有测试）、vet、语法 | — |
 | 十几秒～半分钟 | `scripts/check.sh pages [段]` | 假状态 + 真页面：两端每一页的点按流程、排版 | `android/scripts/preview-pages.mjs`（分段，`fixture-state.json` 是假状态） |
+| 半分钟 | `scripts/check.sh kt` | 安卓 Kotlin 能不能编过（只查类型；资源、清单、打包要等 CI） | `android/scripts/typecheck.sh` |
 | 半分钟 | `scripts/check.sh ext` | 真扩展装进真 Chromium + 真核心服务 | `scripts/rec-test.mjs`、`ext-e2e.mjs` |
 | 三分钟 | `scripts/check.sh smoke` | 真内核 + 真核心服务：开实例、指纹、隔离、断流、订阅、编号 | `scripts/smoke.mjs` |
 | 二十多分钟 | `scripts/release.sh [--check]` | Windows 安装包和真窗口、安卓模拟器；通过后发版 | `.github/workflows/*.yml` |

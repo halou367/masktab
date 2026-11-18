@@ -37,13 +37,12 @@ open(os.path.join(DIR, 'file.bin'), 'wb').write(BIN)
 # 版面是定死的（冒烟脚本在无障碍信息里找不到控件时按这个算坐标）：图片 0–220，链接 220–330，上传 330–440，日期 440–550（CSS 像素）
 PAGE = '''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>下载测试页</title>
 <body style="margin:0;font:18px sans-serif;background:#fff;color:#111">
-<img id="pic" src="/dl/pic.png" alt="测试图片" style="display:block;width:100%;height:220px;object-fit:cover">
+<img id="pic" src="/dl/pic.png" alt="测试图片" style="display:block;width:100%;height:220px;object-fit:cover" onload="console.info('MTDL page ok '+this.naturalWidth)" onerror="console.info('MTDL page noimg')">
 <a id="lnk" href="/dl/file" style="display:block;height:110px;line-height:110px;padding:0 16px;box-sizing:border-box">下载测试文件</a>
 <button id="up" aria-label="上传测试" style="display:block;width:100%;height:110px;margin:0;padding:0 16px;box-sizing:border-box;font:inherit;text-align:left" onclick="document.getElementById('f').click()">上传测试</button>
 <input type="file" id="f" style="display:none" onchange="var x=this.files[0];console.info('MTDL upload '+x.name+' '+x.size);document.getElementById('out').textContent='已选 '+x.name+' '+x.size">
 <input type="date" id="d" aria-label="生日测试" style="display:block;width:100%;height:110px;margin:0;padding:0 16px;box-sizing:border-box;font:inherit" onchange="console.info('MTDL date '+this.value);document.getElementById('out').textContent='日期 '+this.value">
 <div id="out" style="padding:16px;color:#555">—</div>
-<script>document.getElementById('pic').onload=function(){console.info('MTDL page ok '+this.naturalWidth)};document.getElementById('pic').onerror=function(){console.info('MTDL page noimg')}</script>
 '''.encode()
 
 

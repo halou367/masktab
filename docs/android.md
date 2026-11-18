@@ -18,7 +18,8 @@
 | 界面 | 新标签页、设置各页、节点与出口、指纹与伪装、订阅与地址库、实例管理、诊断的内容都和电脑版共用同一份文件（`ntp.js` `pages.js` `panel.js` `instances.js`，样式 `ui.css`），手机只有外壳（工具栏、浮层、返回键、系统栏）是自己的 |
 | 启动 | 原生启动页：准备内核 → 加载内置扩展 → 启动核心服务 → 加载订阅 → 网络检测，每步动画与结果 |
 | 扩展 | 从 addons.mozilla.org 安装（安装前确认权限），“扩展”页里启用 / 停用 / 移除 / 打开弹窗 / 设置页 |
-| 不做 | 双端同步（第二版）、下载文件 |
+| 下载 | 网页下载、长按保存图片 / 链接、三点菜单“下载此页”；全部走实例的线路（决策 A-14）；存进系统“下载”文件夹；“下载内容”页、通知栏进度 |
+| 不做 | 双端同步（第二版） |
 
 ## 代码结构
 
@@ -33,13 +34,16 @@ android/
     Host.kt       核心服务子进程（CoreProc）、密码库密钥（VaultKey）、状态快照与事件（Host）、旧数据迁移（Legacy）、UA 与指纹参数（Fp）
     MainActivity.kt  工具栏、启动页、弹出页（实例菜单 / 管理页等）、标签页列表、菜单
     Addons.kt     用户扩展
-    Prompts.kt    网页弹框、<select>、安装确认
+    Prompts.kt    网页弹框、<select>、安装确认、选择文件、日期时间、颜色、网站密码框、分享
+    Downloads.kt  下载（A-14）：存盘、记录、通知与前台服务（DownloadService）、上传用的临时副本（Uploads）
     Views.kt      头像、标签数、启动页等自绘控件
   ext/            安卓专用的扩展文件：manifest（MV2）、background.js、fp.js、fp-boot.js、newtab、app.html + main.js、api.js、app.css
   scripts/
     fetch-mihomo.sh       下载 mihomo v1.19.34 安卓 arm64 / amd64 并校验 SHA-256
     build-core.sh         用 NDK 把核心服务（cmd/masktab）编成 jniLibs/<abi>/libmasktab.so
-    emulator-smoke.sh     CI 模拟器冒烟：装、启动、截图、查崩溃；第二轮放进旧版数据，验证迁移、经测试节点的代理分流与坏节点断流
+    emulator-smoke.sh     CI 模拟器冒烟：装、启动、截图、查崩溃；第二轮放进旧版数据，验证迁移、经测试节点的代理分流与坏节点断流；在线更新；下载 / 长按保存 / 选择文件 / 日期
+    dl-server.py          冒烟用的测试网站（下载链接、要 Cookie 的图片、慢的下载、上传按钮、日期输入框）；记下每个请求带的 Cookie / 来源页 / UA
+    typecheck.sh          不用安卓 SDK 和 Gradle，只对 Kotlin 做类型检查（`scripts/check.sh kt`，约 25 秒；工具第一次用时下载到 ~/.cache/mt-android）
     preview-pages.mjs     用 Playwright 预览扩展页面并检查 fp.js；同一份状态再画电脑版弹窗，比对两端面板内容（`scripts/check.sh pages`，CI 里每次都跑）
     fixture-state.json    上面用的状态：从真的核心服务（宿主模式）抓的，只改了数值
 ```
@@ -92,7 +96,7 @@ android/
 - 配置文件是 JSON（YAML 的子集）。安卓自带的 org.json 会把 `/` 写成 `\/`，mihomo 的 YAML 解析器不认这个转义（CI 里报 `found unknown escape character`，mihomo 起不来），
   所以输出后用 `yamlSafeJson` 把 `\/` 换回 `/`（逐字符扫描，字面的反斜杠不受影响）。org.json 的其余转义（`\"` `\\` `\b` `\f` `\n` `\r` `\t` `\uXXXX`）YAML 都认，
   沙箱里用同版本 mihomo `-t` 试过含引号、反斜杠、制表符、中文、U+2028、控制字符的订阅地址。
-- app 自己的 HTTP 请求（控制接口、出口检测）受安卓“默认禁止明文 HTTP”限制：`res/xml/network_security_config.xml` 只放行 `127.0.0.1`、`localhost`（mihomo 控制接口）和 `ip-api.com`（出口检测备用源，只有 HTTP）。
+- app 自己的 HTTP 请求（控制接口、出口检测）受安卓“默认禁止明文 HTTP”限制：`res/xml/network_security_config.xml` 放行明文。最初只放行 `127.0.0.1`、`localhost`（mihomo 控制接口）和 `ip-api.com`（出口检测备用源，只有 HTTP）；有了下载以后（A-14）app 自己也要取 `http://` 的文件（仍只经实例的本地入站出去），改成全部放行。
   没放行之前 CI 里 mihomo 实际已经起来，但 app 连不上控制接口，判成“mihomo 没有响应”、不选节点，实例全部被拒。
 - 每次加载配置后策略组落回 `REJECT`，app 再按实例设置选回节点（`auto` = 健康检查延迟最低的可用节点）。选不上就保持 `REJECT`。
 - 没填订阅时不启动 mihomo，所有实例直连（界面写“直连”）。填了订阅后，原来直连的实例改为“自动”。
@@ -150,7 +154,7 @@ android/
 8. **APK 很大**：GeckoView 两个架构 + mihomo 两个架构。只给真机用可以去掉 x86_64。
 9. **调试签名固定**（`android/app/debug.keystore`）：从这一版起新包能直接覆盖安装。之前的包每次 CI 签名都不同，第一次换到这一版要先卸载旧的（数据会清空）。这是调试证书，不能用来上架。
 10. **读屏（TalkBack）的焦点框位置偏下**：内置页面报给系统的控件坐标比实际低一个状态栏高度（CI 里用 uiautomator 量出来的），不影响点按，读屏用户会看到焦点框错位。没修。
-11. 没做：双端同步、下载文件、打印、全屏视频的横屏处理、地址栏联想、书签与历史页。
+11. 没做：双端同步、打印、弹出窗口拦截提示、摄像头 / 麦克风 / 定位权限（一律不给）、拍照上传、下载的断点续传、全屏视频的横屏处理、地址栏联想、书签与历史页。
 12. **核心服务是一个子进程**（和 mihomo 一样从原生库目录启动）。系统在后台杀掉它时 app 会重启它并把开着标签页的实例重新启动（30 秒内最多一次）；这条路只在本机用代码走查过，没有在真机上验证。
 
 ## 验证情况
