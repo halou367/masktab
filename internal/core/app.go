@@ -101,6 +101,7 @@ type App struct {
 	speed     map[string]*speedJob       // 订阅 id → 正在进行的下载测速
 	ipq       map[string]*model.IPQ      // 出口 IP → 类型和纯净度（见 ipq.go，落盘在 state/ipq.json）
 	ipqBusy   map[string]bool            // 正在查的 IP
+	ippTried  map[string]ippTry          // 实例 → 上次经它的出口问 IPPure 的情况（见 ippure.go）
 	scannedAt map[string]int64           // 订阅 id → 上一轮测速结束的时刻（只在内存里）
 	setup     Setup
 	events    []Event

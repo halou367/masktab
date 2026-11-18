@@ -178,9 +178,22 @@ type NodeScan struct {
 // IPQ 是一个出口 IP 的"成色"：是住宅还是机房、纯净度多少。来自第三方查询，查不到不影响使用。
 type IPQ struct {
 	Type  string `json:"type,omitempty"` // res 住宅 | dc 机房 | mobile 移动；空 = 不知道
-	Score int    `json:"score"`          // 纯净度 0–100，越高越干净；-1 = 不知道
+	Score int    `json:"score"`          // 纯净度 0–100，越高越干净；-1 = 不知道。落盘的是 ip.net.coffee 的可信度；给界面时有 IPPure 系数就换成 100 − 系数（见 View）
 	Src   string `json:"src,omitempty"`  // 数据来源
 	At    int64  `json:"at"`
+	// 下面两个数照 ippure.com 的写法：0–100，越低越好（见 internal/core/ippure.go）。nil = 没测到。
+	Risk   *int  `json:"risk,omitempty"` // IPPure 系数：这个 IP 有多“脏”（滥用、代理、爬虫、欺诈记录）。只看 IP
+	RiskAt int64 `json:"riskAt,omitempty"`
+	CF     *int  `json:"cf,omitempty"` // CF 风险 = 100 − Cloudflare Bot Score：Cloudflare 觉得从这条出口来的这个浏览器多像机器人
+	CFAt   int64 `json:"cfAt,omitempty"`
+}
+
+// View 是给界面和一致性检查用的那一份：有 IPPure 系数时，纯净度 = 100 − 系数、来源写 ippure；没有就还是 ip.net.coffee 的。
+func (q IPQ) View() IPQ {
+	if q.Risk != nil {
+		q.Score, q.Src = 100-*q.Risk, "ippure"
+	}
+	return q
 }
 
 type ExitProbe struct {

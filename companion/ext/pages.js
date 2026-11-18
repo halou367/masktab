@@ -1,6 +1,6 @@
 import { api, shownExit } from './api.js';
 import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, dropdown, ask, confirmDlg, isV6, ipSpan, delayText, delayCls, pbar, scoreCls, typeTag } from './ui.js';
-import { disguise } from './common.js';
+import { disguise, pureInfo, cfRisk, openWeb, CF_TEST_URL } from './common.js';
 import { face } from './menu.js';
 
 // 设置类页面里电脑和手机共用的几页（决策 D-4）：设置首页、高级、组件与更新、新标签页、订阅与地址库。
@@ -78,7 +78,7 @@ export function settingsAdv(c) {
     row({ ic: 'clock', t: '时区默认跟随', s: name(O.tz, s.tzSourceDefault), drop: true, onclick: () => pick('时区默认跟随', O.tz, s.tzSourceDefault, 'tzSourceDefault') }),
     row({ ic: 'code', t: 'ProxyIP 的 path 写法', s: name(O.path, s.pathTemplate), drop: true, onclick: () => pick('ProxyIP 的 path 写法', O.path, s.pathTemplate, 'pathTemplate') }),
     row({ ic: 'code', t: '全局代理的 path 写法', s: name(O.chain, s.chainPath || ''), drop: true, title: 'SOCKS5 / HTTP / HTTPS / TURN / SSTP 出口写进节点 path 的方式。/video/ 是 edgetunnel 新版的链式代理写法，账号不以明文出现；服务端是旧版、不认时改成明文', onclick: () => pick('全局代理的 path 写法', O.chain, s.chainPath || '', 'chainPath') }),
-    row({ ic: 'home', t: '查出口 IP 的类型和纯净度', s: '把出口 IP 发给 ip.net.coffee 查询住宅 / 机房和纯净度，结果存 7 天', trail: sw(!s.ipqOff, '查纯净度', (v) => set(c, 'ipqOff', !v)) }),
+    row({ ic: 'home', t: '查出口 IP 的类型和纯净度', s: '正在用的出口经它自己去问 IPPure（纯净度 = 100 − ippure.com 上的 IPPure 系数）；候选 IP 发给 ip.net.coffee 查住宅 / 机房和纯净度。结果存 7 天；关掉后 CF 风险也不记', trail: sw(!s.ipqOff, '查纯净度', (v) => set(c, 'ipqOff', !v)) }),
     sec('订阅与测速'),
     row({ ic: 'refresh', t: '订阅过期时间', s: `${s.subRefreshHours} 小时`, chev: true, onclick: text('订阅过期时间（小时）', 'subRefreshHours') }),
     row({ ic: 'bolt', t: '测速地址', s: h('span', { class: 'el' }, s.delayUrl), chev: true, onclick: text('测速地址', 'delayUrl') }),
@@ -429,11 +429,13 @@ export function diagView(c) {
     try { await navigator.clipboard.writeText(diagText); toast('已复制，可以直接粘贴发出来'); } catch { toast('没能自动复制，请长按下面的文字全选复制'); }
   };
   const qi = q(p?.cf?.ip || p?.direct?.ip);
+  const pi = pureInfo(qi), cfr = cfRisk(st, me);
   return [appBar('诊断', c.back),
     sec('出口 trace' + (me ? `（#${me.no}）` : '')),
     me?.proxy.state !== 'on' ? row({ ic: 'globe', t: '直连', s: '网站看到真实 IP' }) : [line('globe', '普网的出口', p?.direct), line('cloud', 'CF 网站的出口', p?.cf),
       row({ ic: 'speed', t: '延迟', s: me.rt.latency > 0 ? `${me.rt.latency} ms` : me.rt.latency < 0 ? '不通' : '—' }),
-      row({ ic: 'leaf', t: '出口纯净度', s: qi && qi.score >= 0 ? `${qi.score} · ${qi.type === 'res' ? '住宅' : qi.type === 'dc' ? '机房' : qi.type || '类型未知'} · 来源 ${qi.src || 'ip.net.coffee'}` : st.settings.ipqOff ? '已在“高级”里关闭查询' : '查不到' })],
+      row({ ic: 'leaf', t: '出口纯净度', s: pi ? `${pi.score}（${pi.word}）· ${qi.type === 'res' ? '住宅' : qi.type === 'dc' ? '机房' : qi.type || '类型未知'} · ${pi.risk != null ? `= 100 − IPPure 系数 ${pi.risk}` : '来源 ip.net.coffee'} · 越高越干净` : st.settings.ipqOff ? '已在“高级”里关闭查询' : '查不到' }),
+      row({ ic: 'cloud', t: 'CF 风险', s: cfr.n != null ? `${cfr.n}（${cfr.word}）· ${cfr.note}` : `${cfr.text}${cfr.note ? ' · ' + cfr.note : ''}`, chev: cfr.can, onclick: cfr.can ? () => openWeb(CF_TEST_URL) : null })],
     sec('组件'),
     row({ ic: 'globe', t: '浏览器内核', s: `${st.kernel.name} ${st.kernel.version}` }),
     row({ ic: 'swap', t: 'mihomo', s: st.core.ok ? `${st.core.version} · 运行中` : `未运行${st.core.error ? '：' + st.core.error : ''}` }),

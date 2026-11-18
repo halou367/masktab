@@ -1,10 +1,10 @@
 // 实例菜单：点工具栏最右边的头像打开（2026-11-15 起照已确认的 Chrome 风格演示，决策 UI-1）。
 // 其它实例那几行不写“运行中 / 休眠”（决策 UI-9）：运行中的整行换底色，休眠的变淡；账号数画成钥匙图标 + 数字。
-// 上面是当前实例：大头像、出口、纯净度圆环和 CF 色点；中间是三项常用入口；下面列出其它实例，运行中的点了切过去（聚焦它的窗口），休眠的点了打开。
+// 上面是当前实例：大头像、出口、纯净度圆环（越满越干净）和 CF 风险（数字越低越好）；中间是三项常用入口；下面列出其它实例，运行中的点了切过去（聚焦它的窗口），休眠的点了打开。
 // 电脑的工具栏弹窗用它；手机的头像菜单浮在网页上，由 app 原生画（同样的内容、同样的接口，见 decisions UI-2）。
 import { api, shownExit, fmtBytes, letterOf as letter } from './api.js';
 import { h, icon, flag, run, delayText, delayCls, cname, ringEl, cfDot } from './ui.js';
-import { disguise, exitQ, cfRep, restartText, restartPath } from './common.js';
+import { disguise, exitQ, cfRisk, restartText, restartPath } from './common.js';
 import { siteIcon, uniqSites } from './sites.js';
 import { newWizard } from './wizard.js';
 
@@ -39,7 +39,7 @@ export function menuView(st, nav) {
   const me = st.me, rt = me.rt, on = me.proxy.state === 'on', ex = on ? shownExit(me) : null;
   const sites = uniqSites(me.acct?.sites || []);
   const rules = st.vault?.rules?.length || 0; // 已标记的网站数（全部实例共用）
-  const dz = disguise(me), q2 = exitQ(st, me), cf = cfRep(me);
+  const dz = disguise(me), q2 = exitQ(st, me), cf = cfRisk(st, me);
   const kids = [];
   kids.push(h('div', { class: 'hero', style: { '--c': me.color } },
     face(me, true, false, true), // 国旗在右边那一行里，头像上不再重复
@@ -51,7 +51,7 @@ export function menuView(st, nav) {
       on && ex && !rt.starting && h('div', { class: 'tf mono', title: `已用 ↑ ${fmtBytes(rt.up || 0)}  ↓ ${fmtBytes(rt.down || 0)}` }, `↑ ${fmtBytes(rt.upRate || 0)}/s   ↓ ${fmtBytes(rt.downRate || 0)}/s`),
       rt.starting && stepLine(me, st.launchSteps),
       sites.length > 0 && h('div', { class: 'sites', title: '记住了账号的站点' }, sites.slice(0, 8).map((s) => siteIcon(s, 15)), sites.length > 8 && h('span', { class: 'sub' }, `+${sites.length - 8}`))),
-    on && h('span', { class: 'rep', title: `纯净度 ${q2.score ?? '未知'} · CF 信誉 ${cf.text}` }, ringEl(q2.score, 36), cfDot(cf.st, 'CF'))));
+    on && h('span', { class: 'rep', title: `${q2.pure ? q2.pure.tip : '纯净度未知'}\n\n${cf.tip}` }, ringEl(q2.score, 36, null, q2.pure?.cls), cfDot(cf.st, cf.n != null ? `CF ${cf.n}` : cf.st === 'bad' ? 'CF 不可达' : 'CF 未测'))));
   // 有要重启才生效的改动（加了扩展、改了指纹…）：写在首页最上面，旁边就是“立即重启”（决策 UI-19）。
   // 以前只在“节点与出口”里提示，工具栏按钮上虽然有个 ↻，点开却找不到在哪重启（需求方 2026-11-17）。
   if (rt.running && rt.needRestart?.length) kids.push(h('div', { class: 'warn need' }, icon('refresh', 20), h('span', { class: 'tx' }, restartText(rt)),

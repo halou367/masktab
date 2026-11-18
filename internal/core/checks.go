@@ -113,9 +113,10 @@ func (a *App) checksLocked(in *model.Instance, rt *Runtime, info *fpInfo) *check
 	default:
 		add(check{K: "cf", T: "CF 网站可达", V: "—", NA: true})
 	}
-	// 7. 出口纯净度不低于 50（查不到就不计）
-	if q := a.ipqOf(ex); on && q != nil && q.Score >= 0 {
-		add(check{K: "pure", T: "出口纯净度 ≥ 50", V: strconv.Itoa(q.Score), OK: q.Score >= 50})
+	// 7. 出口纯净度不低于 50（查不到就不计）。纯净度 = 100 − IPPure 系数，所以也就是“IPPure 系数不高于 50”（50 起是它的“中度风险”）。
+	if q := a.ipqOf(ex); on && q != nil && q.View().Score >= 0 {
+		v := q.View()
+		add(check{K: "pure", T: "出口纯净度 ≥ 50", V: strconv.Itoa(v.Score), OK: v.Score >= 50})
 	} else {
 		add(check{K: "pure", T: "出口纯净度 ≥ 50", V: "查不到", NA: true})
 	}

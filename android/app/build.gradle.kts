@@ -81,7 +81,7 @@ abstract class BuildExt : DefaultTask() {
             into(outputDir.dir("ext"))
             from(own)
             from(shared) {
-                include("ui.js", "ui.css", "sites.js", "menu.js", "instances.js", "wizard.js", "translate.js", "autofill.js", "common.js", "panel.js", "panel.css", "pages.js", "ntp.js", "vaultmsg.js")
+                include("ui.js", "ui.css", "sites.js", "menu.js", "instances.js", "wizard.js", "translate.js", "ippure.js", "autofill.js", "common.js", "panel.js", "panel.css", "pages.js", "ntp.js", "vaultmsg.js")
                 include("assets/flags/**", "assets/icon48.png", "assets/icon128.png")
             }
         }

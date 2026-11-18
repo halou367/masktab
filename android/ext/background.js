@@ -218,6 +218,10 @@ browser.runtime.onMessage.addListener((m, sender) => {
   if (t === 'fp:who' && sender.tab && typeof m.n === 'string') { ready.then(() => instOfTab(sender.tab.id)).then((id) => fpAnnounce(m.n, id), () => fpAnnounce(m.n, null)); return; }
   if (t === 'diag:blocked' && !sender.tab?.url?.startsWith('http')) return Promise.resolve({ n: blocked.n, list: blocked.list.slice().reverse() }); // 只给扩展自己的页面
   if (t.startsWith('vault:')) return vaultMsg(m, sender).then((r) => ({ ok: true, r }), (e) => ({ ok: false, error: e.message }));
+  // ippure.com 上实测到的 CF 风险（ippure.js，决策 N-7）：记在这个标签页所属实例的出口上
+  if (t === 'ipp:cf' && sender.tab && /^https:\/\/ippure\.com\//.test(sender.url || '')) {
+    return instOfTab(sender.tab.id).then((id) => (id ? native('POST', '/api/ipq/cf', { ip: String(m.ip || ''), risk: Number(m.risk) }, { inst: id }) : null)).then(() => ({ ok: true }), (e) => ({ ok: false, error: e.message }));
+  }
   if (t === 'search') return Promise.resolve(searchUrl);
   // 实例菜单里的“录入登录”（扩展自己的页面发来）：转给这个实例正显示着的网页；没有就记下来，等下一个网页接手。
   if (t === 'rec-start' && !sender.tab?.url?.startsWith('http')) return recStart(String(m.inst || ''));

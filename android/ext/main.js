@@ -20,6 +20,7 @@ import { instancesView } from './instances.js';
 import { wizardPage } from './wizard.js';
 import { syncIcons, siteIcon } from './sites.js';
 import { panel } from './panel.js';
+import { setLinker } from './common.js';
 import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView, verifyView } from './pages.js';
 
 const root = document.getElementById('root');
@@ -94,6 +95,7 @@ function bars() {
 addEventListener('mt-bars', bars);
 
 // ---------- 页面 ----------
+setLinker((u) => api('POST', '/ui/tab', { url: u })); // “实测 CF 风险”等要开网页的地方：在当前实例里开一个标签页（common.js 的 openWeb）
 const ctx = () => ({ st, act, open, back, render: () => render(true), link: (u) => api('POST', '/ui/tab', { url: u }), diag: async () => (await api('GET', '/api/diag')).text || '',
   // 人机验证诊断页用：被拒绝的请求在内置扩展的后台里记着；重启由 app 做
   blocked: () => browser.runtime.sendMessage({ t: 'diag:blocked' }), restart: () => api('POST', '/ui/restart') });

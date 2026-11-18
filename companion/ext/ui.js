@@ -248,8 +248,9 @@ export const XT_NAME = { proxyip: 'ProxyIP', sstp: 'SSTP', socks5: 'SOCKS5', htt
 export const XT_ORDER = ['proxyip', 'sstp', 'socks5', 'http', 'https', 'turn'];
 export const xtTip = (t) => (t === 'proxyip' ? 'ProxyIP：只有 Cloudflare 的网站从它出去' : `${XT_NAME[t] || t}：全局出口，所有网站都从它出去`);
 export const typeTag = (t, text, tip) => h('span', { class: 'tag xt-' + t, title: tip || xtTip(t) }, text || XT_NAME[t] || t);
-// 圆环（纯净度、伪装度）：size 像素，中间写数字；sub = 数字下面的小字（大圆环才有）。value 为空 = 不知道（灰色空环）。
-export function ringEl(value, size = 44, sub) {
+// 圆环（纯净度、伪装度）：size 像素，中间写数字，越满越好；sub = 数字下面的小字（大圆环才有）。value 为空 = 不知道（灰色空环）。
+// cls = 指定颜色（good | mid | bad）：纯净度来自 IPPure 时按它的分档上色（common.js 的 pureInfo），不指定就按 80 / 50 两条线。
+export function ringEl(value, size = 44, sub, cls) {
   const NS = 'http://www.w3.org/2000/svg', known = value != null && value >= 0, v = known ? Math.max(0, Math.min(100, value)) : 0;
   const sw2 = size >= 60 ? 6 : size >= 40 ? 4 : 3, r = (size - sw2) / 2, c = 2 * Math.PI * r;
   const el = (tag, at) => { const e = document.createElementNS(NS, tag); for (const [k, x] of Object.entries(at)) e.setAttribute(k, x); return e; };
@@ -257,10 +258,10 @@ export function ringEl(value, size = 44, sub) {
   const base = { cx: size / 2, cy: size / 2, r, fill: 'none', 'stroke-width': sw2 };
   svg.append(el('circle', { ...base, stroke: 'currentColor', 'stroke-opacity': 0.18 }));
   if (known) svg.append(el('circle', { ...base, stroke: 'currentColor', 'stroke-linecap': 'round', 'stroke-dasharray': `${(c * v / 100).toFixed(1)} ${c.toFixed(1)}`, transform: `rotate(-90 ${size / 2} ${size / 2})` }));
-  return h('span', { class: 'ring ' + (size >= 60 ? 'lg ' : size >= 40 ? 'md ' : '') + (known ? scoreCls(v) : 'na'), style: { width: size + 'px', height: size + 'px' } }, svg,
+  return h('span', { class: 'ring ' + (size >= 60 ? 'lg ' : size >= 40 ? 'md ' : '') + (known ? cls || scoreCls(v) : 'na'), style: { width: size + 'px', height: size + 'px' } }, svg,
     h('b', {}, known ? String(Math.round(v)) : '—'), sub && h('i', {}, sub));
 }
-// CF 信誉的色点：good 可达 | bad 不可达 | '' 不知道。
+// CF 风险的色点：颜色照 common.js 的 cfRisk（good 低 | mid 中 | bad 高或 CF 网站不可达 | '' 未测）。
 export const cfDot = (st, text) => h('span', { class: 'cf ' + (st || '') }, h('i'), text);
 // 纯净度短条。
 export const pbar = (score) => (score >= 0 ? h('span', { class: 'pbar ' + scoreCls(score), title: `纯净度 ${score}` }, h('i', { style: { width: Math.max(6, score) + '%' } })) : h('span', { class: 'pbar', title: '纯净度未知' }));

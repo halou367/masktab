@@ -227,6 +227,11 @@ chrome.runtime.onMessage.addListener((m, sender, send) => {
     trFetch(m).then(send, (e) => send({ error: e.name === 'AbortError' ? '翻译接口超时' : e.message }));
     return true;
   }
+  if (m && m.t === 'ipp:cf') { // ippure.com 上实测到的 CF 风险（ippure.js，决策 N-7）：只认本扩展的内容脚本、只认那个站
+    if (sender.id !== chrome.runtime.id || !sender.tab || !/^https:\/\/ippure\.com\//.test(sender.url || '')) return false;
+    api('POST', '/api/ipq/cf', { ip: String(m.ip || ''), risk: Number(m.risk) }).then(() => send({ ok: true }), (e) => send({ ok: false, error: e.message }));
+    return true;
+  }
   if (m === 'wake') { loop(); send(true); return false; } // 扩展页面打开时叫醒后台
   if (m === 'repaint') { loop(); refresh().then(() => send(true), () => send(false)); return true; }
   return false;

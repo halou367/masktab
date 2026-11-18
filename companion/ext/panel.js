@@ -1,6 +1,6 @@
 import { api, fmtBytes, noticeText } from './api.js';
-import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, cfDot, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan, avatar, typeTag, XT_NAME, XT_ORDER } from './ui.js';
-import { disguise, cfRep, restartText, restartPath } from './common.js';
+import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan, avatar, typeTag, XT_NAME, XT_ORDER } from './ui.js';
+import { disguise, cfRisk, pureInfo, openWeb, CF_TEST_URL, restartText, restartPath } from './common.js';
 
 // 节点面板（电脑和手机共用，决策 D-4）：节点与出口、指纹与伪装，以及几个占满页面的列表（订阅线路、出口国家、出口、入口）。
 // 电脑版由 popup.js 放进工具栏弹窗、由 app.js 放进设置页；安卓版由 main.js 放进“节点与出口”“指纹与伪装”两页。
@@ -84,7 +84,8 @@ const TY = { res: ['home', '住宅宽带'], dc: ['dc', '机房 / 云服务器'],
 const ipq = (ip) => (ip && st.ipq && st.ipq[ip]) || null;
 const tyIcon = (ip, size = 18) => { const t = TY[ipq(ip)?.type]; return h('span', { class: 'ty', title: t ? t[1] : '类型未知', 'aria-label': t ? t[1] : null }, t ? icon(t[0], size) : null); };
 const scoreOf = (ip) => { const s = ipq(ip)?.score; return s >= 0 ? s : -1; };
-const puWord = (s) => (s >= 90 ? '极度纯净' : s >= 80 ? '纯净' : s >= 50 ? '一般' : s >= 30 ? '较差' : '高危');
+// 一个 IP 的纯净度悬停说明的第一行（“纯净度 92（极度纯净），越高越干净”），数怎么来的见 common.js 的 pureInfo。
+const puLine = (ip) => { const i = pureInfo(ipq(ip)); return i ? `纯净度 ${i.score}（${i.word}）· ${i.risk != null ? `= 100 − IPPure 系数 ${i.risk}` : '来源 ip.net.coffee'} · 越高越干净` : null; };
 
 const scan = (sub) => run(async () => { await api('POST', `/api/subscriptions/${sub.id}/test`); await load(); });
 const speedTest = (sub, keys) => run(async () => { await api('POST', `/api/subscriptions/${sub.id}/speed`, { keys }); await load(); });
@@ -227,7 +228,7 @@ function exitView(me, sub) {
   const tipOf = (p) => [`${p.type === 'proxyip' ? p.value : p.type + '://' + p.value.replace(/^.*@/, '')}${p.label ? '   ' + p.label : ''}`,
     p.type !== 'proxyip' ? '全局出口：所有网站都从它出去' : null,
     p.cf?.ip ? `CF 网站看到：${p.cf.ip}  ${cname(pcc(p))} ${where(p.cf)}` : null,
-    scoreOf(ipOf(p)) >= 0 ? `纯净度 ${scoreOf(ipOf(p))}（${puWord(scoreOf(ipOf(p)))}）` : null,
+    puLine(ipOf(p)),
     p.speed > 0 ? `下载：峰值 ${p.speed} Mbps，平均 ${p.speedAvg} Mbps` : null,
     p.err ? `不通：${p.err}` : null, p.derived ? '来自订阅里的入口地址' : null].filter(Boolean).join('\n');
   const pickIt = (id) => { view = ''; patch({ proxy: { pipId: id, exitMode: 'manual', state: 'on' } }); };
@@ -329,7 +330,7 @@ function subView(me, sub) {
 }
 
 // ---------- 节点与出口（首页） ----------
-// 当前出口（一张卡片说完，下面的行不再重复）：这是哪类网站的出口、国旗 + 写全的 IP（点一下复制）、类型图标、城市 · 运营商、CF 信誉、延迟、纯净度圆环；
+// 当前出口（一张卡片说完，下面的行不再重复）：这是哪类网站的出口、国旗 + 写全的 IP（点一下复制）、类型图标、城市 · 运营商、纯净度和 CF 风险两行（各带一句说明）、CF 信誉、延迟、纯净度圆环；
 // 两路出口不同时第二行列另一路（“普网” = 普通网站），不在同一国家时给黄色提示。国名、“住宅 / 机房”不写字：国旗和图标已经说了（悬停有字）。
 function exitCard(me, fixAuto) {
   const p = me.rt.probe;
@@ -340,7 +341,7 @@ function exitCard(me, fixAuto) {
   const other = p.cf && p.direct && p.cf.ip !== p.direct.ip ? (main === p.cf ? p.direct : p.cf) : null;
   const diff = p.cf && p.direct && cc(p.cf) && cc(p.direct) && cc(p.cf) !== cc(p.direct);
   const copy = (ip) => (e) => { e.stopPropagation(); navigator.clipboard?.writeText(ip).then(() => toast('已复制 IP'), () => toast('复制失败', true)); };
-  const q = ipq(main.ip), cf = cfRep(me), len = (ip) => (ip.length > 24 ? ' long' : ip.length > 15 ? ' mid' : '');
+  const q = ipq(main.ip), pu = pureInfo(q), cf = cfRisk(st, me), len = (ip) => (ip.length > 24 ? ' long' : ip.length > 15 ? ' mid' : '');
   const capOf = (x) => (x === p.cf ? 'CF 网站' : '普网'), capTip = (x) => (x === p.cf ? '托管在 Cloudflare 上的网站看到的出口' : '普通网站看到的出口');
   return h('div', { class: 'card' },
     h('div', { class: 'xcard', style: { width: '100%' } },
@@ -348,8 +349,19 @@ function exitCard(me, fixAuto) {
         h('div', { class: 'xcap', title: other ? capTip(main) : '所有网站看到的都是这个出口' }, icon(other ? (main === p.cf ? 'cloud' : 'globe') : 'globe', 14), other ? capOf(main) : '全部网站'),
         h('div', { class: 'ipl' + len(main.ip) }, flagOf(cc(main)), h('button', { class: 'mono', title: '复制 IP', 'aria-label': '复制 IP', onclick: copy(main.ip) }, main.ip), tyIcon(main.ip, 18)),
         where(main) && h('div', { class: 'loc' }, where(main)),
-        h('div', { class: 'chips2' }, cfDot(cf.st, 'CF ' + cf.text), h('span', { class: 'lat ' + delayCls(me.rt.latency) }, delayText(me.rt.latency)))),
-      q && q.score >= 0 ? h('span', { title: `纯净度 ${q.score}（${puWord(q.score)}）` }, ringEl(q.score, 64, '纯净度')) : null),
+        h('div', { class: 'chips2' }, h('span', { class: 'lat ' + delayCls(me.rt.latency) }, delayText(me.rt.latency)))),
+      pu ? h('span', { title: pu.tip }, ringEl(pu.score, 64, '纯净度', pu.cls)) : null),
+    // 这条出口的两个数，各占一行，把“哪头好、数从哪来”直接写出来（手机上没有悬停；决策 N-7）：
+    //   纯净度  越高越干净 = 100 − IPPure 系数（IP 本身干不干净）
+    //   CF 风险 越低越好 = ippure.com 的 Cloudflare 系数（Cloudflare 觉得这个浏览器 + 这条出口多像机器人），要在实例里实测
+    h('div', { class: 'qrows' },
+      h('div', { class: 'qrow', title: pu ? pu.tip : null }, h('span', { class: 'qk' }, '纯净度'),
+        pu ? h('b', { class: 'qv ' + pu.cls }, `${pu.score} · ${pu.word}`) : h('b', { class: 'qv' }, st.settings?.ipqOff ? '已关闭查询' : '查不到'),
+        h('span', { class: 'qn' }, pu ? pu.note : '越高越干净 = 100 − IPPure 系数（这个 IP 本身干不干净）')),
+      h('div', { class: 'qrow', title: cf.tip }, h('span', { class: 'qk' }, 'CF 风险'),
+        h('b', { class: 'qv ' + cf.st }, cf.n != null ? `${cf.n} · ${cf.word}` : cf.text),
+        cf.can && h('button', { class: 'lk', title: '在这个实例里打开 ippure.com/cloudflare；数字出来后自动记到这里', onclick: (e) => { e.stopPropagation(); openWeb(CF_TEST_URL); } }, cf.n != null ? '重测' : '实测'),
+        h('span', { class: 'qn' }, cf.note || '越低越好'))),
     other && h('div', { class: 'xsplit', title: capTip(other) }, icon(other === p.cf ? 'cloud' : 'globe', 16), capOf(other), flagOf(cc(other)),
       h('button', { class: 'mono' + len(other.ip), title: '复制 IP', onclick: copy(other.ip) }, other.ip), tyIcon(other.ip, 16), pbar(scoreOf(other.ip))),
     diff && h('div', { class: 'nswarn' }, icon('warn', 16), h('span', { class: 'grow' }, '两路出口不在同一国家'), fixAuto && h('button', { class: 'lk', onclick: fixAuto }, '改自动')));

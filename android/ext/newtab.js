@@ -5,6 +5,9 @@
 import { api } from './api.js';
 import { h } from './ui.js';
 import { renderNtp } from './ntp.js';
+import { setLinker } from './common.js';
+
+setLinker((u) => api('POST', '/ui/tab', { url: u })); // 新标签页上的“实测 CF 风险”：在这个实例里开一个标签页
 
 const q = new URLSearchParams(location.hash.slice(1));
 const inst = q.get('inst') || '';

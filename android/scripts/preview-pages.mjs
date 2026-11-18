@@ -38,6 +38,10 @@ const ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9h
 {
   const p3 = fixture.instances.find((x) => x.no === 3), p2 = fixture.instances.find((x) => x.id === 'p2');
   if (p3) { p3.no = 14; p3.name = ''; }
+  // 出口 IP 的两个数照 ippure.com（决策 N-7）：p2 的 CF 出口问到了 IPPure（系数 8 → 纯净度 92）、也在 ippure.com 上实测过 CF 风险（22）；
+  // p3 的出口只有 ip.net.coffee 的数、CF 风险没测过。核心服务给界面的就是这个形状（internal/core/ipq.go 的 ipqViewLocked）。
+  Object.assign(fixture.ipq['203.0.113.11'], { score: 92, src: 'ippure', risk: 8, riskAt: Date.now() - 3600e3, cf: 22, cfAt: Date.now() - 3 * 3600e3 });
+  Object.assign(fixture.ipq['203.0.113.22'], { src: 'ip.net.coffee' });
   if (p2?.acct) { p2.acct.sites = ['login.shop.test', ...p2.acct.sites]; p2.acct.count++; if (fixture.me?.id === 'p2') fixture.me.acct = p2.acct; }
   fixture.vault.icons = 7;
   fixture.__icons = { 'login.shop.test': ICON };
@@ -221,6 +225,16 @@ if (want('flow')) {
   await pg.locator('button.row', { hasText: '节点与出口' }).first().click();
   await pg.waitForTimeout(400);
   await pg.screenshot({ path: path.join(out, 'flow-node.png') });
+  {
+    // 决策 N-7：当前出口卡片里，纯净度和 CF 风险各一行，数、分档、一句说明都写出来；“重测”在本实例里打开 ippure.com
+    const qr = await pg.evaluate(() => [...document.querySelectorAll('.qrows .qrow')].map((r) => r.innerText.replace(/\s*\n\s*/g, ' | ')));
+    await pg.evaluate(() => window.__calls.splice(0));
+    await pg.locator('.qrows .qrow button.lk').click(); await pg.waitForTimeout(150);
+    const calls = await pg.evaluate(() => window.__calls.map((c) => c.p + ' ' + JSON.stringify(c.b || {})));
+    check('节点与出口：纯净度一行（92 · 极度纯净，= 100 − IPPure 系数 8）、CF 风险一行（22 · 纯净，越低越好，重测）', qr.length === 2
+      && /^纯净度 \| 92 · 极度纯净 \| = 100 − IPPure 系数 8。ippure\.com 上显示 8%/.test(qr[0]) && /^CF 风险 \| 22 · 纯净 \| 重测 \| .*越低越好.*ippure\.com 实测$/.test(qr[1])
+      && calls.some((x) => x.startsWith('/ui/tab') && x.includes('https://ippure.com/cloudflare')), { qr, calls });
+  }
   await pg.locator('button.row[aria-label="订阅线路"]').click();
   await pg.waitForTimeout(300);
   i = await info();
@@ -429,9 +443,24 @@ if (want('flow')) {
 if (want('newtab')) {
   const pg = await ctx.newPage(); watch(pg, 'newtab');
   await pg.goto(base + 'newtab.html#inst=p2'); await pg.waitForTimeout(800);
-  const nt = await pg.evaluate(() => ({ q: !!document.querySelector('.nq input'), rings: document.querySelectorAll('.nstat .ring').length, cf: !!document.querySelector('.nstat .cfbig.good'),
-    tiles: document.querySelectorAll('.tiles .tile').length, recent: document.querySelectorAll('.nlist .nrow').length, accs: document.querySelectorAll('.accs .acc').length }));
-  check('新标签页：搜索框、伪装度和纯净度两个圆环、CF 色点、书签、最近访问、已存账号', nt.q && nt.rings === 2 && nt.cf && nt.tiles === 4 && nt.recent === 3 && nt.accs >= 3, nt);
+  const nt = await pg.evaluate(() => ({ q: !!document.querySelector('.nq input'), rings: document.querySelectorAll('.nstat .ring').length, cf: document.querySelector('.nstat .cfbig.good')?.textContent || '',
+    tiles: document.querySelectorAll('.tiles .tile').length, recent: document.querySelectorAll('.nlist .nrow').length, accs: document.querySelectorAll('.accs .acc').length,
+    cells: [...document.querySelectorAll('.nstat .nsc')].map((c) => c.innerText.replace(/\s*\n\s*/g, ' | ')), tips: [...document.querySelectorAll('.nstat .nsc')].map((c) => c.title) }));
+  check('新标签页：搜索框、伪装度和纯净度两个圆环、CF 风险的数字、书签、最近访问、已存账号', nt.q && nt.rings === 2 && nt.cf === '22' && nt.tiles === 4 && nt.recent === 3 && nt.accs >= 3, nt);
+  // 决策 N-7：纯净度和 CF 风险各写明“哪头好、数从哪来”，悬停有完整说明
+  check('新标签页：纯净度写“越高越干净 · IPPure 系数 8”，CF 风险写“越低越好”', /92 \| 纯净度 \| 极度纯净 \| 越高越干净 \| IPPure 系数 8/.test(nt.cells[1] || '') && /22 \| CF 风险 \| 纯净 \| 越低越好/.test(nt.cells[2] || '')
+    && /100 − IPPure 系数 8/.test(nt.tips[1] || '') && /100 − Cloudflare Bot Score/.test(nt.tips[2] || '') && /越低越好/.test(nt.tips[2] || ''), nt);
+  {
+    const p3 = await ctx.newPage(); watch(p3, 'newtab-untested');
+    await p3.goto(base + 'newtab.html#inst=p3'); await p3.waitForTimeout(800);
+    const c3 = await p3.evaluate(() => [...document.querySelectorAll('.nstat .nsc')].map((c) => c.innerText.replace(/\s*\n\s*/g, ' | ')));
+    await p3.evaluate(() => window.__calls.splice(0));
+    await p3.locator('.nstat .nsc.go').click(); await p3.waitForTimeout(200);
+    const calls = await p3.evaluate(() => window.__calls.map((c) => c.p + ' ' + JSON.stringify(c.b || {})));
+    check('新标签页：CF 风险没测过写“未测 · 点此实测”，点它在本实例里打开 ippure.com（不跳去节点页）；纯净度来源写 ip.net.coffee',
+      /CF \| CF 风险 \| 未测 · 点此实测 \| 越低越好/.test(c3[2] || '') && /ip\.net\.coffee/.test(c3[1] || '') && calls.some((x) => x.startsWith('/ui/tab') && x.includes('https://ippure.com/cloudflare')) && !calls.some((x) => x.startsWith('/ui/open')), { c3, calls });
+    await p3.close();
+  }
   await pg.evaluate(() => window.__calls.splice(0));
   await pg.locator('.nstat').click(); await pg.waitForTimeout(200);
   check('新标签页：点伪装概况卡去“节点与出口”', await pg.evaluate(() => window.__calls.some((c) => c.p === '/ui/open' && c.b?.route === 'node')), {});

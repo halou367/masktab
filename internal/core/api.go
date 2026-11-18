@@ -847,6 +847,18 @@ func (a *App) routes(mux *http.ServeMux) {
 		reply(w, map[string]any{"changed": len(changed)}, nil)
 	})
 	// 合并窗口的现状（实例栏在哪、哪个窗口显示着）：诊断和实机测试用
+	// 实例的浏览器在 ippure.com 上实测到的 CF 风险（内容脚本 ippure.js → 扩展后台 → 这里，见 ippure.go）。
+	mux.HandleFunc("POST /api/ipq/cf", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			IP   string `json:"ip"`
+			Risk *int   `json:"risk"`
+		}
+		if err := body(r, &b); err != nil || b.Risk == nil {
+			reply(w, nil, errors.New("没有数字"))
+			return
+		}
+		reply(w, map[string]bool{"ok": true}, a.SetCFRisk(me(r), strings.TrimSpace(b.IP), *b.Risk))
+	})
 	mux.HandleFunc("GET /api/debug/tabbar", func(w http.ResponseWriter, r *http.Request) { reply(w, tabbar.Debug(), nil) })
 	mux.HandleFunc("PATCH /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()

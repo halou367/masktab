@@ -71,6 +71,16 @@
       ],
       "run_at": "document_idle",
       "all_frames": false
+    },
+    {
+      "matches": [
+        "https://ippure.com/*"
+      ],
+      "js": [
+        "ippure.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ]
 }

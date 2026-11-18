@@ -16,6 +16,9 @@ import (
 
 // 这个文件给出口 IP 查"成色"：是住宅、机房还是移动网络，纯净度多少分。
 //
+// 纯净度有两个来源（决策 N-7）：正在用的出口以 IPPure 系数为准（ippure.go，要经那条出口去问）；
+// 没用上的候选 IP 只能按 IP 查，用下面这个 ip.net.coffee。给界面的都是同一个方向：0–100，越高越干净。
+//
 // 来源是 ip.net.coffee 的查询接口（用户平时就在这个站上看纯净度；支持 IPv4 / IPv6，实测 40 个并发不限流）。
 // 查不到就不显示，绝不编数字；类型另有 ip-api.com 的 hosting / mobile 标记兜底（见 enrich）。
 // 结果按 IP 缓存 7 天，落盘在 state/ipq.json。设置里的 ipqOff 可以整个关掉。
@@ -35,7 +38,7 @@ func (a *App) loadIPQ() {
 		a.ipq = map[string]*model.IPQ{}
 	}
 	for ip, q := range a.ipq {
-		if q == nil || time.Since(time.UnixMilli(q.At)) > ipqTTL {
+		if q == nil || time.Since(time.UnixMilli(max(q.At, q.RiskAt, q.CFAt))) > ipqTTL {
 			delete(a.ipq, ip)
 		}
 	}
@@ -48,8 +51,15 @@ func (a *App) ipqViewLocked() map[string]model.IPQ {
 		return out
 	}
 	for ip, q := range a.ipq {
-		if q.Type != "" || q.Score >= 0 {
-			out[ip] = *q
+		c := *q
+		if time.Since(time.UnixMilli(c.RiskAt)) > ipqTTL { // 太旧的不拿出来当“当前”的数
+			c.Risk = nil
+		}
+		if time.Since(time.UnixMilli(c.CFAt)) > ipqTTL {
+			c.CF = nil
+		}
+		if v := c.View(); v.Type != "" || v.Score >= 0 || v.CF != nil {
+			out[ip] = v
 		}
 	}
 	return out
@@ -68,6 +78,7 @@ func probeIPs(pr *model.ExitProbe) []string {
 
 // ipqEnsure 给还没有（或已过期）成色记录的 IP 去查一次。可以随便多调：查过的、正在查的都会跳过。
 func (a *App) ipqEnsure(ips ...string) {
+	go a.ippureEnsure() // 正在用的出口另外经它自己问一次 IPPure（见 ippure.go）
 	a.mu.Lock()
 	if a.Settings.IPQOff || a.ipq == nil {
 		a.mu.Unlock()
@@ -114,8 +125,11 @@ func (a *App) ipqEnsure(ips ...string) {
 			q := lookupIPQ(hcs, ip)
 			<-sem
 			a.mu.Lock()
-			if old := a.ipq[ip]; old != nil && q.Score < 0 && q.Type == "" {
-				q.Type, q.Src = old.Type, old.Src // 这次没查到：留着以前兜底得到的类型
+			if old := a.ipq[ip]; old != nil {
+				if q.Score < 0 && q.Type == "" {
+					q.Type, q.Src = old.Type, old.Src // 这次没查到：留着以前兜底得到的类型
+				}
+				q.Risk, q.RiskAt, q.CF, q.CFAt = old.Risk, old.RiskAt, old.CF, old.CFAt // IPPure 那两个数是另一条路来的，别冲掉
 			}
 			a.ipq[ip] = &q
 			delete(a.ipqBusy, ip)
