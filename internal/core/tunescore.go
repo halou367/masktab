@@ -93,15 +93,16 @@ func (h *ipHist) estimate(hour int, nowMs int64) (mbps float64, n int, src strin
 	return 0, 0, "", false
 }
 
-// entryScore 给入口打分（0–100）：下载占 70 分（按对数，100 Mbps 封顶），延迟占 30 分（50 ms 满分，800 ms 以上 0 分）。
+// entryScore 给入口打分（0–100）：下载占 70 分（按对数，500 Mbps 封顶），延迟占 30 分（50 ms 满分，800 ms 以上 0 分）。
 // 不通（delay <= 0）是 0 分。速度是“上限”，所以权重大；延迟影响打开网页的第一下，也要算。
+// 封顶原来是 100 Mbps：需求方电脑上实测（2026-11-18）好几个入口都在 100 ~ 230 Mbps，全成了满分、分不出高低，改成 500。
 func entryScore(mbps float64, delay int) float64 {
 	if delay <= 0 {
 		return 0
 	}
 	sp := 0.0
 	if mbps > 0 {
-		sp = 70 * math.Min(1, math.Log2(1+mbps)/math.Log2(101))
+		sp = 70 * math.Min(1, math.Log2(1+mbps)/math.Log2(501))
 	}
 	dl := 30 * math.Max(0, math.Min(1, (800-float64(delay))/750))
 	return math.Round((sp+dl)*10) / 10
@@ -114,6 +115,7 @@ type tuneCand struct {
 	Country string // 普通网站的出口国家（入口落在的机房所在国家）
 	Delay   int    // 刚测的延迟；<= 0 不通
 	V6      bool
+	Fam     string // 界面上怎么称呼：IPv4 / IPv6 / 域名（域名解析出来是哪种不一定）
 	Hist    *ipHist
 }
 
@@ -228,9 +230,12 @@ func tuneReason(best, cur tuneRank, hour int) string {
 	if best.ID == "" {
 		return ""
 	}
-	fam := "IPv4"
-	if best.V6 {
-		fam = "IPv6"
+	fam := best.Fam
+	if fam == "" {
+		fam = "IPv4"
+		if best.V6 {
+			fam = "IPv6"
+		}
 	}
 	when := fmt.Sprintf("%d 点", hour)
 	switch best.Src {

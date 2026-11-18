@@ -104,6 +104,18 @@ func (a *App) tuneDayLocked(t time.Time) {
 	}
 }
 
+// famOf 是入口地址在界面上的称呼：IPv4 / IPv6 / 域名。
+func famOf(server string) string {
+	ip := net.ParseIP(strings.Trim(server, "[]"))
+	switch {
+	case ip == nil:
+		return "域名"
+	case ip.To4() == nil:
+		return "IPv6"
+	}
+	return "IPv4"
+}
+
 func isV6Addr(server string) bool {
 	ip := net.ParseIP(strings.Trim(server, "[]"))
 	return ip != nil && ip.To4() == nil
@@ -114,7 +126,7 @@ func (a *App) tuneCandsLocked(sub *model.Subscription) []tuneCand {
 	var out []tuneCand
 	for _, n := range a.nodesLocked(sub) {
 		sc := a.scanLocked(n.Name)
-		c := tuneCand{ID: n.ID, Key: n.key(), Delay: sc.Delay, V6: isV6Addr(n.Server), Hist: a.tune.Hist[n.key()]}
+		c := tuneCand{ID: n.ID, Key: n.key(), Delay: sc.Delay, V6: isV6Addr(n.Server), Fam: famOf(n.Server), Hist: a.tune.Hist[n.key()]}
 		if sc.Exit != nil {
 			c.Country = sc.Exit.Country
 		}

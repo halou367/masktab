@@ -15,8 +15,12 @@ import (
 
 // 入口优选（decisions N-6）的打分：速度为主，延迟为辅；不通 0 分。
 func TestEntryScore(t *testing.T) {
-	if entryScore(100, 30) != 0+entryScore(1000, 30) || entryScore(100, 30) != 100 {
-		t.Fatalf("100 Mbps、30 ms 应满分且封顶：%v %v", entryScore(100, 30), entryScore(1000, 30))
+	if entryScore(500, 30) != entryScore(1000, 30) || entryScore(500, 30) != 100 {
+		t.Fatalf("500 Mbps、30 ms 应满分且封顶：%v %v", entryScore(500, 30), entryScore(1000, 30))
+	}
+	// 需求方电脑上实测的几个入口在 100 ~ 230 Mbps：要分得出高低（原来 100 Mbps 就封顶，全是满分）
+	if !(entryScore(230, 51) > entryScore(105, 45)) {
+		t.Fatalf("230 Mbps 应高于 105 Mbps：%v %v", entryScore(230, 51), entryScore(105, 45))
 	}
 	if entryScore(50, 0) != 0 || entryScore(50, -1) != 0 {
 		t.Fatal("不通应为 0 分")
@@ -124,6 +128,12 @@ func TestTuneDecide(t *testing.T) {
 	cs3 := []tuneCand{
 		{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: -1, Hist: histOf(21, 30)},
 		{ID: "b", Key: "2.2.2.2:443", Country: "JP", Delay: 90, Hist: histOf(21, 5)},
+	}
+	if famOf("7.cf.example.com") != "域名" || famOf("2606:4700::1") != "IPv6" || famOf("1.2.3.4") != "IPv4" {
+		t.Fatal("地址的称呼不对")
+	}
+	if why := tuneReason(tuneRank{tuneCand: tuneCand{ID: "x", Fam: "域名", Delay: 50}, Mbps: 80, Known: true}, tuneRank{}, 9); !strings.HasPrefix(why, "域名 · 9 点下载 80 Mbps") {
+		t.Fatalf("域名的理由不对：%q", why)
 	}
 	if b, _, sw := tuneDecide(rankTune(cs3, 21, nowMs), "a", "JP"); !sw || b.ID != "b" {
 		t.Fatal("现在的不通应换")
