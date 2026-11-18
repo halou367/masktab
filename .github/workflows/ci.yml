@@ -102,6 +102,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: 模拟任务栏在上边 / 左边（只在手动指定时）
+        if: inputs.taskbar != ''
+        shell: pwsh
+        run: |
+          # 测试机上任务栏真的挪不动（改注册表、重启资源管理器：44327000787），直接改可用区域又会被资源管理器改回去（44331959202）。
+          # 改成在那一边停靠一条“应用栏”（scripts/ci/appbar.ps1）：和任务栏是同一种东西，系统把它占的地方从可用区域里扣掉。
+          # 放在最前面做：不成的话一分钟就知道，不用等后面十分钟的构建。
+          Add-Type -AssemblyName System.Windows.Forms
+          $want = '${{ inputs.taskbar }}'
+          if ($want -notin 'top', 'left') { throw '只认 top / left' }
+          $before = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+          Start-Process pwsh -ArgumentList '-NoProfile', '-File', "$PWD\scripts\ci\appbar.ps1", $want -WindowStyle Hidden
+          $moved = { $w = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; ($want -eq 'top' -and $w.Top -gt 0) -or ($want -eq 'left' -and $w.Left -gt 0) }
+          for ($i = 0; $i -lt 30 -and -not (& $moved); $i++) { Start-Sleep 1 }
+          "可用区域：$before → $([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea)"
+          if (-not (& $moved)) { throw "可用区域的左上角没有挪开（$want）" }
       - name: 构建 masktab.exe
         shell: pwsh
         run: |
@@ -170,28 +186,6 @@ jobs:
           "完整包安装用时 {0:n0} 秒" -f $t.TotalSeconds
           foreach ($f in 'masktab.exe', 'mihomo.exe', 'uninstall.exe', "kernel\fingerprint-chromium\$env:KVER\installed.ok") { if (-not (Test-Path "C:\mt\$f")) { throw "安装后缺少 $f" } }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\MaskTab.lnk")) { throw "没有创建开始菜单快捷方式" }
-      - name: 模拟任务栏在上边 / 左边（只在手动指定时）
-        if: inputs.taskbar != ''
-        shell: pwsh
-        run: |
-          # 测试机上任务栏真的挪不动（改注册表、重启资源管理器都试过：44327000787、44329848601，可用区域不变）。
-          # 改用系统接口直接把“可用区域”的左上角挪开：窗口最大化到哪、摆窗口的坐标怎么换算，系统看的都是可用区域，
-          # 对我们的代码来说和任务栏在那一边是一回事。下边原来让给任务栏的那一条照旧让着。
-          Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -Namespace W -Name A -MemberDefinition '[StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; } [DllImport("user32.dll", SetLastError=true)] public static extern bool SystemParametersInfo(uint a, uint b, ref R r, uint f);'
-          $want = '${{ inputs.taskbar }}'
-          if ($want -notin 'top', 'left') { throw '只认 top / left' }
-          $before = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-          $moved = { $w = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; ($want -eq 'top' -and $w.Top -gt 0) -or ($want -eq 'left' -and $w.Left -gt 0) }
-          for ($i = 0; $i -lt 6 -and -not (& $moved); $i++) {
-            $r = New-Object W.A+R
-            $r.L = $before.Left; $r.T = $before.Top; $r.Rt = $before.Right; $r.B = $before.Bottom
-            if ($want -eq 'top') { $r.T = $before.Top + 48 } else { $r.L = $before.Left + 62 }
-            if (-not [W.A]::SystemParametersInfo(0x002F, 0, [ref]$r, 3)) { "改可用区域失败：$([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
-            Start-Sleep 2
-          }
-          "可用区域：$before → $([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea)"
-          if (-not (& $moved)) { throw "可用区域的左上角没有挪开（$want）" }
       - name: 冒烟测试（对装好的那一份；内核与代理内核都来自安装包，不应再下载）
         run: node scripts/smoke.mjs --bin C:\mt\masktab.exe --data C:\mt\data --shots shots --visible
       - name: 扩展“重载”不用重启（两个开着的实例，改了代码点重载就生效；决策 EXT-1）
