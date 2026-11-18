@@ -62,6 +62,7 @@
 | 两端共用的小函数、措辞（“需重启：…”之类） | `common.js` |
 | 节点与出口、指纹与伪装 | `panel.js`（`panel.target(实例 id)`：可以对着任何实例，不只本窗口） |
 | 设置各页、订阅与地址库、组件与更新、诊断 | `pages.js` |
+| 运行情况页（电脑版，UI-28）：各实例的内存 / 处理器 / 进程、窗口和标签页 | 页面 `usage.js`；数据 `internal/core/usage.go`（`GET /api/usage`、`POST /api/tabs`）、`internal/procs`（`Take`、`Tree`、`Get`）；标签页由 `background.js` 的 `reportTabs` 报 |
 | 实例列表、实例抽屉（账号、Cookie、编号、节点入口）、导入邮箱 | `instances.js` |
 | 新标签页 | `ntp.js` |
 | 头像菜单（切换实例） | `menu.js` |

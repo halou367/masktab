@@ -154,7 +154,17 @@ func (a *App) Usage() *usageView {
 	if a.core != nil {
 		mh = strings.TrimSuffix(strings.ToLower(filepath.Base(a.core.Bin)), ".exe")
 	}
-	for _, pid := range snap.Tree(os.Getpid()) {
+	// 核心服务自己的树里，除了各实例：代理内核（连同它名下的，比如 Windows 给它配的控制台宿主 conhost）单算，其余归“其它”
+	mine := snap.Tree(os.Getpid())
+	proxyOf := map[int]bool{}
+	for _, pid := range mine {
+		if !owned[pid] && pid != os.Getpid() && strings.TrimSuffix(strings.ToLower(filepath.Base(procs.ExePath(pid))), ".exe") == mh {
+			for _, k := range snap.Tree(pid) {
+				proxyOf[k] = true
+			}
+		}
+	}
+	for _, pid := range mine {
 		if owned[pid] {
 			continue
 		}
@@ -165,7 +175,7 @@ func (a *App) Usage() *usageView {
 		switch {
 		case pid == os.Getpid():
 			v.Service.add(st.Mem, pct)
-		case strings.TrimSuffix(strings.ToLower(filepath.Base(procs.ExePath(pid))), ".exe") == mh:
+		case proxyOf[pid]:
 			v.Proxy.add(st.Mem, pct)
 		default:
 			v.Other.add(st.Mem, pct)
