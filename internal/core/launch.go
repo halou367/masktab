@@ -26,6 +26,24 @@ import (
 	"github.com/halou367/masktab/internal/tabbar"
 )
 
+// CleanLeftovers 清掉上次核心服务异常退出（被结束、卡死后被安装程序结束）时留下的内核进程。
+// 不清的话：再开同一个实例，新进程会把窗口交给那个旧进程后立即退出——窗口开在没人管的旧进程里，
+// 核心服务却以为它已经关了。带 -no-open 启动（不自动开窗口）时也要清，所以单拿出来，启动时一定叫一次。
+func (a *App) CleanLeftovers() {
+	if a.hosted() {
+		return
+	}
+	var st struct{ Pids map[string]int }
+	readJSON(a.p("state", "runtime.json"), &st)
+	for id, pid := range st.Pids {
+		if isKernelProcess(pid, a.p("profiles", id)) {
+			log.Printf("清理上次遗留的内核进程 %d", pid)
+			terminate(pid, true)
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
 // Start 打开普通窗口 #0，并恢复上次未正常关闭的实例（F-INST-1、F-SESSION）。
 func (a *App) Start() {
 	if a.hosted() { // 开哪个实例由宿主决定
@@ -36,13 +54,7 @@ func (a *App) Start() {
 		Pids    map[string]int
 	}
 	readJSON(a.p("state", "runtime.json"), &st)
-	for id, pid := range st.Pids { // 上次核心服务异常退出时留下的内核进程：先清掉，否则新进程会把窗口交给旧进程后立即退出
-		if isKernelProcess(pid, a.p("profiles", id)) {
-			log.Printf("清理上次遗留的内核进程 %d", pid)
-			terminate(pid, true)
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
+	a.CleanLeftovers()
 	// 刚装完更新：把更新前开着的实例都开回来，不看“启动时恢复”设置（update.go 留的记号，只管一次）
 	_, once := os.Stat(a.p("state", "restore-once"))
 	_ = os.Remove(a.p("state", "restore-once"))

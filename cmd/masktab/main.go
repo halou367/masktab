@@ -158,6 +158,8 @@ func main() {
 				log.Printf("打开实例 %s 失败：%v", *open, err)
 			}
 		}
+	} else {
+		app.CleanLeftovers() // 不自动开窗口时 Start 不跑：上次留下的内核进程照样要清
 	}
 	if *keep || *noOpen {
 		select {}
