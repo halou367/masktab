@@ -112,8 +112,12 @@ type App struct {
 	vault     *vault.Vault           // 密码库（accounts.go）
 	vaultErr  string                 // 密码库打不开的原因
 	cookies   map[string][]CookieSum // 实例 id → Cookie 汇总（伴随扩展上报，落盘在 state/cookies.json）
-	lastExit  map[string]lastExit    // 实例 id → 上次探到的出口（落盘在 state/lastexit.json，手机启动时先用它，decisions A-13）
-	tune      tuneState              // 入口优选：每个入口按小时的表现、当天用量（tune.go，落盘在 state/tune.json，decisions N-6）
+	tabs      map[string]*tabsReport // 实例 id → 开着的窗口和标签页（伴随扩展上报，只在内存里；usage.go，decisions UI-28）
+	usageMu   sync.Mutex             // 下面两项：上一次取样时各进程用掉的处理器时间，算占用率用
+	usagePrev map[int]cpuAt
+	usageAt   time.Time
+	lastExit  map[string]lastExit // 实例 id → 上次探到的出口（落盘在 state/lastexit.json，手机启动时先用它，decisions A-13）
+	tune      tuneState           // 入口优选：每个入口按小时的表现、当天用量（tune.go，落盘在 state/tune.json，decisions N-6）
 	tuneOnce  sync.Once
 
 	cfgMu     sync.Mutex

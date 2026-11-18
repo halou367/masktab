@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,5 +71,51 @@ func TestStopByExactPath(t *testing.T) {
 	}
 	if killed, left := Stop(filepath.Join(dir, "none", "x"), time.Second); killed != 0 || left != 0 {
 		t.Fatalf("没有这个程序时应当什么都不做，得到 %d / %d", killed, left)
+	}
+}
+
+// 进程树和占用：起一个带孩子的 shell，树里应当有它和孩子；占用里内存大于 0、命令行读得到。
+func TestTreeAndGet(t *testing.T) {
+	var c *exec.Cmd
+	if runtime.GOOS == "windows" {
+		c = exec.Command("cmd", "/c", "ping -n 30 127.0.0.1 >nul & rem masktab-tree-test")
+	} else {
+		c = exec.Command("/bin/sh", "-c", "sleep 30; : masktab-tree-test")
+	}
+	if err := c.Start(); err != nil {
+		t.Skip("起不了 shell：", err)
+	}
+	defer func() { _ = c.Process.Kill(); _ = c.Wait() }()
+	var tree []int
+	for i := 0; i < 30 && len(tree) < 2; i++ {
+		time.Sleep(100 * time.Millisecond)
+		tree = Tree(c.Process.Pid)
+	}
+	if len(tree) < 2 || tree[0] != c.Process.Pid {
+		t.Fatalf("Tree = %v，应当是 shell（%d）和它的孩子", tree, c.Process.Pid)
+	}
+	for _, pid := range Tree(os.Getpid()) {
+		if pid == tree[1] {
+			goto found
+		}
+	}
+	t.Fatalf("自己的树里应当有孙子进程 %d", tree[1])
+found:
+	st, ok := Get(c.Process.Pid)
+	if !ok || st.Mem <= 0 {
+		t.Fatalf("Get(shell) = %+v ok=%v，内存应当大于 0", st, ok)
+	}
+	if !strings.Contains(st.Cmd, "masktab-tree-test") {
+		t.Fatalf("命令行 %q 里应当有 masktab-tree-test", st.Cmd)
+	}
+	me, ok := Get(os.Getpid())
+	if !ok || me.CPU < 0 || me.CPU > time.Hour {
+		t.Fatalf("自己的处理器时间 %v 不像话", me.CPU)
+	}
+	if _, ok := Get(1 << 30); ok {
+		t.Fatal("不存在的进程不该有占用")
+	}
+	if Tree(1<<30) != nil {
+		t.Fatal("不存在的进程不该有树")
 	}
 }

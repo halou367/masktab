@@ -695,3 +695,30 @@ html.wzwin body { overflow: hidden; } html.wzwin .pnav { display: none; } html.w
 .iprow.on .l2 .tag.tbest { color: inherit; }
 .row.tbr .s { flex-wrap: wrap; white-space: normal; }
 .row.tbr .why { color: var(--on2); }
+
+/* ---------- 运行情况（决策 UI-28，usage.js） ---------- */
+.usum { margin: 8px var(--gut) 0; border-radius: var(--r-xl); padding: 16px 18px; }
+.usum .big { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px 8px; }
+.usum .big > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.usum .big b { font-size: 22px; line-height: 28px; font-weight: 600; white-space: nowrap; }
+.usum .big span { font-size: 12px; line-height: 16px; color: var(--on2); }
+@media (max-width: 760px) { .usum .big { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.ubar { display: flex; gap: 2px; height: 8px; margin-top: 14px; border-radius: 4px; overflow: hidden; }
+.ubar i { display: block; min-width: 3px; } .ubar i.bg { background: var(--on3); }
+.unum { min-width: 68px; text-align: right; font-size: 13.5px; color: var(--on); } .unum.cpu { min-width: 48px; color: var(--on2); }
+.urow .no, .uoff .no { color: var(--on3); font-size: 12.5px; } .urow .nm, .uoff .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.urow .chev svg { transition: transform var(--d-s, .15s) var(--ease, ease); } .urow.open .chev svg { transform: rotate(180deg); }
+.uoff .t, .uoff .av { opacity: .75; }
+.udet { width: calc(100% - 2 * var(--gut)); margin: 2px var(--gut) 0; background: var(--surf2); border-radius: var(--r-xs); padding: 4px 14px 14px 64px; }
+.udet .uh { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; font-size: 12.5px; font-weight: 500; color: var(--on2); }
+.udet .uh .r { font-weight: 400; color: var(--on3); }
+.ukinds, .usites, .uacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
+.ukinds .chip { height: 28px; font-size: 12.5px; padding: 0 10px; } .ukinds .chip b { font-weight: 500; color: var(--on); }
+.usites { font-size: 13px; } .usites .lb { color: var(--on2); font-size: 12.5px; } .usites .tag i { font-style: normal; opacity: .7; }
+.uwin { margin-top: 8px; font-size: 12px; color: var(--on3); }
+.utab { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: 13px; min-width: 0; }
+.utab .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.utab .th { color: var(--on3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 2 auto; min-width: 40px; }
+.utab .tag { flex: none; } .utab.sleep .tt { color: var(--on2); }
+.unote { font-size: 12.5px; line-height: 18px; color: var(--on2); margin-top: 6px; } .unote.pad { padding: 12px calc(var(--gut) + 14px); }
+.uacts { margin-top: 14px; } .uacts .btn { height: 32px; padding: 0 14px 0 10px; gap: 6px; font-size: 13px; box-shadow: inset 0 0 0 1px var(--div); }

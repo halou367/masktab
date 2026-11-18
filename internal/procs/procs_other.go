@@ -57,3 +57,53 @@ func Kill(pid int) error {
 	}
 	return nil
 }
+
+// parents 返回“父进程 → 孩子们”和每个进程的出生时刻（/proc/<pid>/stat 第 22 项，开机以来的时钟滴答）。
+func parents() (kids map[int][]int, born map[int]int64) {
+	kids, born = map[int][]int{}, map[int]int64{}
+	for _, pid := range all() {
+		f := statFields(pid)
+		if len(f) < 20 {
+			continue
+		}
+		ppid, _ := strconv.Atoi(f[1])
+		kids[ppid] = append(kids[ppid], pid)
+		born[pid], _ = strconv.ParseInt(f[19], 10, 64)
+	}
+	return
+}
+
+// statFields 返回 /proc/<pid>/stat 里进程名之后的各项（[0] 是状态，[1] 父进程号，[11] utime，[12] stime，[19] starttime）。
+func statFields(pid int) []string {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return nil
+	}
+	i := strings.LastIndexByte(string(b), ')')
+	if i < 0 {
+		return nil
+	}
+	return strings.Fields(string(b[i+1:]))
+}
+
+// Get 取一个进程此刻的占用；进程不在了时 ok 为假。
+func Get(pid int) (st Stat, ok bool) {
+	f := statFields(pid)
+	if len(f) < 20 || f[0] == "Z" {
+		return st, false
+	}
+	ut, _ := strconv.ParseInt(f[11], 10, 64)
+	stt, _ := strconv.ParseInt(f[12], 10, 64)
+	st.CPU = time.Duration(ut+stt) * (time.Second / 100) // 时钟滴答：Linux 上一律每秒 100 下
+	if b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/statm"); err == nil {
+		if m := strings.Fields(string(b)); len(m) >= 3 {
+			rss, _ := strconv.ParseInt(m[1], 10, 64)
+			shr, _ := strconv.ParseInt(m[2], 10, 64)
+			st.Mem = (rss - shr) * int64(os.Getpagesize())
+		}
+	}
+	if b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline"); err == nil {
+		st.Cmd = strings.TrimSpace(strings.ReplaceAll(string(b), "\x00", " "))
+	}
+	return st, true
+}

@@ -133,6 +133,7 @@ async function loop() {
     const c = await config();
     const first = await refresh();
     reportCookies(true).catch(() => {});
+    reportTabs().catch(() => {});
     if (!seq) seq = first.seq; // 后台刚被唤醒：从当前序号开始听，不重放旧事件（否则旧的“关闭”事件会把刚启动的实例关掉）
     for (;;) {
       const r = await api('GET', `/api/events?since=${seq}`);
@@ -162,6 +163,29 @@ async function reportCookies(force) {
 }
 globalThis.reportCookies = reportCookies; // 冒烟测试从调试端口调用
 if (chrome.cookies) chrome.cookies.onChanged.addListener(() => { clearTimeout(cookieTimer); cookieTimer = setTimeout(() => reportCookies().catch(() => {}), 15_000); });
+
+// ---------- 运行情况（决策 UI-28）：把本实例开着的窗口和标签页报给核心服务，“运行情况”页按实例列出来 ----------
+// 只报标题和主机名（不报完整网址）；无痕窗口只报有几个标签页。核心服务只放在内存里，不落盘。
+let tabsTimer = 0;
+async function reportTabs() {
+  const wins = await chrome.windows.getAll({ populate: true, windowTypes: ['normal', 'popup'] });
+  const tabs = [];
+  let priv = 0, n = 0;
+  for (const w of wins) {
+    if (w.incognito) { priv += w.tabs.length; continue; }
+    n++;
+    for (const t of w.tabs) {
+      let host = '';
+      try { const u = new URL(t.url || t.pendingUrl || ''); host = /^https?:$/.test(u.protocol) ? u.host : u.protocol === 'chrome-extension:' && u.host === chrome.runtime.id ? 'MaskTab' : u.protocol + '//' + u.host; } catch { /* 空白页 */ }
+      tabs.push({ t: t.title || '', h: host, w: n, a: t.active || undefined, p: t.pinned || undefined, d: t.discarded || undefined, u: t.audible || undefined });
+    }
+  }
+  await api('POST', '/api/tabs', { windows: wins.length, private: priv, tabs });
+}
+globalThis.reportTabs = reportTabs; // 冒烟测试从调试端口调用
+const tabsSoon = () => { clearTimeout(tabsTimer); tabsTimer = setTimeout(() => reportTabs().catch(() => {}), 1500); };
+for (const ev of [chrome.tabs.onCreated, chrome.tabs.onRemoved, chrome.tabs.onActivated, chrome.tabs.onMoved, chrome.tabs.onAttached, chrome.tabs.onDetached, chrome.tabs.onReplaced, chrome.windows.onCreated, chrome.windows.onRemoved]) ev.addListener(tabsSoon);
+chrome.tabs.onUpdated.addListener((id, ch) => { if ('title' in ch || 'url' in ch || 'discarded' in ch || 'audible' in ch || 'pinned' in ch) tabsSoon(); });
 
 // ---------- 密码库：内容脚本经这里取 / 存（令牌不进网页进程）。逻辑在 vaultmsg.js，两端共用；这里只说明“请求怎么送、暂存放哪” ----------
 // 暂存用 chrome.storage.session：只有扩展自己的页面读得到（网页内容脚本默认读不到），后台休眠重启也不丢，浏览器关掉即清空。

@@ -554,6 +554,7 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 func (a *App) routes(mux *http.ServeMux) {
 	me := func(r *http.Request) string { return r.Header.Get("X-MaskTab-Inst") }
 	a.accountRoutes(mux)
+	a.usageRoutes(mux)
 	a.hostRoutes(mux)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { reply(w, a.State(me(r)), nil) })
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {

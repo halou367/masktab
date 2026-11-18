@@ -478,6 +478,22 @@ if (desk && want('desk')) {
   const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const deskCalls = [];
+  // 运行情况（UI-28）：p2 最占内存、两个窗口五个标签页（一个休眠、一个标题很长）；p1 伴随扩展还没报；p3 一个窗口；第一次问没有处理器占用
+  let usageAsked = 0;
+  const deskUsage = () => {
+    const M = 1024 * 1024, warm = usageAsked++ > 0;
+    const k = (n, mem, cpu) => ({ n, mem: mem * M, cpu: warm ? cpu : 0 });
+    const instances = {
+      p1: { ...k(9, 412, 0.4), pid: 1001, kinds: { main: k(1, 120, 0.1), page: k(4, 180, 0.3), gpu: k(1, 60, 0), util: k(2, 40, 0), other: k(1, 12, 0) }, windows: -1, tabs: 0 },
+      p2: { ...k(14, 1536, 12.4), pid: 1002, kinds: { main: k(1, 210, 1.2), page: k(7, 980, 10.1), ext: k(2, 96, 0.2), gpu: k(1, 170, 0.9), util: k(2, 68, 0), other: k(1, 12, 0) }, windows: 2, tabs: 6, private: 1,
+        list: [{ t: 'GitHub · Where software is built', h: 'github.com', w: 1, a: true, p: true }, { t: '一个标题特别特别长的标签页 '.repeat(8), h: 'a-very-long-subdomain-name.for-testing.example-website.com', w: 1 }, { t: 'ChatGPT', h: 'chatgpt.com', w: 1, d: true },
+          { t: 'YouTube', h: 'www.youtube.com', w: 2, a: true, u: true }, { t: '', h: '', w: 2 }] },
+      p3: { ...k(8, 365, 0), pid: 1003, kinds: { main: k(1, 110, 0), page: k(3, 150, 0), gpu: k(1, 55, 0), util: k(2, 38, 0), other: k(1, 12, 0) }, windows: 1, tabs: 1, list: [{ t: '新标签页', h: 'MaskTab', w: 1, a: true }] },
+    };
+    const service = k(1, 38, 0.1), proxy = k(1, 54, 0.3), other = k(0, 0, 0);
+    const all = [...Object.values(instances), service, proxy];
+    return { at: Date.now(), cores: 8, warm, total: { n: all.reduce((a, x) => a + x.n, 0), mem: all.reduce((a, x) => a + x.mem, 0), cpu: all.reduce((a, x) => a + x.cpu, 0) }, service, proxy, other, instances };
+  };
   const dsrv = http.createServer((q, r) => {
     const u = new URL(q.url, 'http://x');
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
@@ -488,7 +504,7 @@ if (desk && want('desk')) {
       const xr = /^\/api\/extensions\/([^/]+)\/reload$/.exec(u.pathname); // 扩展“重载”：回那个扩展，加上这一次的结果
       if (xr && deskExts) { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ ...deskExts.find((x) => x.id === xr[1]), outcome: deskOutcome })); return; }
       const st = { ...fixture, ...(deskExts ? { extensions: deskExts } : {}), ...(deskExits ? { exits: deskExits } : {}), me: need(fixture.me), instances: many.map(need), ...(deskUpd ? { update: deskUpd } : {}), settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
-      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : { ok: true })); return;
+      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : u.pathname === '/api/usage' ? deskUsage() : { ok: true })); return;
     }
     const f = path.join(desk, decodeURIComponent(u.pathname));
     if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); r.end(); return; }
@@ -659,15 +675,15 @@ if (desk && want('desk')) {
     await c3.close(); deskTheme = fixture.settings?.theme; deskMany = false;
   }
   // 电脑版设置页：左边导航 + 共用的页面
-  // 左边照定稿的演示：MaskTab 的七页 + “浏览器”一组两页，没有“概览”；这些页没有“返回”（导航就在旁边）；不带 # 时打开“实例”
-  for (const [hash, title, on] of [['', '实例', '实例'], ['settings', '基本设置', '基本设置'], ['settings/ntp', '自定义新标签页', '基本设置'], ['exits', '订阅与地址库', '订阅与地址库'], ['node', '节点与出口', '节点与出口'], ['fp', '指纹与伪装', '指纹与伪装'], ['settings/adv', '高级', '高级'], ['extensions', '扩展', '扩展']]) {
+  // 左边照定稿的演示：MaskTab 的八页（2026-11 加了“运行情况”，UI-28）+ “浏览器”一组两页，没有“概览”；这些页没有“返回”（导航就在旁边）；不带 # 时打开“实例”
+  for (const [hash, title, on] of [['', '实例', '实例'], ['settings', '基本设置', '基本设置'], ['settings/ntp', '自定义新标签页', '基本设置'], ['exits', '订阅与地址库', '订阅与地址库'], ['node', '节点与出口', '节点与出口'], ['fp', '指纹与伪装', '指纹与伪装'], ['settings/adv', '高级', '高级'], ['extensions', '扩展', '扩展'], ['usage', '运行情况', '运行情况']]) {
     const ap = await dctx.newPage();
     ap.on('pageerror', (e) => errors.push(`电脑版设置页 ${hash}: ${e.message}`));
     await ap.setViewportSize({ width: 1280, height: 820 });
     await ap.goto(dbase + 'app.html#' + hash);
     await ap.waitForTimeout(500);
     const got = await ap.evaluate(() => ({ h1: (document.querySelector('.appbar h1')?.childNodes[0]?.textContent || '').trim(), nav: document.querySelectorAll('.pnav button').length, on: document.querySelector('.pnav button.on')?.textContent, back: document.querySelectorAll('.appbar button[title^="返回"]').length }));
-    check(`电脑版设置页：${title}`, got.h1 === title && got.nav === 9 && got.on === on && got.back === (hash === 'settings/ntp' ? 1 : 0), got);
+    check(`电脑版设置页：${title}`, got.h1 === title && got.nav === 10 && got.on === on && got.back === (hash === 'settings/ntp' ? 1 : 0), got);
     await ap.screenshot({ path: path.join(out, `desk-${(hash || 'home').replace('/', '-')}.png`) });
     await ap.close();
   }
@@ -800,6 +816,51 @@ if (desk && want('desk')) {
     check('电脑版地址库：点“独立 IP”进这一组，返回回到地址库', lo.hash === 'exits/loose' && /独立 IP/.test(lo.h1) && lo.n === 1 && back1 === 'exits', { lo, back1 });
     check('电脑版地址库：列表展开页有网址那一行、能立即更新，返回回到地址库', /best\.txt 0 \/ 2/.test(li.h1) && li.n === 2 && /https:\/\/ipdb\.example\.com\/api\/best\.txt/.test(li.src) && did.includes('POST /api/exits/L1/resolve') && back2 === 'exits', { li, did, back2 });
     deskExits = null; await gp.close(); }
+  { // 运行情况（UI-28）：总数、每个实例一行（按内存从多到少）、展开看进程分类 / 窗口和标签页 / 账号
+    const up = await dctx.newPage();
+    up.on('pageerror', (e) => errors.push(`电脑版运行情况: ${e.message}`));
+    await up.setViewportSize({ width: 1280, height: 820 });
+    usageAsked = 0;
+    await up.goto(dbase + 'app.html#usage');
+    await up.waitForSelector('.usum');
+    const tapU = (sel, text) => up.evaluate(([sel, text]) => { const e = [...document.querySelectorAll(sel)].find((x) => !text || x.innerText.includes(text)); if (!e) throw new Error('找不到 ' + sel + ' ' + (text || '')); e.click(); }, [sel, text]);
+    const read = () => up.evaluate(() => ({ big: [...document.querySelectorAll('.usum .big > div')].map((d) => d.innerText.replace(/\s+/g, ' ').trim()), bar: document.querySelectorAll('.ubar i').length,
+      rows: [...document.querySelectorAll('.urow')].map((r) => r.innerText.replace(/\s+/g, ' ').trim()), bgRows: [...document.querySelectorAll('.row:not(.urow):not(.uoff)')].map((r) => r.innerText.replace(/\s+/g, ' ').trim()),
+      off: document.querySelectorAll('.uoff').length, wide: document.documentElement.scrollWidth > innerWidth }));
+    const a = await read();
+    check('电脑运行情况：头一回没有处理器占用时写“—”，内存 / 进程 / 实例 / 窗口 / 标签页的总数对', /^2\.35 GB 内存/.test(a.big[0]) && /^— 处理器（8 核）/.test(a.big[1]) && /^33 进程/.test(a.big[2]) && /^3 开着的实例$/.test(a.big[3]) && /^3 窗口/.test(a.big[4]) && /^7 标签页/.test(a.big[5]), a.big);
+    check('电脑运行情况：每个开着的实例一行，按内存从多到少；伴随扩展没报的写“窗口未知”', a.rows.length === 3 && /^C #2 carol@proton\.me 14 个进程 · 2 个窗口 · 6 个标签页 · \d 个账号 1\.50 GB —$/.test(a.rows[0]) && /^A #1 .*9 个进程 · 窗口未知 412 MB —$/.test(a.rows[1]) && /1 个窗口 · 1 个标签页 365 MB —$/.test(a.rows[2]), a.rows);
+    check('电脑运行情况：内存分布条每个实例一段再加后台一段；后台单列核心服务和代理内核；不横向溢出', a.bar === 4 && a.bgRows.length === 2 && /核心服务.*38 MB/.test(a.bgRows[0]) && /代理内核.*54 MB/.test(a.bgRows[1]) && a.off === 0 && !a.wide, { bar: a.bar, bg: a.bgRows, off: a.off, wide: a.wide });
+    await up.waitForFunction(() => /%/.test(document.querySelector('.usum .big > div:nth-child(2) b')?.textContent || ''), null, { timeout: 6000 });
+    const b = await read();
+    check('电脑运行情况：隔两秒自己刷新，第二回起有处理器占用', /^13%/.test(b.big[1]) && /12%$/.test(b.rows[0]) && /0\.4%$/.test(b.rows[1]) && /0%$/.test(b.rows[2]), { big: b.big[1], rows: b.rows });
+    await tapU('.urow', 'carol');
+    await up.waitForSelector('.udet');
+    const d = await up.evaluate(() => { const e = document.querySelector('.udet'); return { kinds: [...e.querySelectorAll('.ukinds .chip')].map((c) => c.innerText.replace(/\s+/g, ' ').trim()), heads: [...e.querySelectorAll('.uh')].map((c) => c.innerText.replace(/\s+/g, ' ').trim()),
+      wins: [...e.querySelectorAll('.uwin')].map((c) => c.innerText), tabs: [...e.querySelectorAll('.utab')].map((c) => c.innerText.replace(/\s+/g, ' ').trim().slice(0, 60)), notes: [...e.querySelectorAll('.unote')].map((c) => c.innerText),
+      sites: [...e.querySelectorAll('.usites')].map((c) => c.innerText.replace(/\s+/g, ' ').trim()), acts: [...e.querySelectorAll('.uacts .btn')].map((c) => c.innerText.trim()),
+      over: [...e.querySelectorAll('.utab')].some((t) => t.getBoundingClientRect().right > e.getBoundingClientRect().right + 1), wide: document.documentElement.scrollWidth > innerWidth }; });
+    check('电脑运行情况：展开一个实例看到进程分类（网页 / 扩展 / 图形…各占多少）', d.kinds.length === 6 && /^主进程 210 MB/.test(d.kinds[0]) && /^网页 7 个 980 MB 10%/.test(d.kinds[1]) && /^扩展 2 个 96 MB/.test(d.kinds[2]) && /进程 14 个/.test(d.heads[0]), { kinds: d.kinds, heads: d.heads });
+    check('电脑运行情况：按窗口列出标签页（当前 / 固定 / 休眠 / 出声有标记，空白页有字），无痕的只说有几个', /2 个窗口 · 6 个标签页/.test(d.heads[1]) && d.wins.join() === '窗口 1,窗口 2' && d.tabs.length === 5 && /GitHub.*github\.com 当前 固定/.test(d.tabs[0]) && /ChatGPT chatgpt\.com 休眠/.test(d.tabs[2]) && /YouTube.*当前 出声/.test(d.tabs[3]) && /（空白页）/.test(d.tabs[4]) && d.notes.some((n) => /无痕窗口里还有 1 个标签页/.test(n)), d);
+    check('电脑运行情况：很长的标题和主机名截断，不撑破这一块', !d.over && !d.wide, { over: d.over, wide: d.wide });
+    check('电脑运行情况：展开里有账号（记住了账号的站点）和出口，能切过去 / 进设置 / 关闭', /记住 \d+ 个账号/.test(d.heads[2]) && d.sites.some((x) => /记住了账号的站点.*github\.com/.test(x)) && d.acts.join() === '切到这个实例,设置,关闭', { heads: d.heads, sites: d.sites, acts: d.acts });
+    await up.screenshot({ path: path.join(out, 'desk-usage.png'), fullPage: true });
+    await up.waitForTimeout(2300); // 刷新之后展开的还开着
+    check('电脑运行情况：刷新之后展开的那个实例还开着', await up.evaluate(() => document.querySelectorAll('.udet').length === 1 && document.querySelector('.urow.open') != null), null);
+    await tapU('.urow', 'alice');
+    const n1 = await up.evaluate(() => [...document.querySelectorAll('.udet')].map((e) => e.innerText.replace(/\s+/g, ' ')).find((x) => /还没报上来/.test(x)) || '');
+    check('电脑运行情况：伴随扩展没报的实例，展开后说明原因；没有账号的也说明', /伴随扩展还没报上来/.test(n1) && /没有记住的账号/.test(n1), n1.slice(0, 200));
+    deskCalls.length = 0;
+    await up.evaluate(() => [...document.querySelectorAll('.udet')].find((e) => e.dataset.for === 'p2').querySelector('.uacts .btn:nth-child(3)').click());
+    await up.waitForTimeout(400);
+    check('电脑运行情况：点“关闭”关的是这个实例', deskCalls.some((c) => c.m === 'POST' && c.p === '/api/instances/p2/stop'), deskCalls.filter((c) => !c.p.startsWith('/ui/')));
+    await up.setViewportSize({ width: 700, height: 820 }); await up.waitForTimeout(300);
+    check('电脑运行情况：窗口窄到 700 也不横向溢出', await up.evaluate(() => document.documentElement.scrollWidth <= innerWidth), null);
+    await up.screenshot({ path: path.join(out, 'desk-usage-narrow.png'), fullPage: true });
+    await up.goto('about:blank'); const n0 = usageAsked; await up.waitForTimeout(2500);
+    check('电脑运行情况：离开这一页就不再问', usageAsked === n0, { n0, now: usageAsked });
+    await up.close();
+  }
   await mp.close(); await dctx.close(); dsrv.close();
 }
 if (!ONLY.length || ONLY.includes('shots') || ONLY.includes('flow')) check('没有“圆角 + 可滚动”的元素（各页面、对话框）', rsBad.length === 0, rsBad);

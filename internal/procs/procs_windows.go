@@ -5,15 +5,22 @@ package procs
 import (
 	"os"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
 const caseless = true
 
-var queryImage = syscall.NewLazyDLL("kernel32.dll").NewProc("QueryFullProcessImageNameW")
+var (
+	kernel32   = syscall.NewLazyDLL("kernel32.dll")
+	queryImage = kernel32.NewProc("QueryFullProcessImageNameW")
+	memInfo    = kernel32.NewProc("K32GetProcessMemoryInfo")
+	ntQuery    = syscall.NewLazyDLL("ntdll.dll").NewProc("NtQueryInformationProcess")
+)
 
 const (
 	queryLimited = 0x1000 // PROCESS_QUERY_LIMITED_INFORMATION
+	vmRead       = 0x0010 // PROCESS_VM_READ
 	terminate    = 0x0001 // PROCESS_TERMINATE
 	synchronize  = 0x00100000
 	stillActive  = 259
@@ -74,4 +81,107 @@ func Kill(pid int) error {
 	}
 	_, _ = syscall.WaitForSingleObject(h, 5000)
 	return nil
+}
+
+// parents 返回“父进程 → 孩子们”和每个进程的出生时刻（拿不到的记 0）。
+func parents() (kids map[int][]int, born map[int]int64) {
+	kids, born = map[int][]int{}, map[int]int64{}
+	snap, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return
+	}
+	defer syscall.CloseHandle(snap)
+	var e syscall.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	for err = syscall.Process32First(snap, &e); err == nil; err = syscall.Process32Next(snap, &e) {
+		pid := int(e.ProcessID)
+		kids[int(e.ParentProcessID)] = append(kids[int(e.ParentProcessID)], pid)
+		born[pid] = 0
+		if h, err := syscall.OpenProcess(queryLimited, false, e.ProcessID); err == nil {
+			var c, x, k, u syscall.Filetime
+			if syscall.GetProcessTimes(h, &c, &x, &k, &u) == nil {
+				born[pid] = ticks(c)
+			}
+			syscall.CloseHandle(h)
+		}
+	}
+	return
+}
+
+// memCounters 是 PROCESS_MEMORY_COUNTERS_EX2（Windows 10 22H2 / Windows 11 起有最后两项）。
+type memCounters struct {
+	cb                         uint32
+	pageFaultCount             uint32
+	peakWorkingSetSize         uintptr
+	workingSetSize             uintptr
+	quotaPeakPagedPoolUsage    uintptr
+	quotaPagedPoolUsage        uintptr
+	quotaPeakNonPagedPoolUsage uintptr
+	quotaNonPagedPoolUsage     uintptr
+	pagefileUsage              uintptr
+	peakPagefileUsage          uintptr
+	privateUsage               uintptr
+	privateWorkingSetSize      uintptr
+	sharedCommitUsage          uintptr
+}
+
+// Get 取一个进程此刻的占用；进程不在了或没权限看时 ok 为假。
+func Get(pid int) (st Stat, ok bool) {
+	h, err := syscall.OpenProcess(queryLimited|vmRead, false, uint32(pid))
+	if err != nil {
+		if h, err = syscall.OpenProcess(queryLimited, false, uint32(pid)); err != nil {
+			return st, false
+		}
+	}
+	defer syscall.CloseHandle(h)
+	var c, x, k, u syscall.Filetime
+	if syscall.GetProcessTimes(h, &c, &x, &k, &u) != nil {
+		return st, false
+	}
+	st.CPU = time.Duration(ticks(k)+ticks(u)) * 100
+	var m memCounters
+	m.cb = uint32(unsafe.Sizeof(m))
+	if r, _, _ := memInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&m)), uintptr(m.cb)); r != 0 {
+		st.Mem = int64(m.privateWorkingSetSize)
+	} else {
+		m.cb = uint32(unsafe.Offsetof(m.privateWorkingSetSize)) // 老系统只认到 privateUsage 为止
+		if r, _, _ := memInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&m)), uintptr(m.cb)); r != 0 {
+			st.Mem = int64(m.workingSetSize)
+		}
+	}
+	st.Cmd = cmdline(h)
+	return st, true
+}
+
+// ticks 把 FILETIME 当成一个数（100 纳秒一格）。不用 Filetime.Nanoseconds()：它是给时刻用的，会减掉 1601 到 1970 的差。
+func ticks(ft syscall.Filetime) int64 { return int64(ft.HighDateTime)<<32 | int64(ft.LowDateTime) }
+
+// cmdline 用 NtQueryInformationProcess(ProcessCommandLineInformation) 读命令行（Windows 8.1 起；只要“有限查询”权限）。
+func cmdline(h syscall.Handle) string {
+	buf := make([]byte, 8192)
+	var n uint32
+	if r, _, _ := ntQuery.Call(uintptr(h), 60, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&n))); r != 0 {
+		if n == 0 || n > 1<<20 {
+			return ""
+		}
+		buf = make([]byte, n)
+		if r, _, _ := ntQuery.Call(uintptr(h), 60, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&n))); r != 0 {
+			return ""
+		}
+	}
+	// UNICODE_STRING：Length(2) MaximumLength(2) [填充] Buffer(指针)；字符串本体就在这块缓冲里
+	us := (*struct {
+		Length, Max uint16
+		Buffer      uintptr
+	})(unsafe.Pointer(&buf[0]))
+	base := uintptr(unsafe.Pointer(&buf[0]))
+	if us.Buffer < base || us.Buffer+uintptr(us.Length) > base+uintptr(len(buf)) {
+		return ""
+	}
+	off := us.Buffer - base
+	u16 := make([]uint16, us.Length/2)
+	for i := range u16 {
+		u16[i] = uint16(buf[off+uintptr(2*i)]) | uint16(buf[off+uintptr(2*i)+1])<<8
+	}
+	return syscall.UTF16ToString(u16)
 }

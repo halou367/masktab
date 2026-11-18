@@ -52,3 +52,43 @@ func Stop(path string, wait time.Duration) (killed, left int) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// Stat 是一个进程此刻的占用。
+type Stat struct {
+	Mem int64         // 内存，字节。Windows：专用工作集（和任务管理器“内存”那一列同一个口径）；老系统拿不到时是工作集。Linux：常驻减共享。
+	CPU time.Duration // 开机以来用掉的处理器时间（用户态 + 内核态）。两次取样相减再除以间隔才是占用率。
+	Cmd string        // 命令行（看 --type= 分辨是网页进程还是图形进程）。拿不到为空。
+}
+
+// Snap 是某一刻全机进程的父子关系。要查好几棵树时先 Take 一次，免得每棵树都把全机进程过一遍。
+type Snap struct {
+	kids map[int][]int
+	born map[int]int64
+}
+
+// Take 记下此刻全机进程的父子关系。
+func Take() *Snap {
+	k, b := parents()
+	return &Snap{k, b}
+}
+
+// Tree 返回 root 和它的全部后代进程（root 排第一个；root 不在了返回空）。
+// 只认“不比父进程早出生”的孩子：父进程退出后进程号会被别的程序重新用上，光看父进程号会认错亲。
+func (s *Snap) Tree(root int) []int {
+	if _, ok := s.born[root]; !ok {
+		return nil
+	}
+	out, seen := []int{root}, map[int]bool{root: true}
+	for i := 0; i < len(out); i++ {
+		for _, k := range s.kids[out[i]] {
+			if !seen[k] && s.born[k] >= s.born[out[i]] {
+				seen[k] = true
+				out = append(out, k)
+			}
+		}
+	}
+	return out
+}
+
+// Tree 等于 Take().Tree(root)。
+func Tree(root int) []int { return Take().Tree(root) }

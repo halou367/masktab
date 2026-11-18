@@ -259,6 +259,14 @@ try {
     await evalPage(prof(a.id), PAGE, `(()=>{document.cookie='smk=; max-age=0';return 1})()`); // 别影响后面“重启后登录态”的精确比较
     rec(ckA?.cookieN > 0 ? 'ok' : 'warn', '伴随扩展上报 Cookie 汇总', ckA ? `${ckA.cookieN} 条 / ${ckA.cookies?.length || 0} 个站点` : JSON.stringify(ck).slice(0, 120));
   } catch (e) { rec('fail', '实例管理改版接口', e.message); }
+  try { // 运行情况（UI-28）：真内核下，实例名下数得出进程（主 / 网页 / 图形…）、内存；伴随扩展报的窗口和标签页带得出来
+    await evalTarget(prof(a.id), `${COMPANION}/sw-`, `(async()=>{await reportTabs();return 1})()`);
+    await api('GET', '/api/usage'); await sleep(1200);
+    const us = await api('GET', '/api/usage'), ua = us.instances?.[a.id];
+    check(ua && ua.n >= 3 && ua.mem > 50 * 1024 * 1024 && ua.kinds?.main?.n === 1 && ua.kinds?.page?.n >= 1, `运行情况：实例名下数得出进程和内存（${ua?.n} 个进程，${Math.round((ua?.mem || 0) / 1048576)} MB，分类 ${Object.entries(ua?.kinds || {}).map(([k, v]) => k + v.n).join(' ')}）`);
+    check(ua?.windows >= 1 && ua.tabs >= 1 && ua.list?.some((t) => t.h), `运行情况：伴随扩展报了窗口和标签页（${ua?.windows} 个窗口，${ua?.tabs} 个标签页）`);
+    check(us.warm && us.service.n === 1 && us.service.mem > 0 && us.total.n >= ua.n + 1 && us.total.cpu >= 0 && us.total.cpu <= 100, `运行情况：核心服务单算，合计 ${us.total.n} 个进程 ${Math.round(us.total.mem / 1048576)} MB，处理器 ${us.total.cpu.toFixed(1)}%（代理内核 ${us.proxy.n} 个，其它 ${us.other.n} 个）`);
+  } catch (e) { rec('fail', '运行情况接口', e.message); }
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/newtab.html`, '1-newtab.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/popup.html`, '2-popup.png');
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/app.html#instances`, '3-instances.png');

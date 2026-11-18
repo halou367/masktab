@@ -5,13 +5,14 @@ import { wizardPage } from './wizard.js';
 import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
 import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView } from './pages.js';
+import { usageView } from './usage.js';
 
 // 电脑版设置页的外壳：左边导航（照 Chrome 桌面设置页），右边一栏放共用的页面（pages.js / instances.js / panel.js，和手机同一份）。
 // 路由 = 地址 # 后面：settings（概览）、instances[/id|/import]、node[/实例 id]、fp、exits、extensions、settings/adv|about|ntp、diag。
 // node 是本窗口这个实例的节点；node/<id> 是从实例管理点进来、改另一个实例的（它不用开着，决策 F-HEAL）。
 // 左边导航照定稿的演示（决策 UI-10）：上面一组是 MaskTab 自己的页，下面“浏览器”一组是基本设置和高级。
 // 没有“概览”：它只是把左边这几项再列一遍。“新标签页”的设置从“基本设置”里点进去。
-const NAV = [['', [['instances', 'layers', '实例'], ['node', 'globe', '节点与出口'], ['exits', 'sub', '订阅与地址库'], ['fp', 'finger', '指纹与伪装'], ['extensions', 'ext', '扩展'], ['settings/about', 'update', '组件与更新'], ['diag', 'bug', '诊断']]],
+const NAV = [['', [['instances', 'layers', '实例'], ['usage', 'speed', '运行情况'], ['node', 'globe', '节点与出口'], ['exits', 'sub', '订阅与地址库'], ['fp', 'finger', '指纹与伪装'], ['extensions', 'ext', '扩展'], ['settings/about', 'update', '组件与更新'], ['diag', 'bug', '诊断']]],
   ['浏览器', [['settings', 'gear', '基本设置'], ['settings/adv', 'tune', '高级']]]];
 const TITLES = Object.fromEntries(NAV.flatMap(([, l]) => l.map(([r, , t]) => [r, t])));
 let st = null;
@@ -128,7 +129,7 @@ function render() {
   } else {
     // 左边导航里有的页没有“返回”（导航就在旁边）；只有从“基本设置”点进去的“新标签页”有
     kids = ({ settings: () => settingsHome({ ...c, back: null, pc: true }), instances: () => instancesView(ic), exits: () => exitsView({ ...c, back: null }), extensions,
-      'settings/adv': () => settingsAdv({ ...c, back: null }), 'settings/about': () => settingsAbout({ ...c, back: null }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back: null }) }[p] || (() => instancesView(ic)))();
+      'settings/adv': () => settingsAdv({ ...c, back: null }), 'settings/about': () => settingsAbout({ ...c, back: null }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back: null }), usage: () => usageView({ ...c, back: null }) }[p] || (() => instancesView(ic)))();
   }
   const snap = lastPage === p ? flipSnap(main) : null; // 同一页里重画：列表增删、换位置有过渡（决策 UI-26）
   main.dataset.page = p;
