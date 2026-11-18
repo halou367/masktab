@@ -102,7 +102,7 @@ jobs:
           Get-Item dist/masktab.exe | Format-List Name, Length
       - name: 按完整路径找进程、结束进程（安装程序升级时靠它，decisions D-5）
         shell: pwsh
-        run: go test -count=1 -v ./internal/procs
+        run: go test -count=1 -v ./internal/procs ./internal/tabbar
       - name: 缓存浏览器内核与代理内核
         uses: actions/cache@v4
         with:

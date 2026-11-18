@@ -267,10 +267,11 @@ try {
     check(ua?.windows >= 1 && ua.tabs >= 1 && ua.list?.some((t) => t.h), `运行情况：伴随扩展报了窗口和标签页（${ua?.windows} 个窗口，${ua?.tabs} 个标签页）`);
     check(us.warm && us.service.n === 1 && us.service.mem > 0 && us.total.n >= ua.n + 1 && us.total.cpu >= 0 && us.total.cpu <= 100, `运行情况：核心服务单算，合计 ${us.total.n} 个进程 ${Math.round(us.total.mem / 1048576)} MB，处理器 ${us.total.cpu.toFixed(1)}%（代理内核 ${us.proxy.n} 个，其它 ${us.other.n} 个）`);
     // 网页每 0.3 秒改一次标题（聊天、行情类网站常这样）：标签页的变化照样报得出去，不会因为“每次都重新计时”永远等下去
-    await evalPage(prof(a.id), PAGE, `(()=>{let n=0;window.__tk=setInterval(()=>{document.title='tick'+(++n)},300);return 1})()`);
-    await sleep(4500);
+    // （evalPage 自己开一个标签页、算完就关：所以让这段脚本在页面里待满 6 秒，这期间来问）
+    const ticking = evalPage(prof(a.id), PAGE, `(async()=>{let n=0;const t=setInterval(()=>{document.title='tick'+(++n)},300);await new Promise(r=>setTimeout(r,6000));clearInterval(t);return n})()`, 12000);
+    await sleep(1200 + 4300);
     const tk = (await api('GET', '/api/usage')).instances?.[a.id]?.list?.find((t) => /^tick\d+$/.test(t.t));
-    await evalPage(prof(a.id), PAGE, `(()=>{clearInterval(window.__tk);document.title='smoke';return 1})()`);
+    await ticking;
     check(!!tk, `运行情况：网页不停改标题时照样报得出去（${tk?.t || '没有报'}）`);
   } catch (e) { rec('fail', '运行情况接口', e.message); }
   await screenshot(prof(a.id), `chrome-extension://${COMPANION}/newtab.html`, '1-newtab.png');

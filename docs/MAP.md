@@ -91,6 +91,7 @@
 | 发给 mihomo 的配置 | `internal/proxy/configgen.go` | `fast` + `smoke`（大改动） |
 | 内核 / mihomo 换版本 | `internal/kernel/fetch.go` | `smoke` + 全套 |
 | 安装包、在线更新 | `installer/masktab.nsi`、`internal/update`、`internal/core/update*.go` | 全套（`scripts/release.sh --check`） |
+| 退出时放出藏着的窗口（D-6：不能握着锁等管栏的线程）；清上次留下的内核进程 | `internal/tabbar/bar_windows.go` 的 `Release`；`internal/core/launch.go` 的 `CleanLeftovers`；查卡死用 `GET /api/debug/stacks` | `internal/tabbar/release_windows_test.go`（只在 Windows 跑） |
 | 升级时让旧的退出、单实例（D-5） | `installer/masktab.nsi`（`StopRunning`）、`cmd/masktab/main.go`（`stopInstalled`、`staleService`、`runningVersion`）、`internal/procs`、`internal/core/api.go`（`dropLock`、`running.pid`） | 全套（Windows 那段的 1b / 1c / 1d） |
 | 手机原生外壳 | `android/…/*.kt` | 全套（`scripts/release.sh --check`） |
 
