@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#5B6CFF"/>
+      <stop offset="0.55" stop-color="#2E86FF"/>
+      <stop offset="1" stop-color="#12C2D6"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.26"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mask" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E4F1FF"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="60" fill="url(#bg)"/>
+  <rect x="12" y="12" width="232" height="232" rx="60" fill="url(#shine)"/>
+  <path fill="#0B2A6B" fill-opacity="0.22" fill-rule="evenodd" transform="translate(0 7)"
+    d="M38 114C38 90 58 80 82 83C102 85.500 115 95 128 95C141 95 154 85.500 174 83C198 80 218 90 218 114C218 148 194 172 168 172C150 172 140 158 128 146C116 158 106 172 88 172C62 172 38 148 38 114Z"/>
+  <path fill="url(#mask)" fill-rule="evenodd"
+    d="M38 114C38 90 58 80 82 83C102 85.500 115 95 128 95C141 95 154 85.500 174 83C198 80 218 90 218 114C218 148 194 172 168 172C150 172 140 158 128 146C116 158 106 172 88 172C62 172 38 148 38 114Z
+       M62 124C72 106 98 104 112 122C100 137 74 139 62 124Z
+       M194 124C184 106 158 104 144 122C156 137 182 139 194 124Z"/>
+</svg>
