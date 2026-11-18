@@ -479,7 +479,7 @@ if (desk && want('desk')) {
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const deskCalls = [];
   // 运行情况（UI-28）：p2 最占内存、两个窗口五个标签页（一个休眠、一个标题很长）；p1 伴随扩展还没报；p3 一个窗口；第一次问没有处理器占用
-  let usageAsked = 0;
+  let usageAsked = 0, usageRough = false;
   const deskUsage = () => {
     const M = 1024 * 1024, warm = usageAsked++ > 0;
     const k = (n, mem, cpu) => ({ n, mem: mem * M, cpu: warm ? cpu : 0 });
@@ -492,7 +492,7 @@ if (desk && want('desk')) {
     };
     const service = k(1, 38, 0.1), proxy = k(1, 54, 0.3), other = k(0, 0, 0);
     const all = [...Object.values(instances), service, proxy];
-    return { at: Date.now(), cores: 8, warm, total: { n: all.reduce((a, x) => a + x.n, 0), mem: all.reduce((a, x) => a + x.mem, 0), cpu: all.reduce((a, x) => a + x.cpu, 0) }, service, proxy, other, instances };
+    return { at: Date.now(), cores: 8, warm, took: 12, ...(usageRough ? { rough: true } : {}), total: { n: all.reduce((a, x) => a + x.n, 0), mem: all.reduce((a, x) => a + x.mem, 0), cpu: all.reduce((a, x) => a + x.cpu, 0) }, service, proxy, other, instances };
   };
   const dsrv = http.createServer((q, r) => {
     const u = new URL(q.url, 'http://x');
@@ -857,6 +857,9 @@ if (desk && want('desk')) {
     await up.setViewportSize({ width: 700, height: 820 }); await up.waitForTimeout(300);
     check('电脑运行情况：窗口窄到 700 也不横向溢出', await up.evaluate(() => document.documentElement.scrollWidth <= innerWidth), null);
     await up.screenshot({ path: path.join(out, 'desk-usage-narrow.png'), fullPage: true });
+    const foot = () => up.evaluate(() => document.querySelector('#usage .foot')?.innerText || '');
+    const f1 = await foot(); usageRough = true; await up.waitForTimeout(2400); const f2 = await foot(); usageRough = false;
+    check('电脑运行情况：页脚说明内存口径；老系统只能取到工作集时照实说“会比任务管理器大一些”', /专用工作集之和/.test(f1) && !/较旧/.test(f1) && /系统较旧/.test(f2) && /会比任务管理器“内存”那一列大一些/.test(f2) && !/专用工作集之和/.test(f2), { f1: f1.slice(-80), f2: f2.slice(-90) });
     await up.goto('about:blank'); const n0 = usageAsked; await up.waitForTimeout(2500);
     check('电脑运行情况：离开这一页就不再问', usageAsked === n0, { n0, now: usageAsked });
     await up.close();

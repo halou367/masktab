@@ -139,18 +139,69 @@ func Get(pid int) (st Stat, ok bool) {
 		return st, false
 	}
 	st.CPU = time.Duration(ticks(k)+ticks(u)) * 100
-	var m memCounters
-	m.cb = uint32(unsafe.Sizeof(m))
-	if r, _, _ := memInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&m)), uintptr(m.cb)); r != 0 {
-		st.Mem = int64(m.privateWorkingSetSize)
-	} else {
-		m.cb = uint32(unsafe.Offsetof(m.privateWorkingSetSize)) // 老系统只认到 privateUsage 为止
-		if r, _, _ := memInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&m)), uintptr(m.cb)); r != 0 {
-			st.Mem = int64(m.workingSetSize)
-		}
-	}
+	st.Mem, st.Rough = memOf(h)
 	st.Cmd = cmdline(h)
 	return st, true
+}
+
+// vmCounters 是 VM_COUNTERS_EX2（NtQueryInformationProcess 的 ProcessVmCounters；Windows 10 起最后带专用工作集）。
+type vmCounters struct {
+	peakVirtualSize            uintptr
+	virtualSize                uintptr
+	pageFaultCount             uint32
+	peakWorkingSetSize         uintptr
+	workingSetSize             uintptr
+	quotaPeakPagedPoolUsage    uintptr
+	quotaPagedPoolUsage        uintptr
+	quotaPeakNonPagedPoolUsage uintptr
+	quotaNonPagedPoolUsage     uintptr
+	pagefileUsage              uintptr
+	peakPagefileUsage          uintptr
+	privateUsage               uintptr
+	privateWorkingSetSize      uintptr
+	sharedCommitUsage          uintptr
+}
+
+// 取内存的三条路，从准到粗。memOf 依次试；测试里逐条单独叫，看这台机器上哪条走得通。
+//
+//	memEx2：GetProcessMemoryInfo + PROCESS_MEMORY_COUNTERS_EX2（Windows 11 22H2 起）→ 专用工作集
+//	memNt： NtQueryInformationProcess(ProcessVmCounters) + VM_COUNTERS_EX2（Windows 10 起）→ 专用工作集
+//	memWS： GetProcessMemoryInfo 老结构 → 整个工作集（含共用的部分）
+func memEx2(h syscall.Handle) (private, ws int64, ok bool) {
+	var m memCounters
+	m.cb = uint32(unsafe.Sizeof(m))
+	if r, _, _ := memInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&m)), uintptr(m.cb)); r == 0 {
+		return 0, 0, false
+	}
+	return int64(m.privateWorkingSetSize), int64(m.workingSetSize), true
+}
+
+func memNt(h syscall.Handle) (private, ws int64, ok bool) {
+	var m vmCounters
+	if r, _, _ := ntQuery.Call(uintptr(h), 3, uintptr(unsafe.Pointer(&m)), unsafe.Sizeof(m), 0); r != 0 {
+		return 0, 0, false
+	}
+	return int64(m.privateWorkingSetSize), int64(m.workingSetSize), true
+}
+
+func memWS(h syscall.Handle) (ws int64, ok bool) {
+	var m memCounters
+	m.cb = uint32(unsafe.Offsetof(m.privateWorkingSetSize)) // 老系统只认到 privateUsage 为止
+	if r, _, _ := memInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&m)), uintptr(m.cb)); r == 0 {
+		return 0, false
+	}
+	return int64(m.workingSetSize), true
+}
+
+// memOf：专用工作集；两条准的路都不通（或给出的数不像话）时退到整个工作集，rough 为真。
+func memOf(h syscall.Handle) (mem int64, rough bool) {
+	for _, f := range []func(syscall.Handle) (int64, int64, bool){memEx2, memNt} {
+		if p, ws, ok := f(h); ok && p > 0 && p <= ws {
+			return p, false
+		}
+	}
+	ws, _ := memWS(h)
+	return ws, true
 }
 
 // ticks 把 FILETIME 当成一个数（100 纳秒一格）。不用 Filetime.Nanoseconds()：它是给时刻用的，会减掉 1601 到 1970 的差。

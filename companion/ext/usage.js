@@ -6,7 +6,7 @@ import { h, icon, ibtn, appBar, sec, row, avatar, flag, cname, run } from './ui.
 // 为什么要有：Windows 任务管理器里这些进程都叫 Chromium，一个实例十来个，分不出哪个是哪个实例的（2026-11-18 需求方截图）。
 // 只在这一页开着、窗口看得见时每 2 秒问一次；离开这一页就停。
 
-let data = null, fail = '', timer = 0, ctx = null, asked = 0;
+let data = null, fail = '', timer = 0, ctx = null, asked = 0, pressing = false;
 const openIds = new Set(); // 展开着的实例
 
 export const memText = (n) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(2) + ' GB' : Math.round((n || 0) / 1024 ** 2) + ' MB');
@@ -20,7 +20,7 @@ async function tick() {
   if (document.hidden) return;
   asked = Date.now();
   try { data = await api('GET', '/api/usage'); fail = ''; } catch (e) { fail = e.message; }
-  paint();
+  if (!pressing) paint(); // 鼠标正按着（点到一半）：先不换，免得按下和松开落在两个不同的元素上、这一下点了没反应
 }
 // body() 给的是嵌套的数组（里面还有 false）：先交给 h() 摊平，再整批换进去
 function paint() {
@@ -76,7 +76,7 @@ function body() {
     return [row({ cls: 'urow' + (openNow ? ' open' : ''), ic: avatar(i.color, letterOf(i), 36, ex?.country, 'on'),
       t: [h('span', { class: 'mono no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))],
       s: [`${v.n} 个进程`, v.windows < 0 ? '窗口未知' : `${v.windows} 个窗口 · ${v.tabs} 个标签页`, i.acct?.count ? `${i.acct.count} 个账号` : ''].filter(Boolean).join(' · '),
-      trail: nums(v, warm), drop: true, aria: `#${i.no} ${nameOf(i)}，展开明细`,
+      trail: nums(v, warm), drop: true, aria: `#${i.no} ${nameOf(i)}，${openNow ? '收起' : '展开'}明细`,
       onclick: () => { openIds.has(i.id) ? openIds.delete(i.id) : openIds.add(i.id); paint(); } }),
     openNow && detail(i, v, warm)];
   };
@@ -96,7 +96,7 @@ function body() {
       off.map((i) => row({ cls: 'uoff', ic: avatar(i.color, letterOf(i), 36), t: [h('span', { class: 'mono no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))],
         s: [i.acct?.count ? `记住 ${i.acct.count} 个账号` : '没有记住的账号', i.acct?.cookieN ? `${i.acct.cookieN} 条 Cookie` : ''].filter(Boolean).join(' · '),
         trail: ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go') }))],
-    h('div', { class: 'foot noic' }, 'Windows 任务管理器里，MaskTab 的浏览器进程都叫 Chromium，分不出哪个是哪个实例的，也没有合计；想看哪个实例占了多少，以这一页为准。内存是各进程的专用工作集之和，和任务管理器“内存”那一列同一个口径；处理器按整机算。'),
+    h('div', { class: 'foot noic' }, 'Windows 任务管理器里，MaskTab 的浏览器进程都叫 Chromium，分不出哪个是哪个实例的，也没有合计；想看哪个实例占了多少，以这一页为准。' + (u.rough ? '这台电脑的系统较旧，内存只能取到“工作集”（含和别的进程共用的部分），会比任务管理器“内存”那一列大一些；' : '内存是各进程的专用工作集之和，和任务管理器“内存”那一列同一个口径；') + '处理器按整机算。'),
   ];
 }
 
@@ -104,5 +104,6 @@ export function usageView(c) {
   ctx = c;
   if (!timer) timer = setInterval(tick, 2000);
   if (Date.now() - asked > 1500) { asked = Date.now(); setTimeout(tick, 0); } // 这一页会跟着状态推送重画：别每画一次就问一次
-  return [appBar('运行情况', c.back, ibtn('refresh', '刷新', tick)), h('div', { id: 'usage' }, body())];
+  return [appBar('运行情况', c.back, ibtn('refresh', '刷新', tick)),
+    h('div', { id: 'usage', onpointerdown: () => { pressing = true; }, onpointerup: () => { setTimeout(() => { pressing = false; }, 0); }, onpointercancel: () => { pressing = false; }, onpointerleave: () => { pressing = false; } }, body())];
 }

@@ -61,11 +61,13 @@ type instUsage struct {
 type usageView struct {
 	At        int64                 `json:"at"`
 	Cores     int                   `json:"cores"`
-	Warm      bool                  `json:"warm"`    // 处理器占用要两次取样相减：第一次问时还没有，为假
-	Total     procSum               `json:"total"`   // 下面几项加起来
-	Service   procSum               `json:"service"` // 核心服务自己
-	Proxy     procSum               `json:"proxy"`   // 代理内核 mihomo
-	Other     procSum               `json:"other"`   // 核心服务起的别的进程（正在启动 / 关闭中的内核等）
+	Warm      bool                  `json:"warm"`            // 处理器占用要两次取样相减：第一次问时还没有，为假
+	Rough     bool                  `json:"rough,omitempty"` // 内存是整个工作集、不是专用的（系统太老，见 procs.Stat.Rough）：比任务管理器显示的偏大
+	Took      int                   `json:"took"`            // 算这一遍用了多少毫秒
+	Total     procSum               `json:"total"`           // 下面几项加起来
+	Service   procSum               `json:"service"`         // 核心服务自己
+	Proxy     procSum               `json:"proxy"`           // 代理内核 mihomo
+	Other     procSum               `json:"other"`           // 核心服务起的别的进程（正在启动 / 关闭中的内核等）
 	Instances map[string]*instUsage `json:"instances"`
 }
 
@@ -101,6 +103,11 @@ func (a *App) Usage() *usageView {
 	a.usageMu.Lock()
 	defer a.usageMu.Unlock()
 	now := time.Now()
+	// 两个窗口同时开着这一页时各问各的：不到一秒前刚算过就直接给那一份。
+	// 不然两次取样挨得太近，处理器占用算不出来，页面上的数会在 0 和实际值之间来回跳。
+	if a.usageLast != nil && now.Sub(a.usageAt) < 900*time.Millisecond {
+		return a.usageLast
+	}
 	v := &usageView{At: now.UnixMilli(), Cores: runtime.NumCPU(), Warm: a.usagePrev != nil && now.Sub(a.usageAt) < time.Minute, Instances: map[string]*instUsage{}}
 	a.mu.Lock()
 	roots := map[string]int{}
@@ -114,6 +121,11 @@ func (a *App) Usage() *usageView {
 			v.Instances[id] = u
 		}
 	}
+	for id := range a.tabs { // 关掉了的实例：上一回报的标签页不留
+		if roots[id] == 0 {
+			delete(a.tabs, id)
+		}
+	}
 	a.mu.Unlock()
 
 	cur := map[int]cpuAt{}
@@ -123,6 +135,7 @@ func (a *App) Usage() *usageView {
 			return st, 0, false
 		}
 		cur[pid] = cpuAt{st.CPU, now}
+		v.Rough = v.Rough || st.Rough
 		pct := 0.0
 		if p, had := a.usagePrev[pid]; had && v.Warm && st.CPU >= p.cpu {
 			if dt := now.Sub(p.at); dt > 200*time.Millisecond {
@@ -182,7 +195,8 @@ func (a *App) Usage() *usageView {
 		}
 		v.Total.add(st.Mem, pct)
 	}
-	a.usagePrev, a.usageAt = cur, now
+	v.Took = int(time.Since(now).Milliseconds())
+	a.usagePrev, a.usageAt, a.usageLast = cur, now, v
 	return v
 }
 

@@ -55,9 +55,10 @@ func Stop(path string, wait time.Duration) (killed, left int) {
 
 // Stat 是一个进程此刻的占用。
 type Stat struct {
-	Mem int64         // 内存，字节。Windows：专用工作集（和任务管理器“内存”那一列同一个口径）；老系统拿不到时是工作集。Linux：常驻减共享。
-	CPU time.Duration // 开机以来用掉的处理器时间（用户态 + 内核态）。两次取样相减再除以间隔才是占用率。
-	Cmd string        // 命令行（看 --type= 分辨是网页进程还是图形进程）。拿不到为空。
+	Mem   int64         // 内存，字节。Windows：专用工作集（和任务管理器“内存”那一列同一个口径）；老系统拿不到时是工作集。Linux：常驻减共享。
+	CPU   time.Duration // 开机以来用掉的处理器时间（用户态 + 内核态）。两次取样相减再除以间隔才是占用率。
+	Cmd   string        // 命令行（看 --type= 分辨是网页进程还是图形进程）。拿不到为空。
+	Rough bool          // 内存不是“专用”口径：系统太老拿不到专用工作集，给的是整个工作集（含和别的进程共用的部分，偏大）
 }
 
 // Snap 是某一刻全机进程的父子关系。要查好几棵树时先 Take 一次，免得每棵树都把全机进程过一遍。

@@ -183,7 +183,8 @@ async function reportTabs() {
   await api('POST', '/api/tabs', { windows: wins.length, private: priv, tabs });
 }
 globalThis.reportTabs = reportTabs; // 冒烟测试从调试端口调用
-const tabsSoon = () => { clearTimeout(tabsTimer); tabsTimer = setTimeout(() => reportTabs().catch(() => {}), 1500); };
+// 已经约好了一次就不再往后推：有的网页每秒改一次标题，每次都重新计时的话永远报不出去
+const tabsSoon = () => { if (!tabsTimer) tabsTimer = setTimeout(() => { tabsTimer = 0; reportTabs().catch(() => {}); }, 1500); };
 for (const ev of [chrome.tabs.onCreated, chrome.tabs.onRemoved, chrome.tabs.onActivated, chrome.tabs.onMoved, chrome.tabs.onAttached, chrome.tabs.onDetached, chrome.tabs.onReplaced, chrome.windows.onCreated, chrome.windows.onRemoved]) ev.addListener(tabsSoon);
 chrome.tabs.onUpdated.addListener((id, ch) => { if ('title' in ch || 'url' in ch || 'discarded' in ch || 'audible' in ch || 'pinned' in ch) tabsSoon(); });
 

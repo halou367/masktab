@@ -92,7 +92,10 @@ func TestUsage(t *testing.T) {
 	long := strings.Repeat("长", 300)
 	do("POST", "/api/tabs", "i1", `{"windows":2,"private":3,"tabs":[{"t":"`+long+`","h":"example.com","w":1,"a":true},{"t":"B","h":"b.test","w":2,"d":true}]}`)
 	do("POST", "/api/tabs", "nobody", `{"windows":9,"tabs":[]}`) // 不认识的实例：不记
-	time.Sleep(300 * time.Millisecond)
+	if again := do("GET", "/api/usage", "", ""); again.At != v.At || again.Instances["i1"].Windows != -1 {
+		t.Fatalf("不到一秒又问：应当给刚才那一份（at %d → %d）", v.At, again.At)
+	}
+	time.Sleep(1000 * time.Millisecond)
 	v = do("GET", "/api/usage", "", "")
 	u = v.Instances["i1"]
 	if u.Windows != 2 || u.Tabs != 5 || u.Private != 3 || len(u.List) != 2 || !u.List[0].A || !u.List[1].D {
@@ -110,7 +113,14 @@ func TestUsage(t *testing.T) {
 
 	// 实例重开过（Since 比上报晚）：上一回报的标签页不能算数
 	a.rt["i1"].Since = now() + 1000
+	time.Sleep(1000 * time.Millisecond)
 	if u = do("GET", "/api/usage", "", "").Instances["i1"]; u.Windows != -1 || len(u.List) != 0 {
 		t.Fatalf("重开后不该还带着上一回的标签页：%+v", u)
+	}
+	// 实例关了：它报过的标签页不留
+	a.rt["i1"].Running = false
+	time.Sleep(1000 * time.Millisecond)
+	if v = do("GET", "/api/usage", "", ""); len(v.Instances) != 0 || len(a.tabs) != 0 {
+		t.Fatalf("关掉的实例不该还在，也不该留着它的标签页：%+v tabs=%v", v.Instances, a.tabs)
 	}
 }
