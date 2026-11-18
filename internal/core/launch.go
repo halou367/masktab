@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/halou367/masktab/companion"
@@ -22,7 +24,9 @@ import (
 	"github.com/halou367/masktab/internal/kernel"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/probe"
+	"github.com/halou367/masktab/internal/procs"
 	"github.com/halou367/masktab/internal/proxy"
+	"github.com/halou367/masktab/internal/splash"
 	"github.com/halou367/masktab/internal/tabbar"
 )
 
@@ -35,13 +39,31 @@ func (a *App) CleanLeftovers() {
 	}
 	var st struct{ Pids map[string]int }
 	readJSON(a.p("state", "runtime.json"), &st)
-	for id, pid := range st.Pids {
-		if isKernelProcess(pid, a.p("profiles", id)) {
-			log.Printf("清理上次遗留的内核进程 %d", pid)
-			terminate(pid, true)
-			time.Sleep(500 * time.Millisecond)
+	seen := map[int]bool{}
+	var pids []int
+	add := func(list ...int) {
+		for _, pid := range list {
+			if pid > 0 && !seen[pid] {
+				seen[pid] = true
+				pids = append(pids, pid)
+			}
 		}
 	}
+	for id, pid := range st.Pids {
+		if isKernelProcess(pid, a.p("profiles", id)) {
+			add(procs.Tree(pid)...)
+		}
+	}
+	// runtime.json 里记的不一定全（实测：上一个核心服务卡死、被结束时那份记录是空的），所以再按“谁在用这个数据目录”把全机找一遍
+	add(a.strayKernels()...)
+	if len(pids) == 0 {
+		return
+	}
+	splash.Say("正在清理上次没关掉的窗口…")
+	t0 := time.Now()
+	// 一次全结束、一起等。以前一个一个来，每个还另起 tasklist、taskkill 两个黑窗口，六个实例要 18 秒（2026-11-18 需求方升级时看到的）
+	left := procs.KillAll(pids, 4*time.Second)
+	log.Printf("清理上次遗留的内核进程 %d 个，用了 %d 毫秒，还剩 %d 个", len(pids), time.Since(t0).Milliseconds(), left)
 }
 
 // Start 打开普通窗口 #0，并恢复上次未正常关闭的实例（F-INST-1、F-SESSION）。
@@ -55,6 +77,7 @@ func (a *App) Start() {
 	}
 	readJSON(a.p("state", "runtime.json"), &st)
 	a.CleanLeftovers()
+	a.BrandKernel()
 	// 刚装完更新：把更新前开着的实例都开回来，不看“启动时恢复”设置（update.go 留的记号，只管一次）
 	_, once := os.Stat(a.p("state", "restore-once"))
 	_ = os.Remove(a.p("state", "restore-once"))
@@ -68,12 +91,47 @@ func (a *App) Start() {
 		}
 	}
 	a.mu.Unlock()
-	for _, id := range ids {
+	// 以前是一个开完再开下一个，七个实例要二十多秒，这期间屏幕上什么提示都没有（2026-11-18 需求方升级时看到的）。
+	// 现在：#0 先开（它先有窗口，合并窗口以它为当前），其余的几个一起开；屏幕中间有一张提示卡说开到第几个了。
+	total := len(ids)
+	say := func(done int) {
+		if total > 1 {
+			splash.Show(fmt.Sprintf("正在打开实例 %d / %d", done, total))
+			splash.Progress(done, total)
+		} else {
+			splash.Say("正在打开窗口…")
+		}
+	}
+	say(0)
+	launch := func(id string) {
 		if err := a.Launch(id); err != nil {
 			log.Printf("启动实例失败：%v", err)
 		}
 	}
+	launch(ids[0])
+	say(1)
+	var wg sync.WaitGroup
+	var done atomic.Int32
+	done.Store(1)
+	gate := make(chan struct{}, restoreAtOnce)
+	for _, id := range ids[1:] {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			gate <- struct{}{}
+			launch(id)
+			<-gate
+			say(int(done.Add(1)))
+		}(id)
+	}
+	wg.Wait()
+	if total > 1 {
+		time.Sleep(700 * time.Millisecond) // 让“7 / 7”和走满的进度条被看见，也等最后一个窗口冒出来
+	}
 }
+
+// restoreAtOnce：启动时同时开几个实例。每个实例启动要探一次出口、起六七个进程，一起开太多反而都慢。
+const restoreAtOnce = 4
 
 func hexColor(c string) [3]int {
 	var out [3]int
@@ -96,6 +154,13 @@ func (a *App) Launch(id string) error {
 		return errors.New("实例不存在")
 	}
 	r := a.rtLocked(id)
+	if r.Running && r.Stopping {
+		// 正在关、还没关完：记下来，关完马上重新打开。以前当成“已经开着”去切窗口，等于没点，界面上也没有任何提示。
+		r.Reopen = true
+		a.bumpLocked("state", id)
+		a.mu.Unlock()
+		return nil
+	}
 	if r.Running || r.Starting {
 		a.bumpLocked("focus", id)
 		a.mu.Unlock()
@@ -327,10 +392,17 @@ func (a *App) Launch(id string) error {
 	if extra := os.Getenv("MASKTAB_KERNEL_ARGS"); extra != "" { // 仅测试用（例如无头模式）
 		args = append(args, strings.Fields(extra)...)
 	}
-	cmd := exec.Command(a.kernelExe, args...)
-	cmd.Env = append(os.Environ(), a.adapter.Env(l)...)
 	logf, _ := os.OpenFile(a.p("runtime", in.ID, "kernel.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	cmd.Stdout, cmd.Stderr = logf, logf
+	mkCmd := func(grouped bool) *exec.Cmd {
+		c := exec.Command(a.kernelExe, args...)
+		c.Env = append(os.Environ(), a.adapter.Env(l)...)
+		c.Stdout, c.Stderr = logf, logf
+		if grouped {
+			c.SysProcAttr = a.kernelAttr() // Windows：记在公共上级名下，任务管理器里所有实例归成一组（anchor_windows.go）
+		}
+		return c
+	}
+	cmd := mkCmd(true)
 	// 自愈：上次运行时伴随扩展后台一直没起来（资料目录里的 Service Worker 注册卡死，实测强杀后会出现），
 	// 这次启动前把该实例的 Service Worker 注册库整个重置。网站自己的 Service Worker 会在下次访问时重新注册。
 	if _, e := os.Stat(a.p("profiles", id, repairMark)); e == nil {
@@ -346,7 +418,15 @@ func (a *App) Launch(id string) error {
 	}
 	a.step(id, 8)
 	if err := cmd.Start(); err != nil {
-		return fail("启动内核失败：" + err.Error())
+		if cmd.SysProcAttr == nil {
+			return fail("启动内核失败：" + err.Error())
+		}
+		log.Printf("实例 #%d 记在公共上级名下起不来（%v），改成平常的起法", in.No, err)
+		a.dropAnchor()
+		cmd = mkCmd(false)
+		if err := cmd.Start(); err != nil {
+			return fail("启动内核失败：" + err.Error())
+		}
 	}
 	a.mu.Lock()
 	if r.gen != gen { // 就在拉起进程的这一下被叫停了
@@ -424,6 +504,8 @@ func (a *App) watch(id string, cmd *exec.Cmd, logf *os.File) {
 		log.Printf("实例 #%d 运行期间伴随扩展后台一直没有连接，下次启动时会重置它的 Service Worker 注册", no)
 	}
 	r.Running, r.Pid, r.cmd, r.active, r.Cut, r.NeedRestart = false, 0, nil, false, "", nil
+	reopen := r.Reopen && !a.quitting && in != nil
+	r.Stopping, r.Reopen = false, false
 	done := r.done
 	if !a.quitting {
 		a.saveLocked("runtime") // 正常关闭的实例从恢复列表里移除；程序退出时保留列表用于下次恢复
@@ -435,6 +517,13 @@ func (a *App) watch(id string, cmd *exec.Cmd, logf *os.File) {
 	}
 	_ = a.applyConfig()
 	log.Printf("实例 #%d 已退出", no)
+	if reopen { // 关到一半时用户点了“打开”
+		go func() {
+			if err := a.Launch(id); err != nil {
+				log.Printf("实例 #%d 关完后重新打开失败：%v", no, err)
+			}
+		}()
+	}
 }
 
 // Stop 先礼后兵：先请进程正常退出（保证会话与 Cookie 落盘），超时再强杀。
@@ -454,31 +543,62 @@ func (a *App) Stop(id string) {
 		_ = a.applyConfig()
 		return
 	}
-	cmd, done := r.cmd, r.done
+	cmd, done, seen := r.cmd, r.done, r.Seen
+	if r.Stopping && cmd != nil { // 已经在关了（又点了一次，或者是“不重新打开了”）：不再发一遍，等那一次关完
+		r.Reopen = false
+		a.bumpLocked("state", id)
+		a.mu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(16 * time.Second):
+		}
+		return
+	}
+	if cmd != nil && cmd.Process != nil {
+		r.Stopping, r.Reopen = true, false // 界面上显示“正在关闭”；这期间点“打开”会记成“关完重新打开”（见 Launch）
+		a.bumpLocked("state", id)
+	}
 	a.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
+	defer func() { // 走到头还没关掉（极少见）：别让界面一直停在“正在关闭”
+		a.mu.Lock()
+		if r.cmd == cmd && r.Stopping {
+			r.Stopping = false
+			a.bumpLocked("state", id)
+		}
+		a.mu.Unlock()
+	}()
+	pid := cmd.Process.Pid
 	// 第一步：让该实例的伴随扩展自己关掉全部窗口。这是和用户点关闭完全一样的正常退出，
 	// Cookie、会话都会落盘；直接结束进程会丢掉最近 30 秒内写入的 Cookie（实测）。
-	a.mu.Lock()
-	a.bumpLocked("close", id)
-	a.mu.Unlock()
+	// 伴随扩展的后台这一次还没连上来过（刚开几秒就关）：它听不到这句话，等也白等，直接走第二步。
+	// 以前照样等 4 秒，加上后面两步，刚开就关要十几秒到二十几秒（CI 44281049610 上是 22 秒）。
+	if seen > 0 {
+		a.mu.Lock()
+		a.bumpLocked("close", id)
+		a.mu.Unlock()
+		select {
+		case <-done:
+			return
+		case <-time.After(4 * time.Second):
+			log.Printf("实例 %s 没有在 4 秒内自行关闭，改为给窗口发关闭", short(id))
+		}
+	}
+	// 第二步：给它的窗口发“关闭”（等同用户点右上角的叉，照样正常收尾）。
+	terminate(pid, false)
 	select {
 	case <-done:
 		return
-	case <-time.After(4 * time.Second):
-		log.Printf("实例 %s 没有在 4 秒内自行关闭，改为结束进程", short(id))
+	case <-time.After(5 * time.Second):
+		log.Printf("实例 %s 发了关闭 5 秒还在，结束进程", short(id))
 	}
-	terminate(cmd.Process.Pid, false)
+	// 第三步：结束进程（连同它名下的）。
+	terminate(pid, true)
 	select {
 	case <-done:
-	case <-time.After(8 * time.Second):
-		terminate(cmd.Process.Pid, true)
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-		}
+	case <-time.After(5 * time.Second):
 	}
 }
 
@@ -487,11 +607,12 @@ const repairMark = ".repair-sw"
 
 func terminate(pid int, force bool) {
 	if runtime.GOOS == "windows" {
-		args := []string{"/PID", strconv.Itoa(pid), "/T"}
+		// 用系统接口直接办，不另起 taskkill：核心服务是没有控制台的程序，每起一个命令行工具就闪一个黑窗口
 		if force {
-			args = append(args, "/F")
+			procs.KillTree(pid, 3*time.Second)
+		} else {
+			procs.CloseWindows(pid)
 		}
-		_ = exec.Command("taskkill", args...).Run() // 不带 /F 时向窗口发送关闭消息，等同用户点关闭
 		return
 	}
 	if p, err := os.FindProcess(pid); err == nil {
@@ -605,6 +726,7 @@ func (a *App) shutdown() {
 	for range ids {
 		<-done
 	}
+	a.stopAnchor()
 	if a.core != nil {
 		a.core.Stop()
 	}
@@ -839,14 +961,13 @@ func isKernelProcess(pid int, profileDir string) bool {
 	return isOurProcess(pid, kernel.ExeName(), profileDir)
 }
 
-// isOurProcess：Windows 上按映像名判断，其他系统按命令行里是否含 marker 判断。
+// isOurProcess：Windows 上按可执行文件的名字判断，其他系统按命令行里是否含 marker 判断。
 func isOurProcess(pid int, exeName, marker string) bool {
 	if pid <= 0 {
 		return false
 	}
-	if runtime.GOOS == "windows" {
-		out, err := exec.Command("tasklist", "/FI", "PID eq "+strconv.Itoa(pid), "/FO", "CSV", "/NH").Output()
-		return err == nil && strings.Contains(strings.ToLower(string(out)), strings.ToLower(exeName))
+	if runtime.GOOS == "windows" { // 直接问系统这个进程是哪个文件，不另起 tasklist（会闪黑窗口）
+		return strings.EqualFold(filepath.Base(procs.ExePath(pid)), exeName)
 	}
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
 	if err != nil { // macOS 没有 /proc

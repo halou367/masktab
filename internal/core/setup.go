@@ -118,6 +118,9 @@ func (a *App) ensureCore() {
 			terminate(pid, true)
 		}
 	}
+	if !a.hosted() {
+		brandMihomo(bin) // 任务管理器里显示成“MaskTab 网络组件”，带 MaskTab 的图标（brandexe.go）
+	}
 	c := &proxy.Core{Bin: bin, Dir: a.p("core"), Port: freePort(), Secret: randToken(16)}
 	c.OnRestart = func() {
 		_ = os.WriteFile(pidFile, []byte(strconv.Itoa(c.Pid())), 0o600)

@@ -74,17 +74,24 @@ function rulesBox(st) {
       : h('div', { class: 'sub' }, '还没有。打开要登录的网站，在登录框旁点“录入”（或从实例菜单点“录入登录”），登录成功后自动记下。'));
 }
 
+// 正在关闭（核心服务的 rt.stopping）：写出来，并且这时候就能点“打开”——记下来，关完马上重新打开（rt.reopen）。
+// 以前关闭要等几秒到十几秒，这期间卡片还是“运行中”的样子，点“打开”没有任何反应。
+const stopLine = (rt) => h('div', { class: 'stp stop' }, h('i', { class: 'ring' }), h('span', {}, rt.reopen ? '正在关闭，关完重新打开…' : '正在关闭…'));
+const stopBtn = (i) => (i.rt.reopen
+  ? ibtn('close', '不重新打开了', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
+  : ibtn('play', '关完后重新打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`), '关完后会重新打开'), 'go'));
+
 function card(i) {
   const ex = i.proxy.state === 'on' ? shownExit(i) : null, rt = i.rt;
   const sites = cardSites(i);
   // 运行中 / 休眠不写字（决策 UI-9）：头像右上角的点、右边是“关闭”还是“打开”已经说了；只有正在启动时写进度。
-  const state = rt.starting ? stepLine(i, ctx.st.launchSteps) : null;
+  const state = rt.starting ? stepLine(i, ctx.st.launchSteps) : rt.stopping ? stopLine(rt) : null;
   const warn = warnLine(i);
   const el = h('div', { class: 'cardi' + (rt.running ? ' running' : '') + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color }, title: '点开看账号与 Cookie；长按拖动排序',
     onclick: (ev) => { if (ev.target.closest('button,input,.fl') || el.dataset.dragged) return; setRoute(i.id); } },
   h('div', { class: 'ct' }, face(i, false, true, true), h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm', title: nameOf(i) }, nameOf(i))), state || exitLine(i)),
     // 动作在名字右边（演示定稿）：运行中 = 关闭，休眠 = 打开。有改动等着重启时多一个“重启”；平时要重启，点开卡片，在详情顶上。
-    rt.running ? [rt.needRestart?.length > 0 && ibtn('refresh', '重启（让改动生效）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`)), 'need'), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
+    rt.stopping ? stopBtn(i) : rt.running ? [rt.needRestart?.length > 0 && ibtn('refresh', '重启（让改动生效）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`)), 'need'), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
       : rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
         : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
   sites.length > 0 && h('div', { class: 'cs' }, sites.length ? [sites.slice(0, MAXI).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
@@ -117,8 +124,8 @@ function cardLite(i) {
   const el = h('div', { class: 'cardi lt' + (rt.running ? ' running' : '') + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color },
     onclick: (ev) => { if (ev.target.closest('button,input') || el.dataset.dragged) return; setRoute(i.id); } },
   h('div', { class: 'ct' }, face(i, false, true, true),
-    h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))), rt.starting ? stepLine(i, ctx.st.launchSteps) : exitLine(i)),
-    rt.running ? ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
+    h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))), rt.starting ? stepLine(i, ctx.st.launchSteps) : rt.stopping ? stopLine(rt) : exitLine(i)),
+    rt.stopping ? stopBtn(i) : rt.running ? ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
       : rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
         : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
   sites.length > 0 && h('div', { class: 'cs' }, sites.slice(0, MAXL).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),

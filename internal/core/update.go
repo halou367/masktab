@@ -435,6 +435,7 @@ func (a *App) UpdateInstall() error {
 		_ = os.Remove(mark)
 		return fmt.Errorf("安装程序没能启动：%w", err)
 	}
+	a.updateSplash()
 	a.mu.Lock()
 	a.upd.Phase = "installing"
 	a.bumpLocked("state", "")
@@ -474,4 +475,30 @@ func (a *App) UpdateLoop() {
 		}
 		time.Sleep(6 * time.Hour)
 	}
+}
+
+// updateSplash 在线更新期间屏幕中间一直有一张提示卡（决策 UI-29）。
+// 这段时间里先后有三个进程——正在退出的旧程序、安装程序、新程序——谁都活不了全程，所以拿自己的一份副本
+// （数据目录 update/MaskTab-update.exe，不在安装目录里，安装程序换文件碍不着它）专门显示这张卡：
+// 它从现在一直显示到新程序起来，新程序先显示自己的卡、再把它关掉，位置一样，看上去是同一张卡换了字。
+// 副本做不出来、起不来都不要紧，只是这次更新期间没有提示。
+func (a *App) updateSplash() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	me, err := os.Executable()
+	if err != nil {
+		return
+	}
+	dst := a.p("update", "MaskTab-update.exe")
+	if err := copyFile(me, dst); err != nil {
+		log.Printf("更新提示卡的副本没做成：%v", err)
+		return
+	}
+	cmd := exec.Command(dst, "-splash", "update")
+	if err := cmd.Start(); err != nil {
+		log.Printf("更新提示卡没起来：%v", err)
+		return
+	}
+	_ = cmd.Process.Release()
 }

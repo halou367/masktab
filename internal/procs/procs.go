@@ -93,3 +93,32 @@ func (s *Snap) Tree(root int) []int {
 
 // Tree 等于 Take().Tree(root)。
 func Tree(root int) []int { return Take().Tree(root) }
+
+// All 返回此刻全机的进程号。
+func All() []int { return all() }
+
+// KillTree 强行结束 root 和它名下的全部进程，等它们真的没了（最多 wait）。返回还剩几个。
+// 和 taskkill /T /F 是一回事，但不另起进程（核心服务是没有控制台的程序，每起一个 taskkill 就闪一个黑窗口）。
+func KillTree(root int, wait time.Duration) (left int) { return KillAll(Tree(root), wait) }
+
+// KillAll 强行结束这些进程，一起等（不是一个一个等）。
+func KillAll(pids []int, wait time.Duration) (left int) {
+	for _, pid := range pids {
+		if pid > 0 && pid != self() {
+			kill(pid)
+		}
+	}
+	end := time.Now().Add(wait)
+	for {
+		left = 0
+		for _, pid := range pids {
+			if pid > 0 && pid != self() && Alive(pid) {
+				left++
+			}
+		}
+		if left == 0 || time.Now().After(end) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}

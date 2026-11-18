@@ -107,3 +107,13 @@ func Get(pid int) (st Stat, ok bool) {
 	}
 	return st, true
 }
+
+func kill(pid int) { _ = syscall.Kill(pid, syscall.SIGKILL) }
+
+// CloseWindows 请 root 这个进程正常退出（别的系统上没有“给窗口发关闭”这回事，发 SIGTERM）。
+func CloseWindows(root int) int {
+	if syscall.Kill(root, syscall.SIGTERM) == nil {
+		return 1
+	}
+	return 0
+}

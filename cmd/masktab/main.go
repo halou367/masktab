@@ -19,6 +19,7 @@ import (
 
 	"github.com/halou367/masktab/internal/core"
 	"github.com/halou367/masktab/internal/procs"
+	"github.com/halou367/masktab/internal/splash"
 )
 
 var version = "dev"
@@ -37,7 +38,12 @@ func main() {
 	quit := flag.Bool("quit", false, "让正在运行的 MaskTab 关闭全部窗口并退出，等它退出后返回（安装程序升级前调用）")
 	stopInst := flag.String("stop-installed", "", "安装程序用：让装在这个目录里的 MaskTab 退出（先请它自己退，不行就按完整路径结束进程），等 masktab.exe 能被替换后返回；退出码 0 = 可以替换了")
 	open := flag.String("open", "", "打开这个实例（实例 id）；MaskTab 没在运行就先启动。任务栏上固定的实例图标用它")
+	splashMode := flag.String("splash", "", "只显示屏幕中间的提示卡，别的什么都不做（update = 在线更新期间；更新时由旧程序拿自己的一份副本来跑）")
 	flag.Parse()
+	if *splashMode != "" {
+		splash.RunStandalone("正在更新 MaskTab…", 3*time.Minute) // 新程序起来后会把它关掉；万一没人关，三分钟后自己走
+		return
+	}
 	if *showVer {
 		fmt.Println("MaskTab", version)
 		return
@@ -114,6 +120,16 @@ func main() {
 		hostOpts = append(hostOpts, core.HostOpts{Name: *host, Mihomo: *mihomo, KernelName: *kname, KernelVersion: *kver})
 		*noOpen = true
 	}
+	if !*noOpen {
+		// 屏幕中间的提示卡（决策 UI-29）。在线更新装完重新打开：更新那一段的卡还在，接着显示，位置一样、看上去只是换了字；
+		// 平常启动：一秒半里窗口还没出来才显示，启动快的时候不闪这一下。
+		if splash.SetupShowing() {
+			splash.Show("更新好了，正在打开…")
+			splash.CloseSetup()
+		} else {
+			splash.Later(1500*time.Millisecond, "正在启动…")
+		}
+	}
 	app, err := core.Open(dir, exeDir, version, hostOpts...)
 	if err != nil {
 		log.Fatalf("打开数据目录失败：%v", err)
@@ -143,6 +159,7 @@ func main() {
 	openSetup := func() {
 		if !opened && !*noOpen {
 			opened = true
+			splash.Finish() // 要下载组件：进度在浏览器里的那一页上，提示卡让开
 			core.OpenInSystemBrowser(app.SetupURL())
 		}
 	}
@@ -160,7 +177,13 @@ func main() {
 		}
 	} else {
 		app.CleanLeftovers() // 不自动开窗口时 Start 不跑：上次留下的内核进程照样要清
+		app.BrandKernel()
 	}
+	splash.Finish()
+	go func() { // 更新提示卡用的那份副本（update.go 的 updateSplash）：它退出后删掉
+		time.Sleep(4 * time.Second)
+		_ = os.Remove(filepath.Join(dir, "update", "MaskTab-update.exe"))
+	}()
 	if *keep || *noOpen {
 		select {}
 	}

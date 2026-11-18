@@ -83,6 +83,42 @@ func Kill(pid int) error {
 	return nil
 }
 
+// kill 发出结束的命令，不等。
+func kill(pid int) {
+	if h, err := syscall.OpenProcess(terminate, false, uint32(pid)); err == nil {
+		_ = syscall.TerminateProcess(h, 1)
+		syscall.CloseHandle(h)
+	}
+}
+
+var (
+	user32          = syscall.NewLazyDLL("user32.dll")
+	enumWindows     = user32.NewProc("EnumWindows")
+	windowThreadPid = user32.NewProc("GetWindowThreadProcessId")
+	postMessage     = user32.NewProc("PostMessageW")
+)
+
+// CloseWindows 给 root 这棵进程树的每个顶层窗口发“关闭”（和用户点右上角的叉一样，程序可以正常收尾）。返回发了几个。
+// 和不带 /F 的 taskkill 是一回事，但不另起进程。
+func CloseWindows(root int) int {
+	in := map[uint32]bool{}
+	for _, pid := range Tree(root) {
+		in[uint32(pid)] = true
+	}
+	n := 0
+	cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
+		var pid uint32
+		_, _, _ = windowThreadPid.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		if in[pid] {
+			_, _, _ = postMessage.Call(hwnd, 0x0010 /* WM_CLOSE */, 0, 0)
+			n++
+		}
+		return 1
+	})
+	_, _, _ = enumWindows.Call(cb, 0)
+	return n
+}
+
 // parents 返回“父进程 → 孩子们”和每个进程的出生时刻（拿不到的记 0）。
 func parents() (kids map[int][]int, born map[int]int64) {
 	kids, born = map[int][]int{}, map[int]int64{}

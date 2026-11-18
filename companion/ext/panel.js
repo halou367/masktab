@@ -375,8 +375,9 @@ function mainView(me, sub) {
     on && live && h('button', { class: 'ib', title: '重新探测出口', 'aria-label': '重新探测出口', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); }, '正在探测…') }, icon('refresh', 22))));
   // 对着别的实例（从实例管理点进来的）：最上面写清楚改的是谁，旁边就能打开 / 关闭它
   if (!mine) {
-    kids.push(row({ ic: avatar(me.color, String(me.no), 24, null, rt.running ? 'on' : rt.starting ? 'st' : null), t: `#${me.no} ${me.name || '未命名'}`, s: rt.starting ? '正在打开…' : rt.running ? '运行中' : '没在运行：改好以后再打开', 
-      trail: rt.starting || rt.running ? h('button', { class: 'btn', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/stop`); await load(); }) }, rt.starting ? '取消' : '关闭')
+    kids.push(row({ ic: avatar(me.color, String(me.no), 24, null, rt.running ? 'on' : rt.starting ? 'st' : null), t: `#${me.no} ${me.name || '未命名'}`, s: rt.starting ? '正在打开…' : rt.stopping ? (rt.reopen ? '正在关闭，关完重新打开…' : '正在关闭…') : rt.running ? '运行中' : '没在运行：改好以后再打开', 
+      trail: rt.stopping && !rt.reopen ? h('button', { class: 'btn tonal', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/launch`); await load(); }, '关完后会重新打开') }, '打开')
+        : rt.starting || rt.running ? h('button', { class: 'btn', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/stop`); await load(); }) }, rt.starting ? '取消' : '关闭')
         : h('button', { class: 'btn tonal', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/launch`); await load(); }, '正在打开…') }, '打开') }));
   }
   const banner = (bad, text, ...acts) => h('div', { class: 'warn' + (bad ? ' bad' : '') }, icon('warn', 20), h('span', { class: 'tx' }, text), acts);

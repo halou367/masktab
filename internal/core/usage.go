@@ -169,6 +169,7 @@ func (a *App) Usage() *usageView {
 	}
 	// 核心服务自己的树里，除了各实例：代理内核（连同它名下的，比如 Windows 给它配的控制台宿主 conhost）单算，其余归“其它”
 	mine := snap.Tree(os.Getpid())
+	anchor := a.anchorPid()
 	proxyOf := map[int]bool{}
 	for _, pid := range mine {
 		if !owned[pid] && pid != os.Getpid() && strings.TrimSuffix(strings.ToLower(filepath.Base(procs.ExePath(pid))), ".exe") == mh {
@@ -186,7 +187,7 @@ func (a *App) Usage() *usageView {
 			continue
 		}
 		switch {
-		case pid == os.Getpid():
+		case pid == os.Getpid() || pid == anchor: // 公共上级（几 MB，只为了任务管理器里成一组）算在核心服务头上
 			v.Service.add(st.Mem, pct)
 		case proxyOf[pid]:
 			v.Proxy.add(st.Mem, pct)

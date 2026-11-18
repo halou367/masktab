@@ -46,8 +46,10 @@ type Runtime struct {
 	UpRate       int64            `json:"upRate"`
 	DownRate     int64            `json:"downRate"`
 	Seen         int64            `json:"companionSeen,omitempty"`
-	Since        int64            `json:"since,omitempty"` // 本次启动的时刻（毫秒）。伴随扩展拿它和扩展的 codeAt 比：之后才换过文件的扩展要关一下再开
-	Step         int              `json:"step,omitempty"`  // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
+	Since        int64            `json:"since,omitempty"`    // 本次启动的时刻（毫秒）。伴随扩展拿它和扩展的 codeAt 比：之后才换过文件的扩展要关一下再开
+	Step         int              `json:"step,omitempty"`     // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
+	Stopping     bool             `json:"stopping,omitempty"` // 正在关闭（关完之前 running 仍为真）
+	Reopen       bool             `json:"reopen,omitempty"`   // 正在关闭时用户点了“打开”：关完会马上重新打开
 
 	active      bool          // 是否已写入 mihomo 配置
 	refused     bool          // Error 是“组件没准备好，开不了”；组件好了以后清掉
@@ -113,6 +115,7 @@ type App struct {
 	vaultErr  string                 // 密码库打不开的原因
 	cookies   map[string][]CookieSum // 实例 id → Cookie 汇总（伴随扩展上报，落盘在 state/cookies.json）
 	tabs      map[string]*tabsReport // 实例 id → 开着的窗口和标签页（伴随扩展上报，只在内存里；usage.go，decisions UI-28）
+	anchor    anchorState            // Windows：各实例内核进程的公共上级（anchor_windows.go）
 	usageMu   sync.Mutex             // 下面两项：上一次取样时各进程用掉的处理器时间，算占用率用
 	usagePrev map[int]cpuAt
 	usageAt   time.Time

@@ -577,6 +577,9 @@ html.pc .ct > .ib { width: 34px; height: 34px; }
 /* 7. 弹窗“其它实例”里运行中的那几行：浅色下实例色只掺 16%（30% 时灰色的 #0 是一块发脏的深灰，像被禁用了） */
 :root[data-theme="light"] .ai.run { background: color-mix(in srgb, var(--c) 16%, var(--surf2)); --ring: color-mix(in srgb, var(--c) 16%, var(--surf2)); }
 .cx { line-height: 18px; } .ct .stp { margin-top: 3px; height: 18px; }
+/* 正在关闭（instances.js 的 stopLine）：一个转着的小圈 + 一句话 */
+.stp.stop { display: flex; color: var(--on2); } .stp .ring { width: 11px; height: 11px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; flex: none; animation: spin .8s linear infinite; }
+.cardi.cur .stp.stop { color: inherit; opacity: .9; }
 /* 账号行不是按钮：不要鼠标移上去的那层水波（.acc 在上面水波的名单里，是给新标签页的磁贴用的） */
 .drawer .acc::before { display: none; }
 .drawer .acc { gap: 4px; } .drawer .acc > .grow { margin-left: 8px; }
@@ -687,7 +690,7 @@ html.wzwin body { overflow: hidden; } html.wzwin .pnav { display: none; } html.w
 @media (prefers-reduced-motion: reduce) {
   :root { --d-xs: 0ms; --d-s: 0ms; --d-m: 0ms; --d-l: 0ms; }
   *, *::before, *::after { animation-duration: 0ms !important; animation-delay: 0ms !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }
-  .spin, .dotspin, .boot i, .prog i.ind, .av .dot.st, .face .run.st { animation-duration: 1.6s !important; }
+  .spin, .dotspin, .stp .ring, .boot i, .prog i.ind, .av .dot.st, .face .run.st { animation-duration: 1.6s !important; }
 }
 /* 入口优选（decisions N-6）：列表里“本时段最佳”的小标签；节点页“当前时段最佳”那一行的理由可以折行、不截断 */
 .tag.tbest { display: inline-flex; align-items: center; gap: 2px; background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); flex: none; }
