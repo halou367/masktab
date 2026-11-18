@@ -44,6 +44,7 @@
 - 节点与出口、指纹与伪装 → `companion/ext/panel.js`（`panel.css` 只剩个别规则）；设置各页、订阅与地址库、诊断 → `pages.js`；实例管理 → `instances.js`；实例菜单 → `menu.js`；自动填写、录入登录、登录页提示 → `autofill.js`（网页里）+ `vaultmsg.js`（后台里：存账号、存规则、存网页图标；两端后台各自只提供“怎么发请求、标签页属于哪个实例”）；实例卡片下的站点图标 → `sites.js`；两端共用的小函数 → `common.js`。
   `companion/ext/popup.js`、`app.js`、`newtab.js` 和 `android/ext/main.js`、`newtab.js` 只是外壳，不要往里写功能。
   手机上浮在网页上的头像菜单、三点菜单、标签页切换器是原生画的（decisions UI-2），只读核心服务的状态、只调核心服务的接口或打开内置页面的路由，不在 Kotlin 里实现业务。
+- 动了 `android/…/*.kt`：先跑 `scripts/check.sh kt`（约 25 秒，本机查 Kotlin 编不编得过；资源、清单、打包和真的跑起来仍要等 CI 的模拟器）。
 - 新增共用文件要同步改两处：`scripts/check.sh` 的 `SHARED_EXT`、`android/app/build.gradle.kts` 的 BuildExt 拷贝清单。
 - 两端确实不同的地方（内核做不到的）用状态里的 `kernel.caps` / `host` 判断后显示或隐藏，写在共用文件里，不要分叉成两份。
 - 共用文件里的类名、请求路径改了，两端一起受影响：跑 `scripts/check.sh pages`（CI 也跑），它拿同一份状态画两端的面板并比对内容。

@@ -61,7 +61,9 @@ class H(http.server.BaseHTTPRequestHandler):
     def reply(self, st, body, hdr):
         self.note(st)
         self.send_response(st)
-        for k, v in hdr + [('Content-Length', str(len(body))), ('Cache-Control', 'no-store')]:
+        # 每个请求一条新连接（Connection: close）：冒烟脚本靠节点服务端日志里“多了一条到这里的连接”确认请求走的是实例的线路，连接被复用就看不出来了
+        self.close_connection = True
+        for k, v in hdr + [('Content-Length', str(len(body))), ('Cache-Control', 'no-store'), ('Connection', 'close')]:
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
@@ -84,9 +86,10 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == '/dl/slow':
             self.note(200)
             self.send_response(200)
-            for k, v in [('Content-Type', 'application/octet-stream'), ('Content-Disposition', 'attachment; filename="slow.bin"'), ('Content-Length', str(SLOW)), ('Cache-Control', 'no-store')]:
+            for k, v in [('Content-Type', 'application/octet-stream'), ('Content-Disposition', 'attachment; filename="slow.bin"'), ('Content-Length', str(SLOW)), ('Cache-Control', 'no-store'), ('Connection', 'close')]:
                 self.send_header(k, v)
             self.end_headers()
+            self.close_connection = True
             part = b'\x5a' * (SLOW // 16)
             try:
                 for _ in range(16):

@@ -151,6 +151,14 @@ async function loadDls() {
   render(true);
   if (dls.some((d) => d.state === 'run')) dlTimer = setTimeout(loadDls, 1000); // 有在下的：一秒看一次进度
 }
+// 时间写短一点（一行里还要放大小和网站）：今天的只写几点几分，今年的写月日，再早的写年月日
+const fmtWhen = (at) => {
+  if (!at) return '';
+  const d = new Date(at), n = new Date(), p2 = (x) => String(x).padStart(2, '0');
+  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  if (d.toDateString() === n.toDateString()) return hm;
+  return d.getFullYear() === n.getFullYear() ? `${d.getMonth() + 1}月${d.getDate()}日 ${hm}` : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+};
 const fmtSize = (n) => (n < 0 ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB');
 function downloadsPage() {
   const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
@@ -161,7 +169,7 @@ function downloadsPage() {
     const pct = run1 && d.total > 0 ? Math.min(100, Math.floor(d.got * 100 / d.total)) : -1;
     const sub = run1 ? (d.total > 0 ? `${fmtSize(d.got)} / ${fmtSize(d.total)} · ${pct}%` : `已下载 ${fmtSize(d.got)}`)
       : bad ? '没下成：' + (d.err || '原因不明')
-        : [fmtSize(d.total >= 0 ? d.total : d.got), hostOf(d.url || d.from), d.at ? new Date(d.at).toLocaleString() : ''].filter(Boolean).join(' · ');
+        : [fmtSize(d.total >= 0 ? d.total : d.got), hostOf(d.url || d.from), fmtWhen(d.at)].filter(Boolean).join(' · ');
     return h('div', { class: 'dlrow' + (bad ? ' bad' : ''), 'data-state': d.state },
       h('button', { class: 'nrow', disabled: d.state !== 'done' ? true : null, 'aria-label': (d.state === 'done' ? '打开 ' : '') + d.name, onclick: () => act(d, 'open') },
         h('span', { class: 'lic' }, icon(run1 ? 'dl' : bad ? 'warn' : kindIc(d), 22)),
