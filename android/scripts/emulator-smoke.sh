@@ -162,15 +162,10 @@ openroute() {
   if [ "$(ready "$3")" -gt "$n0" ]; then echo "通过：打开 $1（路由 $2）"; else echo "失败：打开 $1（路由 $2）后页面没有就绪"; fail=1; fi
 }
 openroute manage instances "instances 有状态"
-# 新建实例：菜单收起、切到新实例、开出它的新标签页
-if openmenu; then
-  n0=$(count "新建实例 #"); t0=$(count "MaskTab 新标签页就绪")
-  if tap_native "新建实例"; then
-    for k in 1 2 3 4 5 6 7 8 9 10; do sleep 1; [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ] && break; done
-    sleep 2; shot t-newinst
-    if [ "$(count "新建实例 #")" -gt "$n0" ] && [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ]; then echo "通过：从头像菜单新建实例（建好并打开了它的新标签页）"; else echo "失败：从头像菜单新建实例（新建 $n0 -> $(count "新建实例 #")，新标签页 $t0 -> $(count "MaskTab 新标签页就绪")）"; fail=1; fi
-  else echo "失败：头像菜单里没找到“新建实例”"; fail=1; fi
-else echo "失败：点头像后菜单没有打开（新建实例）"; fail=1; fi
+# 新建实例：头像菜单里点“新建实例”开出新建向导（决策 UI-25；以前是点一下就建，这一段到第 3 轮没跟着改，模拟器冒烟一直卡在这里）。
+# 这里只看向导那一页开出来；在向导里一步步点到“创建”放在下面坐标修正校准之后（向导是网页里的控件）。
+if tapitem newwiz "新建实例" new; then echo "通过：从头像菜单点“新建实例”开出新建向导"; else echo "失败：从头像菜单点“新建实例”后向导没有开出来"; fail=1; fi
+closepanel
 # 切回实例 #1（实例 id 是核心服务编的，这里按编号 #1 找），后面的检查都按实例 #1；切换后头像的位置不变
 # 注意：adb shell 把参数拼成一行交给设备上的 shell，裸的 #1 会被当成注释吃掉（run 43622971231：Argument expected after "mt_inst"），
 # 所以整条命令作为一个字符串传，'#1' 的引号留给设备上的 shell。
@@ -202,6 +197,23 @@ n0=$(ready settings)
 A shell input keyevent KEYCODE_BACK; sleep 3
 if [ "$(ready settings)" -gt "$n0" ]; then echo "通过：返回键从节点页回到设置首页"; else echo "失败：返回键没有回到设置首页"; shot t-back; fail=1; fi
 closepanel
+# 新建向导走完（页面里的控件，坐标修正已经校准）：下一步（备注不填）→ 跳过（不设期望地区）→ 创建；建好要切到新实例、开出它的新标签页
+n0=$(count "新建实例 #"); t0=$(count "MaskTab 新标签页就绪"); w0=$(ready new)
+A shell am start -n $ACT --es mt_open new > /dev/null
+for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready new)" -gt "$w0" ] && break; done
+sleep 2; shot t-wiz1
+wizok=1
+for step in "下一步" "跳过" "创建"; do
+  if ! tap_desc "$step"; then echo "失败：新建向导里没找到“$step”"; shot "t-wiz-miss"; wizok=0; fail=1; break; fi
+  sleep 2
+done
+if [ $wizok = 1 ]; then
+  for k in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 1; [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ] && break; done
+  sleep 2; shot t-newinst
+  if [ "$(count "新建实例 #")" -gt "$n0" ] && [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ]; then echo "通过：新建向导三步走完，建好并打开了新实例的新标签页"; else echo "失败：新建向导走完后没建出实例（新建 $n0 -> $(count "新建实例 #")，新标签页 $t0 -> $(count "MaskTab 新标签页就绪")）"; fail=1; fi
+fi
+closepanel
+A shell "am start -n $ACT --es mt_inst '#1'" > /dev/null; sleep 3
 # 反复开关：头像 → 菜单 → 某一页 → 关，连做 12 轮，不停顿等待。应用不能死、内置页面不能崩
 for k in $(seq 1 12); do
   if [ -n "$AV" ]; then A shell input tap $AV; fi; sleep 0.7
