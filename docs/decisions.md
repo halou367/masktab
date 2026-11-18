@@ -1476,4 +1476,6 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   各实例的内核主进程用系统的“指定父进程”起在它名下。实测三个实例 + 上级是一组（24 个进程），有窗口看得见时排在“应用”。
   起不来就自动退回平常的起法。`MASKTAB_NO_ANCHOR=1` 关掉。“运行情况”页里上级算在“其它”里。
 - **核对**：`internal/brand` 的测试在需求方电脑上全过，包括真内核（改完起得来、8 个进程）和真代理内核（改完 `-v` 正常）；开发版里代理内核已显示成“MaskTab 网络组件”。
+- **系统记着旧名字**：Windows 第一次见到一个 exe 就把名字记在注册表里（当前用户的 MuiCache），内核改了名字它还记着 Chromium。核心服务每次启动把我们这个文件的那两条改过来（`muicache_windows.go`）。
+  已经开着的任务管理器自己另记着一份：要关掉重开才显示 MaskTab（需求方电脑上实测：重开后是一组“MaskTab. 82 实例”，排在“应用”）。
 - **怎么撤**：内核——删掉 `chrome.exe`，把 `chrome.orig.exe` 改回 `chrome.exe`，并设 `MASKTAB_NO_BRAND=1`；成组——`MASKTAB_NO_ANCHOR=1`。

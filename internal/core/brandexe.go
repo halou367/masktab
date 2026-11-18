@@ -112,6 +112,9 @@ func brandFile(exe, tmp, orig string, keepOrig bool, set map[string]string, prob
 	markPath := filepath.Join(filepath.Dir(exe), strings.TrimSuffix(filepath.Base(exe), ".exe")+".masktab-brand.json")
 	var m brandMark
 	if b, e := os.ReadFile(markPath); e == nil && json.Unmarshal(b, &m) == nil && m.V == brand.Version && m.Size == st.Size() && m.Mod == st.ModTime().UnixNano() {
+		if m.Failed == "" {
+			friendlyName(exe, set["FileDescription"]) // 系统记着的旧名字每次启动都对一下（便宜；见 muicache_windows.go）
+		}
 		return false, nil // 换过了，或者这个文件试过不成
 	}
 	note := func(failed string) {
@@ -152,6 +155,7 @@ func brandFile(exe, tmp, orig string, keepOrig bool, set map[string]string, prob
 		_ = os.Remove(orig)
 	}
 	note("")
+	friendlyName(exe, set["FileDescription"])
 	return true, nil
 }
 
