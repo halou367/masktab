@@ -9,6 +9,7 @@
 //   addons          扩展：从 addons.mozilla.org 安装的火狐扩展（手机内核是 GeckoView，用不了 Chrome 扩展，这一页两端不同）
 //   diag            诊断——共用 pages.js，复制的文字由 app 收集
 //   history         最近访问（app 按实例记）
+//   new             新建实例向导（头像菜单的“新建实例”打开它，决策 UI-25）
 //   menu            头像菜单的页面版（平时头像菜单是 app 原生画的、浮在网页上，决策 UI-2；这个路由留作兜底）
 //   __back          app 的系统返回键：由页面按自己的返回栈处理（见 goBack）
 // 数据全部来自核心服务（和电脑版是同一个程序，决策 D-4），经 app 的 Bridge 转一道；这里没有手机专用的接口和状态。
@@ -16,6 +17,7 @@ import { api } from './api.js';
 import { h, icon, ibtn, toast, run, appBar, row, sw, confirmDlg, applyTheme, leave, pageIn, flipSnap, flipPlay } from './ui.js';
 import { menuView } from './menu.js';
 import { instancesView } from './instances.js';
+import { wizardPage } from './wizard.js';
 import { syncIcons, siteIcon } from './sites.js';
 import { panel } from './panel.js';
 import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView, verifyView } from './pages.js';
@@ -151,6 +153,8 @@ function render(force) {
       node: () => panel.kids(), fp: () => panel.kids(), instances: () => instancesView({ st, act, load, render: () => render(true), lite: true, back, openNode: (id) => open('node/' + id), open }),
       exits: () => exitsView(c), addons: addonsPage, diag: () => diagView(c), history: historyPage,
       menu: () => [appBar('', back), menuView(st, { node: () => open('node'), fp: () => open('fp'), open, render: () => render(true) })],
+      // 新建实例向导（头像菜单的“新建实例”由 app 打开这一页，决策 UI-25）：建好后 app 收起页面并切到新实例；取消 = 收起
+      new: () => wizardPage({ st, onDone: () => {}, onCancel: () => (stack.length ? goBack() : closeMe()) }),
     }[p] || (() => settingsHome(c));
     const kids = [view()].flat(Infinity).filter(Boolean);
     const snap = root.dataset.page === p ? flipSnap(root) : null; // 同一页里重画：列表增删、换位置有过渡（决策 UI-26）

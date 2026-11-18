@@ -361,14 +361,47 @@ if (want('flow')) {
   // 实例页：新建实例发出请求；抽屉收起
   await setHash('instances');
   await calls();
+  // 新建向导（决策 UI-25）：备注 → 期望地区 → 确认创建；选择随新建这一个请求交出去
   await pg.locator('.appbar button[title="新建伪装实例"]').click();
+  await pg.waitForTimeout(400);
+  const wzStep = () => pg.evaluate(() => ({ s: document.querySelector('.wz .wzs')?.textContent || '', on: [...document.querySelectorAll('.wz .dots i')].findIndex((d) => d.classList.contains('on')), sheet: !!document.querySelector('.scrim > .sheet.wz') }));
+  let ws = await wzStep();
+  check('新建向导：第 1 步是备注，手机上是底部表单', ws.on === 0 && ws.s.includes('第 1 步') && ws.sheet, ws);
+  await pg.locator('.wz input.field').fill('小号');
+  await pg.locator('.wz .acts .btn.fill').click();
+  await pg.waitForTimeout(400);
+  ws = await wzStep();
+  const nChips = await pg.locator('.wz .chip2').count();
+  check('新建向导：第 2 步期望地区，有“自动”和国家可选', ws.on === 1 && nChips >= 2, { ws, nChips });
+  await pg.screenshot({ path: path.join(out, 'wizard-region.png') });
+  await pg.locator('.wz .chip2').nth(1).click();
+  await pg.waitForTimeout(700);
+  ws = await wzStep();
+  const sumTx = await pg.locator('.wz .sum').innerText().catch(() => '');
+  check('新建向导：点国家后进入第 3 步确认，摘要里有备注', ws.on === 2 && sumTx.includes('小号'), { ws, sumTx });
+  await pg.screenshot({ path: path.join(out, 'wizard-confirm.png') });
+  await pg.locator('.wz .acts .btn').first().click(); // 上一步
+  await pg.waitForTimeout(400);
+  check('新建向导：“上一步”回到第 2 步，选过的国家还选着', (await wzStep()).on === 1 && await pg.locator('.wz .chip2.on').count() === 1, await wzStep());
+  await pg.locator('.wz .chip2.on').click();
+  await pg.waitForTimeout(700);
+  await calls();
+  await pg.locator('.wz .acts .btn.fill').click();
+  await pg.waitForTimeout(600);
+  { const c = (await calls()).find((x) => x.m === 'POST' && x.p === '/api/instances');
+    check('实例页 → 新建实例：一个请求带上备注和期望地区（不再建好后 PATCH）', !!c && c.b?.name === '小号' && /^[A-Z]{2}$/.test(c.b?.region || ''), c || {}); }
+  await pg.waitForTimeout(400);
+  check('新建向导：建好后表单收起（播完退场动画后移除）', await pg.locator('.scrim').count() === 0, {});
+  // 头像菜单的“新建实例”由 app 打开路由 new：整页向导；取消 = 收起
+  await setHash('new');
+  await pg.waitForTimeout(400);
+  check('路由 new：整页新建向导', await pg.locator('.wzpage .wz').count() === 1, await info());
+  await calls();
+  await pg.locator('.wz .acts .btn').first().click(); // 取消
   await pg.waitForTimeout(300);
-  await pg.locator('.dlg input.field').fill('小号');
-  await pg.locator('.dlg .btn.fill').click();
+  check('路由 new：取消 = 收起', (await calls()).some((c) => c.p === '/ui/close'), {});
+  await setHash('instances');
   await pg.waitForTimeout(300);
-  await pg.locator('.dlg .wzr button[title]').first().click();
-  await pg.waitForTimeout(500);
-  check('实例页 → 新建实例发出请求', (await calls()).some((c) => c.m === 'POST' && c.p === '/api/instances'), {});
   await pg.locator('.cardi[data-id="p2"]').click();
   await pg.waitForTimeout(300);
   i = await info();
@@ -662,7 +695,26 @@ if (desk && want('desk')) {
     await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#instances/import'); await ip.waitForTimeout(600);
     const im = await ip.evaluate(() => { const m = document.querySelector('.modal'), x = m?.querySelector('input[type="text"]'); return m ? { w: Math.round(x.getBoundingClientRect().width), bg: getComputedStyle(x.parentElement).backgroundColor } : null; });
     check('电脑导入邮箱：默认密码输入框够宽', !!im && im.w >= 300, im);
-    await ip.screenshot({ path: path.join(out, 'desk-import.png') }); }
+    await ip.screenshot({ path: path.join(out, 'desk-import.png') });
+    // 电脑：实例页“新建”弹居中的向导（不是底部表单）；Ctrl+M / 合并窗口“＋”打开的小窗口是整页向导（路由 new，决策 UI-25）
+    await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#instances'); await ip.waitForTimeout(800);
+    await ip.bringToFront();
+    await ip.waitForTimeout(400);
+    await ip.evaluate(() => document.querySelector('button[title^="新建伪装实例"]').click()); // 电脑页面跟着事件不停重画，用页面里的点击
+    await ip.waitForFunction(() => document.activeElement?.matches?.('.wz input.field'), null, { timeout: 2500 }).catch(() => {}); // 同一个浏览器里还开着别的页：后台页的定时器会被放慢
+    const dw = await ip.evaluate(() => { const d = document.querySelector('.scrim > .dlg.wz'); return d ? { w: Math.round(d.getBoundingClientRect().width), input: !!d.querySelector('input.field'), focus: document.activeElement?.matches?.('.wz input.field') } : null; });
+    check('电脑实例页：“新建”弹出居中的向导，光标在备注框里', !!dw && dw.w >= 360 && dw.input && dw.focus, dw);
+    await ip.keyboard.type('工作号'); await ip.keyboard.press('Enter'); await ip.waitForTimeout(400);
+    check('电脑向导：备注框里回车 = 下一步', await ip.locator('.wz .chip2').count() >= 2, {});
+    await ip.screenshot({ path: path.join(out, 'desk-wizard.png') });
+    await ip.keyboard.press('Escape'); await ip.waitForTimeout(400);
+    check('电脑向导：Esc 退回上一步', await ip.locator('.wz input.field').count() === 1 && await ip.locator('.wz input.field').inputValue() === '工作号', {});
+    await ip.setViewportSize({ width: 440, height: 560 });
+    await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#new'); await ip.waitForTimeout(600);
+    const ww = await ip.evaluate(() => ({ win: document.documentElement.classList.contains('wzwin'), nav: getComputedStyle(document.getElementById('nav')).display, wz: !!document.querySelector('.wzpage .wz'), over: document.documentElement.scrollWidth > innerWidth }));
+    check('电脑向导小窗口（app.html#new）：只有向导，没有左边导航，不横向溢出', ww.win && ww.nav === 'none' && ww.wz && !ww.over, ww);
+    await ip.screenshot({ path: path.join(out, 'desk-wizard-window.png') });
+    await ip.setViewportSize({ width: 1280, height: 820 }); }
   const pp = await ctx.newPage();
   await pp.goto(base + 'app.html#instances');
   await pp.waitForTimeout(700);

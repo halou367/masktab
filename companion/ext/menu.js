@@ -6,6 +6,7 @@ import { api, shownExit, fmtBytes, letterOf as letter } from './api.js';
 import { h, icon, flag, run, delayText, delayCls, cname, ringEl, cfDot } from './ui.js';
 import { disguise, exitQ, cfRep, restartText, restartPath } from './common.js';
 import { siteIcon, uniqSites } from './sites.js';
+import { newWizard } from './wizard.js';
 
 // 安卓版（docs/android.md）复用这个文件：手机上头像写编号（与工具栏的彩色编号圆点一致），不显示键盘快捷键。
 const MOBILE = /Android/i.test(navigator.userAgent);
@@ -89,7 +90,7 @@ export function menuView(st, nav) {
       h('span', { class: 'tools' },
         tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), tool('gear', '设置', () => nav.open('settings')),
         me.kind !== 'normal' && tool('power', '关闭这个实例', () => run(() => api('POST', `/api/instances/${me.id}/stop`))),
-        h('button', { class: 'btn tonal sm', title: '新建实例' + (MOBILE ? '' : '（Ctrl+M）'), onclick: () => run(() => api('POST', '/api/instances', {}), '正在创建…') }, icon('add', 16), h('span', { class: 'bt' }, '新建实例')))),
+        h('button', { class: 'btn tonal sm', title: '新建实例' + (MOBILE ? '' : '（Ctrl+M）'), onclick: () => newWizard(st, () => nav.render()) }, icon('add', 16), h('span', { class: 'bt' }, '新建实例')))), // 新建走向导（决策 UI-25）
     showQ && h('div', { class: 'qs' }, icon('search', 18), search),
     h('div', { class: 'insts' }, list.map((x) => {
       const xe = x.proxy.state === 'on' ? shownExit(x) : null;

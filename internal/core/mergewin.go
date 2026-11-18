@@ -58,6 +58,12 @@ func (h mergeHost) Pick(key string) {
 	id, ok := strings.CutPrefix(key, "open:")
 	if !ok {
 		a.mu.Lock()
+		// 新建也走向导（decisions UI-25）：叫最近在前台的那个实例的扩展弹出向导窗口；一个开着的都没有才直接建
+		if host := a.wizardHostLocked(); host != "" {
+			a.bumpLocked("wizard", host)
+			a.mu.Unlock()
+			return
+		}
 		in := a.newInstanceLocked("persistent")
 		a.saveLocked("instances")
 		a.bumpLocked("state", "")

@@ -636,6 +636,36 @@ html.pc .scrim.out > .sheet { animation: dlgOut var(--d-s) var(--e-acc) forwards
 @keyframes itemIn { from { opacity: 0; transform: scale(.94); } }
 .it-in { animation: itemIn var(--d-m) var(--e-dec) both; }
 .it-ghost { position: fixed !important; z-index: 40; pointer-events: none; margin: 0 !important; animation: dlgOut var(--d-m) var(--e-acc) forwards; }
+/* 新建实例向导（决策 UI-25）：三步，换步时内容横向滑动、外框高度跟着变 */
+.wz { padding-bottom: 12px; }
+.dlg.wz { width: min(420px, calc(100% - 32px)); padding-top: 20px; }
+.sheet.wz { padding-top: 0; }
+.wz .wzh { display: flex; align-items: center; gap: 10px; margin: 0 24px 4px; }
+.wz .wzh h3 { margin: 0; flex: 1; font-size: 22px; font-weight: 400; }
+.wz .dots { display: flex; gap: 6px; } .wz .dots i { width: 8px; height: 8px; border-radius: 4px; background: var(--div); transition: width var(--d-m) var(--e-std), background-color var(--d-m) var(--e-std); }
+.wz .dots i.on { width: 22px; background: var(--acc); } .wz .dots i.done { background: var(--acc); opacity: .55; }
+.wz .wzs { margin: 0 24px 10px; font-size: 13px; color: var(--on3); }
+.wz .vp { position: relative; overflow: hidden; transition: height var(--d-m) var(--e-std); }
+.wz .pane { padding: 4px 0 6px; }
+.wz .pane.in-f { animation: pageFwd var(--d-m) var(--e-dec); } .wz .pane.in-b { animation: pageBack var(--d-m) var(--e-dec); }
+.wz .pane.out { position: absolute; left: 0; right: 0; top: 0; animation: fadeOut var(--d-s) var(--e-acc) forwards; }
+.wz .note { margin: 0 24px 12px; font-size: 14px; color: var(--on2); line-height: 1.5; }
+.wz .field { width: calc(100% - 48px); margin: 0 24px 8px; display: block; }
+.wz .who { display: flex; align-items: center; gap: 12px; margin: 4px 24px 14px; }
+.wz .who .nm { font-size: 16px; } .wz .who .sub { font-size: 13px; }
+.wz .wzc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 24px 8px; }
+.wz .chip2 { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 12px 4px 8px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--div); font-size: 14px; position: relative; isolation: isolate;
+  transition: background-color var(--d-s) var(--e-std), box-shadow var(--d-s) var(--e-std), color var(--d-s) var(--e-std); }
+.wz .chip2 .n { font-size: 12px; color: var(--on3); } .wz .chip2.on { background: var(--tonal); color: var(--ontonal); box-shadow: none; } .wz .chip2.on .n { color: inherit; opacity: .8; }
+.wz .chip2.on::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 2px var(--acc); animation: fadeIn var(--d-s) var(--e-std); }
+.wz .sum { margin: 0 16px 6px; }
+.wz .sum .r { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 4px 8px; border-radius: 14px; }
+.wz .sum .r .k { width: 72px; flex: none; color: var(--on3); font-size: 14px; } .wz .sum .r .v { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.wz .sum .r .lk { color: var(--acc); font-size: 13px; }
+.wz .acts { display: flex; align-items: center; gap: 8px; padding: 10px 16px 0; } .wz .acts .sp { flex: 1; }
+.wzpage { max-width: 520px; margin: 0 auto; padding-top: 16px; }
+html.wzwin body { overflow: hidden; } html.wzwin .pnav { display: none; } html.wzwin .pmain { margin: 0; } html.wzwin #main { padding: 0; max-width: none; }
+
 /* “减少动画”（系统设置 / 浏览器 prefers-reduced-motion）：时长全部归零，只留转圈这类表示“正在进行”的 */
 @media (prefers-reduced-motion: reduce) {
   :root { --d-xs: 0ms; --d-s: 0ms; --d-m: 0ms; --d-l: 0ms; }

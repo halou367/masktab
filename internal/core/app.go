@@ -76,7 +76,7 @@ type Setup struct {
 
 type Event struct {
 	Seq  int64  `json:"seq"`
-	Type string `json:"type"` // state | focus | close
+	Type string `json:"type"` // state | focus | close | wizard（弹出新建向导）
 	Inst string `json:"inst,omitempty"`
 }
 

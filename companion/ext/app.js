@@ -1,6 +1,7 @@
 import { api, shownExit } from './api.js';
 import { h, icon, ibtn, toast, run, applyTheme, appBar, sec, row, sw, choose, ask, confirmDlg, pageIn, flipSnap, flipPlay } from './ui.js';
 import { instancesView } from './instances.js';
+import { wizardPage } from './wizard.js';
 import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
 import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView } from './pages.js';
@@ -100,6 +101,18 @@ async function diagText() {
 function render() {
   if (!st) return;
   const p = page();
+  // 新建向导的小窗口（Ctrl+M、合并窗口“＋ → 新建实例”打开，决策 UI-25）：只有向导，建好 / 取消就关掉这个窗口
+  if (p === 'new') {
+    document.documentElement.classList.add('wzwin');
+    if (lastPage !== 'new') {
+      const done = () => { window.close(); setTimeout(() => open('instances'), 300); }; // 不是扩展自己开的窗口时关不掉：退回实例页
+      main.replaceChildren(wizardPage({ st, onDone: done, onCancel: done }));
+      pageIn(main, 'fade');
+    }
+    lastPage = p; document.title = 'MaskTab · 新建实例';
+    return;
+  }
+  document.documentElement.classList.remove('wzwin');
   const tid = p === 'node' ? route().split('/')[1] || '' : ''; // 节点面板对着哪个实例（空 = 本窗口的）
   const at = p === 'settings/ntp' ? 'settings' : tid ? 'instances' : p; // “新标签页”的设置是从“基本设置”点进去的；改别的实例的节点算在“实例”里
   document.getElementById('nav').replaceChildren(h('div', { class: 'h' }, h('span', { class: 'lg' }, icon('mask', 20)), 'MaskTab'),

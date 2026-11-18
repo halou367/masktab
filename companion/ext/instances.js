@@ -3,6 +3,7 @@
 // 点卡片打开右侧抽屉看账号、密码、Cookie；“导入邮箱”批量建实例。
 import { api, shownExit, RESTART_WHY } from './api.js';
 import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, appBar, sec, row, sw, ask, confirmDlg, overlay } from './ui.js';
+import { newWizard } from './wizard.js';
 import { siteIcon, siteName, siteKey, uniqSites } from './sites.js';
 import { face, stepLine } from './menu.js';
 
@@ -26,11 +27,11 @@ export function instancesView(c) {
   const head = c.lite
     ? appBar(['实例', h('span', { class: 'cnt' }, String(st.instances.length))], c.back,
       gaps && ibtn('sort', '整理编号：重新排成 1、2、3…', tidy),
-      ibtn('mail', '导入邮箱：一个邮箱一个实例', () => setRoute('import')), ibtn('add', '新建伪装实例', () => newWizard(c), 'on'))
+      ibtn('mail', '导入邮箱：一个邮箱一个实例', () => setRoute('import')), ibtn('add', '新建伪装实例', () => newWizard(st, () => c.load(true)), 'on'))
     : appBar(['实例', h('span', { class: 'cnt' }, String(st.instances.length))], c.back,
       gaps && h('button', { class: 'btn', title: '删过实例以后编号有空缺：重新排成 1、2、3…', onclick: tidy }, icon('sort', 18), '整理编号'),
       h('button', { class: 'btn', title: '批量导入邮箱，一个邮箱一个实例', onclick: () => setRoute('import') }, icon('mail', 18), '导入邮箱'),
-      h('button', { class: 'btn tonal', title: '新建伪装实例（Ctrl+M）', onclick: () => newWizard(c) }, icon('add', 18), '新建'));
+      h('button', { class: 'btn tonal', title: '新建伪装实例（Ctrl+M）', onclick: () => newWizard(st, () => c.load(true)) }, icon('add', 18), '新建'));
   // 分成“运行中 / 休眠”两组（演示定稿，决策 UI-10）；拖动排序只在同一组里换位置。
   const mk = c.lite ? cardLite : card, live = st.instances.filter((i) => i.rt.running || i.rt.starting), idle = st.instances.filter((i) => !(i.rt.running || i.rt.starting));
   const group = (t, list, cls, note) => list.length > 0 && [sec([t, ' · ', list.length], note), h('div', { class: 'grid' + (c.lite ? ' lt' : '') + cls }, list.map(mk))];
@@ -42,29 +43,6 @@ export function instancesView(c) {
   if (cur) out.push(drawer(cur)); else lastDrawer = '';
   if (sub === 'import') out.push(importBox());
   return out;
-}
-
-// 新建向导（BACKLOG #2，决策 UI-24）：第 1 步备注（可空）→ 第 2 步期望地区（自动 / 跳过 / 点国家）→ 创建。两步都能直接“跳过”。
-const WZ_REGIONS = ['US', 'JP', 'SG', 'HK', 'TW', 'KR', 'GB', 'DE', 'FR', 'CA', 'AU', 'NL'];
-async function newWizard(c) {
-  const name = await ask('新建实例 · 1/2 备注', { placeholder: '备注（可留空，如：小号 A）', note: '给这个窗口起个名字，方便区分。不想填直接点下一步。', ok: '下一步' });
-  if (name === null) return;
-  const region = await new Promise((res) => {
-    const pick = (v) => { o.close(); res(v); };
-    const chips = h('div', { class: 'wzr', style: { display: 'flex', flexWrap: 'wrap', gap: '8px', margin: '8px 0' } },
-      WZ_REGIONS.map((cc) => h('button', { class: 'btn', title: cname(cc), onclick: () => pick(cc) }, flag(cc), cname(cc))));
-    const o = overlay(h('div', { class: 'dlg', role: 'dialog' }, h('h3', {}, '新建实例 · 2/2 期望地区'), h('div', { class: 'note' }, '出口想在哪个国家？选“自动”由系统挑最快的，跳过则不设置。'), chips,
-      h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: () => pick('') }, '跳过'), h('button', { class: 'btn fill', onclick: () => pick('') }, '自动创建'))));
-    o.sc.addEventListener('dismiss', () => res(null));
-  });
-  if (region === null) return;
-  c.act(async () => {
-    const r = await api('POST', '/api/instances', {});
-    const id = r && r.id;
-    if (id && name.trim()) await api('PATCH', `/api/instances/${id}`, { name: name.trim() });
-    if (id && region) await api('PATCH', `/api/instances/${id}`, { proxy: { region, exitMode: 'auto', state: 'on' } });
-    return r;
-  }, '正在创建…');
 }
 
 const nameOf = (i) => i.name || (i.kind === 'normal' ? '普通窗口' : '未命名');

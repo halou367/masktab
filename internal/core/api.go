@@ -552,23 +552,16 @@ func (a *App) routes(mux *http.ServeMux) {
 		reply(w, nil, a.Launch(id))
 	})
 	mux.HandleFunc("POST /api/instances", func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ Kind string }
+		// 新建向导（decisions UI-25）：名称、期望地区随这一个请求交来，启动之前就写好，不再建好后再改
+		var b newOpts
 		_ = body(r, &b)
-		if b.Kind != "disposable" {
-			b.Kind = "persistent"
-		}
-		a.mu.Lock()
-		in := a.newInstanceLocked(b.Kind)
-		a.saveLocked("instances")
-		a.bumpLocked("state", "")
-		id := in.ID
-		a.mu.Unlock()
+		id, no, note := a.CreateInstance(b)
 		go func() {
 			if err := a.Launch(id); err != nil {
 				log.Printf("启动新实例失败：%v", err)
 			}
 		}()
-		reply(w, map[string]any{"id": id, "no": in.No}, nil)
+		reply(w, map[string]any{"id": id, "no": no, "note": note}, nil)
 	})
 	mux.HandleFunc("POST /api/instances/{id}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")

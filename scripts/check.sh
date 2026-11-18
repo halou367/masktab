@@ -16,7 +16,7 @@ need_pw() { [ -d "$MT_PW/node_modules/playwright" ] || { echo "还没装 Playwri
 
 # 手机内置扩展 = companion/ext 里这几样共用文件 + android/ext 里的全部。
 # 这份清单还有一处要同步：android/app/build.gradle.kts 的 BuildExt（打进 APK 的就是它列的那些）。
-SHARED_EXT="ui.js ui.css sites.js menu.js instances.js autofill.js common.js panel.js panel.css pages.js ntp.js vaultmsg.js assets"
+SHARED_EXT="ui.js ui.css sites.js menu.js instances.js wizard.js autofill.js common.js panel.js panel.css pages.js ntp.js vaultmsg.js assets"
 
 fast() {
   local t0=$SECONDS bad=0 out

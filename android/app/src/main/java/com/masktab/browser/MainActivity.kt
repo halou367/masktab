@@ -657,7 +657,7 @@ class MainActivity : Activity(), CoreUi {
             addView(icon("add", pal.ontonal, 20), LinearLayout.LayoutParams(dp(20), dp(24)).apply { rightMargin = dp(4) })
             addView(text("新建实例", 14f, pal.ontonal, true))
             contentDescription = "新建实例"; ripple()
-            setOnClickListener { closeOverlay(); Core.createInst() }
+            setOnClickListener { closeOverlay(); openSheet("new", true) } // 新建走向导（备注 → 期望地区 → 确认，决策 UI-25）
         }, LinearLayout.LayoutParams(-2, dp(36)).apply { leftMargin = dp(6) })
         box.addView(head)
         for ((k, x) in others.withIndex()) {
