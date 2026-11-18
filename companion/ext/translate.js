@@ -88,8 +88,11 @@
   }
   let engine = 0; // 0 谷歌，1 微软；谷歌连续失败就换
   async function translateBatch(texts) {
-    try { return await (engine ? microsoft : google)(texts); } catch (e) {
-      if (engine) throw e;
+    // used = 这一批开始时用的是谁。几批是同时发的：谷歌不通时，头一批失败把 engine 换成了微软，另外几批失败回来时不能看 engine
+    // （那样会以为“微软也不行”直接报错，整页只翻出头一批——2026-11-18 在需求方电脑的直连实例上就是这样）。
+    const used = engine;
+    try { return await (used ? microsoft : google)(texts); } catch (e) {
+      if (used) throw e;
       engine = 1; // 谷歌不通（被墙、被限流）：这一页后面都用微软
       return microsoft(texts);
     }

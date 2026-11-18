@@ -121,6 +121,12 @@ await pg.reload(); await pg.waitForTimeout(800);
 await send();
 t = await until(async () => { const x = await text(); return x.h.startsWith('【微软】') ? x : null; }, 10000) || await text();
 check('谷歌接口不通时换微软接口，照样翻好', t.h === '【微软】Welcome to the daily news', t);
+// 文字多的页面是分几批同时发的：谷歌不通时每一批都得换到微软，不能只有头一批翻出来
+await pg.reload(); await pg.waitForTimeout(800);
+await pg.evaluate(() => { const d = document.getElementById('more'); for (let i = 0; i < 200; i++) d.append(Object.assign(document.createElement('p'), { className: 'many', textContent: `Paragraph number ${i} of the long story` })); });
+await send();
+const many = await until(async () => { const n = await pg.evaluate(() => [...document.querySelectorAll('.many')].filter((e) => e.textContent.startsWith('【微软】')).length); return n === 200 ? n : null; }, 15000) || await pg.evaluate(() => [...document.querySelectorAll('.many')].filter((e) => e.textContent.startsWith('【微软】')).length);
+check('谷歌不通、文字多到分几批同时发：每一批都换到微软，200 段全翻出来', many === 200, many);
 check('微软接口也经实例的代理出去', connects.includes('edge.microsoft.com'), connects);
 
 // 后台只替内容脚本发翻译接口的请求：别的地址一律不发（内容脚本不能拿它当万能代理）
