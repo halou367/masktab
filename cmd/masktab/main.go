@@ -177,7 +177,6 @@ func main() {
 		}
 	} else {
 		app.CleanLeftovers() // 不自动开窗口时 Start 不跑：上次留下的内核进程照样要清
-		app.BrandKernel()
 	}
 	splash.Finish()
 	go func() { // 更新提示卡用的那份副本（update.go 的 updateSplash）：它退出后删掉

@@ -186,6 +186,9 @@ func (a *App) ensureKernel(onDownload func()) error {
 			return errors.New(a.setup.Error)
 		}
 	}
+	// 名字和图标换成 MaskTab 的（brandexe.go）。要在宣布“内核准备好了”之前做完：换的那一下 chrome.exe 有一瞬间不在原位，
+	// 这时候有人去起内核会扑空（CI 44304925442 上冒烟测试就是紧跟着“准备好了”去起内核，撞上了）。
+	a.brandKernel(exe, override)
 	a.mu.Lock()
 	first := a.kernelExe == ""
 	a.kernelExe = exe

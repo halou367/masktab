@@ -36,18 +36,15 @@ type brandMark struct {
 
 func brandable() bool { return runtime.GOOS == "windows" && os.Getenv("MASKTAB_NO_BRAND") == "" }
 
-// BrandKernel 在启动时叫一次（上次留下的内核进程已经清掉，这时没有谁占着内核的 exe）。
-func (a *App) BrandKernel() {
-	if !brandable() || a.hosted() || a.kernelExe == "" || a.kernelExe == "host" {
+// brandKernel 在找到内核、还没宣布“准备好了”的时候叫（setup.go 的 ensureKernel）。
+// 这时可能还有上次留下的内核进程开着这个文件：不要紧，开着的 exe 可以改名，只是上一份 chrome.orig.exe 删不掉时这次就不换。
+func (a *App) brandKernel(exe, override string) {
+	if !brandable() || a.hosted() || exe == "" || exe == "host" {
 		return
 	}
-	a.mu.Lock()
-	override := a.Settings.KernelPath
-	a.mu.Unlock()
-	if override != "" && strings.EqualFold(filepath.Clean(override), filepath.Clean(a.kernelExe)) {
-		return
+	if override != "" && strings.EqualFold(filepath.Clean(override), filepath.Clean(exe)) {
+		return // 用户自己指定的内核不是我们的文件，不动
 	}
-	exe := a.kernelExe
 	dir := filepath.Dir(exe)
 	probe := func(file string) bool { // 起得来、站得住 = 这个文件是好的
 		tmp, err := os.MkdirTemp("", "masktab-probe")

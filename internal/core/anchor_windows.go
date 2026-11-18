@@ -48,15 +48,6 @@ func handleAlive(h syscall.Handle) bool {
 	return r == syscall.WAIT_TIMEOUT
 }
 
-func (a *App) anchorPid() int {
-	a.anchor.mu.Lock()
-	defer a.anchor.mu.Unlock()
-	if a.anchor.h != 0 && handleAlive(a.anchor.h) {
-		return a.anchor.pid
-	}
-	return 0
-}
-
 // kernelAttr 返回起内核进程用的附加设置：记在公共上级名下。没有上级时返回 nil（平常的起法）。
 func (a *App) kernelAttr() *syscall.SysProcAttr {
 	if os.Getenv("MASKTAB_NO_ANCHOR") != "" || a.kernelExe == "" {

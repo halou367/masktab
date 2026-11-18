@@ -77,7 +77,6 @@ func (a *App) Start() {
 	}
 	readJSON(a.p("state", "runtime.json"), &st)
 	a.CleanLeftovers()
-	a.BrandKernel()
 	// 刚装完更新：把更新前开着的实例都开回来，不看“启动时恢复”设置（update.go 留的记号，只管一次）
 	_, once := os.Stat(a.p("state", "restore-once"))
 	_ = os.Remove(a.p("state", "restore-once"))
