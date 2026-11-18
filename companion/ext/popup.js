@@ -22,7 +22,7 @@ const record = () => run(async () => {
 const translate = () => run(async () => {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab || !/^https?:/.test(tab.url || '')) throw new Error('先打开要翻译的网页');
-  try { await chrome.tabs.sendMessage(tab.id, { t: 'mt:translate' }); } catch { throw new Error('这个页面还没准备好：刷新一下再点翻译'); }
+  try { await chrome.tabs.sendMessage(tab.id, { t: 'mt:translate' }); } catch { throw new Error('这个页面翻译不了（浏览器自己的页面、应用商店等）；普通网页的话刷新一下再点'); }
   window.close();
 });
 

@@ -66,6 +66,13 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>News</title>
 <p id="nt" translate="no">Brand Name Here</p><div id="more"></div>`;
 const proxy = http.createServer((q, r) => {
   const u = new URL(q.url);
+  // 慢页面：先给开头一点点，2.5 秒后才给正文（经代理打开网页时常见）
+  if (u.hostname === 'slow.test') {
+    r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    r.write('<!doctype html><meta charset="utf-8"><title>Slow</title><p id="first">0</p>' + ' '.repeat(2048));
+    setTimeout(() => r.end('<h1 id="late">This part of the page arrives late</h1><p id="late2">And so does this paragraph of text.</p>'), 2500);
+    return;
+  }
   if (u.hostname === 'news.test') { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Set-Cookie': 'sid=page-cookie' }); r.end(PAGE); return; }
   r.writeHead(502); r.end();
 });
@@ -128,6 +135,19 @@ await send();
 const many = await until(async () => { const n = await pg.evaluate(() => [...document.querySelectorAll('.many')].filter((e) => e.textContent.startsWith('【微软】')).length); return n === 200 ? n : null; }, 15000) || await pg.evaluate(() => [...document.querySelectorAll('.many')].filter((e) => e.textContent.startsWith('【微软】')).length);
 check('谷歌不通、文字多到分几批同时发：每一批都换到微软，200 段全翻出来', many === 200, many);
 check('微软接口也经实例的代理出去', connects.includes('edge.microsoft.com'), connects);
+
+// 页面还在加载时就点了翻译：等它加载完再翻，后到的正文也要是译文（以前：只看到开头几个字，说“没有需要翻译的外文”就完了）
+{
+  const pg2 = await ctx.newPage();
+  pg2.goto('http://slow.test/').catch(() => {});
+  await until(() => pg2.evaluate(() => !!document.getElementById('first')).catch(() => false), 5000);
+  const state = await pg2.evaluate(() => document.readyState + ' ' + !!document.getElementById('late'));
+  await sw.evaluate(async () => { const [t] = await chrome.tabs.query({ url: 'http://slow.test/*' }); return chrome.tabs.sendMessage(t.id, { t: 'mt:translate' }); });
+  const late = await until(async () => { const x = await pg2.evaluate(() => [document.getElementById('late')?.textContent || '', document.getElementById('late2')?.textContent || '']); return /^【/.test(x[0]) && /^【/.test(x[1]) ? x : null; }, 12000)
+    || await pg2.evaluate(() => [document.getElementById('late')?.textContent || '', document.getElementById('late2')?.textContent || '']);
+  check('页面还没加载完就点翻译：等加载完再翻，后到的正文也翻了', state === 'loading false' && /^【/.test(late[0]) && /^【/.test(late[1]), { state, late });
+  await pg2.close();
+}
 
 // 后台只替内容脚本发翻译接口的请求：别的地址一律不发（内容脚本不能拿它当万能代理）
 const bad = await sw.evaluate(async () => { try { await globalThis.trFetch({ url: 'https://example.com/', init: {} }); return 'sent'; } catch (e) { return String(e.message || e); } });

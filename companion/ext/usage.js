@@ -91,7 +91,7 @@ function body() {
     on.length ? on.map(inst) : h('div', { class: 'unote pad' }, '现在没有开着的实例。'),
     sec('后台'),
     row({ ic: 'server', t: '核心服务', s: 'masktab：管实例、订阅和这些页面', trail: nums(u.service, warm) }),
-    u.proxy.n > 0 && row({ ic: 'swap', t: '代理内核', s: 'mihomo：所有实例的流量都经它' + (u.proxy.n > 1 ? `（${u.proxy.n} 个进程）` : ''), trail: nums(u.proxy, warm) }),
+    u.proxy.n > 0 && row({ ic: 'swap', t: '代理内核', s: '网络组件（masktab-net，即 mihomo）：所有实例的流量都经它' + (u.proxy.n > 1 ? `（${u.proxy.n} 个进程）` : ''), trail: nums(u.proxy, warm) }),
     u.other.n > 0 && row({ ic: 'clock', t: '其它', s: `${u.other.n} 个进程：让各实例在任务管理器里归成一组的那个小进程、正在启动或关闭中的内核等`, trail: nums(u.other, warm) }),
     off.length > 0 && [sec('没开的实例', `${off.length} 个 · 不占内存`),
       off.map((i) => row({ cls: 'uoff', ic: avatar(i.color, letterOf(i), 36), t: [h('span', { class: 'mono no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))],

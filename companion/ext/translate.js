@@ -7,6 +7,8 @@
 //     认不出实例时一律拒绝，绝不直连。（手机扩展后台自己的请求是直连的，所以不能交给后台。）
 // 请求不带 Cookie、不带来源页（credentials: omit、no-referrer），不会把网页地址和翻译服务的登录状态连在一起。
 // 接口：先用谷歌翻译的公开网页接口（translate.googleapis.com，client=gtx）；不通（6 秒没回）时换微软 Edge 浏览器内置翻译用的接口。
+// 这个脚本在网页一开始加载时就装上（run_at: document_start）：网页还没加载完时点“翻译”也接得到，等加载完再翻（见 start）。
+// 所以装的时候不能碰 document.body，也不能假定网页上已经有内容。
 (() => {
   if (window.top !== window || window.__mtTr) return;
   window.__mtTr = true;
@@ -29,7 +31,7 @@
     .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.bad{background:#b3261e}</style>`;
   let bar = null, hideT = 0;
   function say(text, { bad = false, undo = false, sticky = false } = {}) {
-    if (!host.isConnected) document.documentElement.append(host);
+    if (!host.isConnected) (document.documentElement || document).append(host);
     bar?.remove(); clearTimeout(hideT);
     bar = document.createElement('div'); bar.className = 'b' + (bad ? ' bad' : '');
     const t = document.createElement('span'); t.className = 't'; t.textContent = text; bar.append(t);
@@ -149,6 +151,13 @@
   async function start() {
     if (busy) return;
     busy = true; on = true; const g = ++gen;
+    // 页面还没加载完（经代理打开的慢页面常见）：这时只收得到开头几个字，翻完就停了，后面加载出来的全是原文，
+    // 还会说“这一页没有需要翻译的外文”（2026-11-18 在真窗口里碰到）。等它加载完再收集，最多等 12 秒。
+    if (document.readyState !== 'complete') {
+      say('等页面加载完就翻译…', { sticky: true });
+      await new Promise((r) => { addEventListener('load', r, { once: true }); setTimeout(r, 12000); });
+      if (g !== gen) return; // 等的时候又点了一次（= 不翻了）
+    }
     say('正在翻译…', { sticky: true });
     const nodes = collect(document.body || document.documentElement);
     // 属性里的短文字（输入框提示、按钮文字）一起翻

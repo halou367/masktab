@@ -66,10 +66,20 @@
         "https://*/*"
       ],
       "js": [
-        "autofill.js",
-        "translate.js"
+        "autofill.js"
       ],
       "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "translate.js"
+      ],
+      "run_at": "document_start",
       "all_frames": false
     },
     {
