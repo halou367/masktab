@@ -205,7 +205,16 @@ const CN = { US: '美国', CA: '加拿大', MX: '墨西哥', BR: '巴西', AR: '
   LT: '立陶宛', LV: '拉脱维亚', EE: '爱沙尼亚', RS: '塞尔维亚', HR: '克罗地亚', SK: '斯洛伐克', SI: '斯洛文尼亚', IS: '冰岛', MD: '摩尔多瓦', CN: '中国', HK: '香港', MO: '澳门', TW: '台湾', JP: '日本', KR: '韩国',
   SG: '新加坡', MY: '马来西亚', TH: '泰国', VN: '越南', PH: '菲律宾', ID: '印度尼西亚', IN: '印度', PK: '巴基斯坦', BD: '孟加拉国', KZ: '哈萨克斯坦', AE: '阿联酋', SA: '沙特', IL: '以色列', IR: '伊朗', IQ: '伊拉克', QA: '卡塔尔',
   KH: '柬埔寨', AU: '澳大利亚', NZ: '新西兰', ZA: '南非', EG: '埃及', NG: '尼日利亚', KE: '肯尼亚', MA: '摩洛哥' };
-export const cname = (c) => (c ? CN[c.toUpperCase()] || c.toUpperCase() : '未知');
+// 表里没有的国家问浏览器要中文名（2026-11-18 在向导里看到 AM、DO、CY、UZ 只有代码）；浏览器也不认的才写代码。
+let regionNames = null;
+try { regionNames = new Intl.DisplayNames(['zh-CN'], { type: 'region' }); } catch { /* 老内核没有：写代码 */ }
+export const cname = (c) => {
+  if (!c) return '未知';
+  const u = c.toUpperCase();
+  if (CN[u]) return CN[u];
+  try { const n = regionNames && regionNames.of(u); if (n && n !== u) return n; } catch { /* 不是合法的地区代码 */ }
+  return u;
+};
 // 纯净度的小圆环：0–100，越满越干净。用 DOM 接口画，不拼 HTML。
 export function ring(score, size = 14) {
   const NS = 'http://www.w3.org/2000/svg', c = 2 * Math.PI * 7, v = Math.max(0, Math.min(100, Number(score) || 0));

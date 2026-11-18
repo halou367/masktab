@@ -476,10 +476,12 @@ if (desk && want('desk')) {
   let deskTheme = fixture.settings?.theme, deskMany = false, deskUpd = null, deskNeed = false, deskExts = null, deskOutcome = 'hot';
   const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
+  const deskCalls = [];
   const dsrv = http.createServer((q, r) => {
     const u = new URL(q.url, 'http://x');
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
     if (u.pathname.startsWith('/api/')) {
+      if (q.method !== 'GET') { let body = ''; q.on('data', (c) => { body += c; }); q.on('end', () => { let b = null; try { b = body ? JSON.parse(body) : null; } catch { b = body; } deskCalls.push({ m: q.method, p: u.pathname, b }); }); } // 电脑页面改了什么：检查里看
       const many = deskMany ? [...fixture.instances, ...Array.from({ length: deskMany === true ? 7 : deskMany }, (_, k) => ({ ...fixture.instances[k % 2 ? 0 : 2], id: 'x' + k, no: 21 + k, name: `user${k}@example.com`, color: ['#8e24aa', '#00897b', '#e8710a'][k % 3] }))] : fixture.instances;
       const need = (i) => (deskNeed && i.rt.running ? { ...i, rt: { ...i.rt, needRestart: ['extensions'] } } : i); // 加过扩展：开着的实例都要重启
       const xr = /^\/api\/extensions\/([^/]+)\/reload$/.exec(u.pathname); // 扩展“重载”：回那个扩展，加上这一次的结果
@@ -741,6 +743,21 @@ if (desk && want('desk')) {
     await ip.screenshot({ path: path.join(out, 'desk-wizard.png') });
     await ip.keyboard.press('Escape'); await ip.waitForTimeout(400);
     check('电脑向导：Esc 退回上一步', await ip.locator('.wz input.field').count() === 1 && await ip.locator('.wz input.field').inputValue() === '工作号', {});
+    // 整个向导只用键盘走完：备注回车 → 选国家（方向键挪不挪都行，这里点一下）→ 第 3 步光标要在“创建”上，回车就建。
+    // 2026-11-18 在 Windows 上实测到：带动画时第 3 步的光标落在正在退场的上一步里，一移除就丢了，回车和 Esc 都没反应。
+    await ip.keyboard.press('Enter'); await ip.waitForTimeout(500);
+    await ip.evaluate(() => document.querySelectorAll('.wz .chip2')[1].click()); await ip.waitForTimeout(900);
+    const kf = await ip.evaluate(() => ({ step: document.querySelector('.wzs')?.textContent || '', act: (document.activeElement?.textContent || '').trim(), tag: document.activeElement?.tagName }));
+    check('电脑向导：第 3 步光标在“创建”按钮上（带动画）', kf.step.includes('第 3 步') && kf.tag === 'BUTTON' && kf.act.endsWith('创建'), kf);
+    await ip.keyboard.press('Escape'); await ip.waitForTimeout(500);
+    const kb = await ip.evaluate(() => ({ step: document.querySelector('.wzs')?.textContent || '', on: document.activeElement?.classList?.contains('on') }));
+    check('电脑向导：第 3 步按 Esc 回到第 2 步，光标在选中的国家上', kb.step.includes('第 2 步') && kb.on, kb);
+    await ip.keyboard.press('Enter'); await ip.waitForTimeout(900); // 在选中的国家上回车 = 再选它一次，进第 3 步
+    const kd = await ip.evaluate(() => ({ step: document.querySelector('.wzs')?.textContent || '', act: (document.activeElement?.textContent || '').trim().slice(0, 20) }));
+    deskCalls.length = 0;
+    await ip.keyboard.press('Enter'); await ip.waitForTimeout(500);
+    const kc = deskCalls.filter((c) => c.m === 'POST' && c.p === '/api/instances').map((c) => c.b);
+    check('电脑向导：第 3 步回车 = 创建，备注和地区都交出去', kc.length === 1 && kc[0]?.name === '工作号' && !!kc[0]?.region, { kc, kd });
     await ip.setViewportSize({ width: 440, height: 560 });
     await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#new'); await ip.waitForTimeout(600);
     const ww = await ip.evaluate(() => ({ win: document.documentElement.classList.contains('wzwin'), nav: getComputedStyle(document.getElementById('nav')).display, wz: !!document.querySelector('.wzpage .wz'), over: document.documentElement.scrollWidth > innerWidth }));

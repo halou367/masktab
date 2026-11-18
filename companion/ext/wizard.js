@@ -74,7 +74,8 @@ function wizard({ st, onDone, onCancel, sheet: asSheet }) {
       setTimeout(() => { vp.style.height = ''; }, 300);
     }
     if (S.step === 0) setTimeout(() => input?.focus(), dir ? 120 : 60);
-    else setTimeout(() => (vp.querySelector('.chip2.on') || acts.querySelector('.btn.fill'))?.focus({ preventScroll: true }), 60);
+    // 只在新的这一步里找（nw）：上一步还在退场、没移除，光标落到它里面的话一移除就丢了，回车和 Esc 都没反应（2026-11-18 实测）
+    else setTimeout(() => { if (nw.isConnected) (nw.querySelector('.chip2.on') || acts.querySelector('.btn.fill'))?.focus({ preventScroll: true }); }, 60);
   }
   function go(n) { if (S.busy || n === S.step || n < 0 || n > 2) return; const d = n > S.step ? 1 : -1; S.step = n; paint(d); }
   function pick(cc, auto) { S.region = cc; S.auto = auto; paint(0); setTimeout(() => go(2), reduced() ? 0 : 180); }
