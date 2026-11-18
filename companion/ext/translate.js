@@ -6,7 +6,7 @@
 //   - 手机：内容脚本自己发。请求带着这个标签页的身份，内置扩展的分流（android/ext/background.js 的 proxy.onRequest）把它送进本实例的代理；
 //     认不出实例时一律拒绝，绝不直连。（手机扩展后台自己的请求是直连的，所以不能交给后台。）
 // 请求不带 Cookie、不带来源页（credentials: omit、no-referrer），不会把网页地址和翻译服务的登录状态连在一起。
-// 接口：先用谷歌翻译的公开网页接口（translate.googleapis.com，client=gtx）；不通时换微软 Edge 浏览器内置翻译用的接口。
+// 接口：先用谷歌翻译的公开网页接口（translate.googleapis.com，client=gtx）；不通（6 秒没回）时换微软 Edge 浏览器内置翻译用的接口。
 (() => {
   if (window.top !== window || window.__mtTr) return;
   window.__mtTr = true;
@@ -55,17 +55,21 @@
 
   // ---------- 请求 ----------
   // 手机：内容脚本自己发（带着标签页身份走实例代理）；电脑：交给后台发（实例的浏览器整个在它的代理上）。
-  async function get(url, init) {
+  // ms = 最多等多久（默认 15 秒）。谷歌那一路给得短：直连又被墙的网络上它要干等十秒才失败，这期间页面上只有“正在翻译…”。
+  async function get(url, init, ms = 15000) {
     const opt = { ...init, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' };
-    if (GECKO) { const r = await fetch(url, opt); const body = await r.text(); return { ok: r.ok, status: r.status, body }; }
-    const r = await new Promise((res) => { try { chrome.runtime.sendMessage({ t: 'tr:fetch', url, init: { method: opt.method || 'GET', headers: opt.headers || {}, body: opt.body || null } }, (x) => res(chrome.runtime.lastError ? null : x)); } catch { res(null); } });
+    if (GECKO) {
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+      try { const r = await fetch(url, { ...opt, signal: ctl.signal }); const body = await r.text(); return { ok: r.ok, status: r.status, body }; } finally { clearTimeout(t); }
+    }
+    const r = await new Promise((res) => { try { chrome.runtime.sendMessage({ t: 'tr:fetch', url, ms, init: { method: opt.method || 'GET', headers: opt.headers || {}, body: opt.body || null } }, (x) => res(chrome.runtime.lastError ? null : x)); } catch { res(null); } });
     if (!r) throw new Error('扩展后台没有回应');
     if (r.error) throw new Error(r.error);
     return r;
   }
   async function google(texts) {
     const body = texts.map((t) => 'q=' + encodeURIComponent(t)).join('&');
-    const r = await get(`https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=${TL}&dt=t&format=text`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }, body });
+    const r = await get(`https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=${TL}&dt=t&format=text`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }, body }, 6000);
     if (!r.ok) throw new Error('谷歌翻译 HTTP ' + r.status);
     let j = JSON.parse(r.body);
     if (texts.length === 1 && !Array.isArray(j[0])) j = [j];
@@ -73,16 +77,13 @@
     if (out.length !== texts.length || out.some((x) => typeof x !== 'string')) throw new Error('谷歌翻译回的格式不对');
     return out;
   }
-  let msTok = '', msAt = 0;
+  // 微软：Edge 浏览器内置翻译用的接口。以前是先取令牌（edge.microsoft.com/translate/auth）再调 api-edge.cognitive.microsofttranslator.com；
+  // 取令牌那个地址后来一律 404（2026-11-18 在需求方电脑的直连实例上实测翻译失败才发现的），Edge 改成了同一个主机上不要令牌的这一个：体是字符串数组。
   async function microsoft(texts) {
-    if (!msTok || Date.now() - msAt > 8 * 60_000) {
-      const a = await get('https://edge.microsoft.com/translate/auth', { method: 'GET' });
-      if (!a.ok || !a.body) throw new Error('微软翻译取令牌失败 HTTP ' + a.status);
-      msTok = a.body.trim(); msAt = Date.now();
-    }
-    const r = await get('https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to=zh-Hans&textType=plain', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + msTok }, body: JSON.stringify(texts.map((Text) => ({ Text }))) });
-    if (!r.ok) { msTok = ''; throw new Error('微软翻译 HTTP ' + r.status); }
+    const r = await get('https://edge.microsoft.com/translate/translatetext?from=&to=zh-Hans&isEnterpriseClient=false', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(texts) });
+    if (!r.ok) throw new Error('微软翻译 HTTP ' + r.status);
     const j = JSON.parse(r.body);
+    if (!Array.isArray(j) || j.length !== texts.length) throw new Error('微软翻译回的格式不对');
     return j.map((x) => x?.translations?.[0]?.text ?? '');
   }
   let engine = 0; // 0 谷歌，1 微软；谷歌连续失败就换

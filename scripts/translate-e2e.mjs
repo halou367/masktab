@@ -4,7 +4,7 @@
 //   2. 翻译请求是从这个代理出去的（不是本机直连），而且不带 Cookie、不带来源页；
 //   3. 翻译开着时网页后来加出来的文字也会翻；
 //   4. 谷歌接口不通时换微软接口。
-// 翻译接口是假的：代理把到 translate.googleapis.com / edge.microsoft.com / api-edge.cognitive.microsofttranslator.com 的 CONNECT
+// 翻译接口是假的：代理把到 translate.googleapis.com / edge.microsoft.com 的 CONNECT
 // 接到本机一个自签名证书的 HTTPS 服务上（浏览器加 --ignore-certificate-errors）。
 // 用法：在装了 playwright 的目录里  node <仓库>/scripts/translate-e2e.mjs [截图目录]
 import { mkdtempSync, mkdirSync, cpSync, writeFileSync, readFileSync } from 'node:fs';
@@ -47,10 +47,11 @@ const api = https.createServer({ key: readFileSync(path.join(dir, 'k.pem')), cer
       const qs = new URLSearchParams(body).getAll('q');
       r.writeHead(200, { 'Content-Type': 'application/json', ...cors }); r.end(JSON.stringify(qs.length === 1 ? [tr(qs[0]), 'en'] : qs.map((x) => [tr(x), 'en']))); return;
     }
-    if (host.startsWith('edge.microsoft.com') && u.pathname === '/translate/auth') { r.writeHead(200, { 'Content-Type': 'text/plain', ...cors }); r.end('fake.jwt.token'); return; }
-    if (host.startsWith('api-edge.cognitive.microsofttranslator.com') && u.pathname === '/translate') {
+    // 微软：Edge 内置翻译现在用的那个地址（不要令牌，体是字符串数组）；旧的取令牌地址照现在的实际情况回 404
+    if (host.startsWith('edge.microsoft.com') && u.pathname === '/translate/translatetext' && q.method === 'POST') {
       const arr = JSON.parse(body || '[]');
-      r.writeHead(200, { 'Content-Type': 'application/json', ...cors }); r.end(JSON.stringify(arr.map((x) => ({ translations: [{ text: '【微软】' + x.Text, to: 'zh-Hans' }] })))); return;
+      if (!Array.isArray(arr) || arr.some((x) => typeof x !== 'string')) { r.writeHead(400, cors); r.end('bad body'); return; }
+      r.writeHead(200, { 'Content-Type': 'application/json', ...cors }); r.end(JSON.stringify(arr.map((x) => ({ detectedLanguage: { language: 'en', score: 1 }, translations: [{ text: '【微软】' + x, to: 'zh-Hans' }] })))); return;
     }
     r.writeHead(404, cors); r.end('nf');
   });
@@ -120,7 +121,7 @@ await pg.reload(); await pg.waitForTimeout(800);
 await send();
 t = await until(async () => { const x = await text(); return x.h.startsWith('【微软】') ? x : null; }, 10000) || await text();
 check('谷歌接口不通时换微软接口，照样翻好', t.h === '【微软】Welcome to the daily news', t);
-check('微软接口也经实例的代理出去', connects.includes('api-edge.cognitive.microsofttranslator.com') && connects.includes('edge.microsoft.com'), connects);
+check('微软接口也经实例的代理出去', connects.includes('edge.microsoft.com'), connects);
 
 // 后台只替内容脚本发翻译接口的请求：别的地址一律不发（内容脚本不能拿它当万能代理）
 const bad = await sw.evaluate(async () => { try { await globalThis.trFetch({ url: 'https://example.com/', init: {} }); return 'sent'; } catch (e) { return String(e.message || e); } });

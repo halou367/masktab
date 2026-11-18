@@ -4,6 +4,7 @@ import { h, icon, ibtn, appBar, sec, row, avatar, flag, cname, run } from './ui.
 // 运行情况（决策 UI-28，电脑版）：整个 MaskTab 和每个开着的实例各占多少内存、处理器，有几个进程，
 // 开着哪些窗口和标签页，记住了哪些站点的账号。数从核心服务的 /api/usage 来（它顺着内核进程的父子关系算）。
 // 为什么要有：Windows 任务管理器里这些进程都叫 Chromium，一个实例十来个，分不出哪个是哪个实例的（2026-11-18 需求方截图）。
+// 后来（决策 UI-30）进程改叫 MaskTab、归成一组了，但还是分不出哪个是哪个实例的。
 // 只在这一页开着、窗口看得见时每 2 秒问一次；离开这一页就停。
 
 let data = null, fail = '', timer = 0, ctx = null, asked = 0, pressing = false;
@@ -91,12 +92,12 @@ function body() {
     sec('后台'),
     row({ ic: 'server', t: '核心服务', s: 'masktab：管实例、订阅和这些页面', trail: nums(u.service, warm) }),
     u.proxy.n > 0 && row({ ic: 'swap', t: '代理内核', s: 'mihomo：所有实例的流量都经它' + (u.proxy.n > 1 ? `（${u.proxy.n} 个进程）` : ''), trail: nums(u.proxy, warm) }),
-    u.other.n > 0 && row({ ic: 'clock', t: '其它', s: `${u.other.n} 个进程：核心服务起的别的程序（正在启动或关闭中的内核等）`, trail: nums(u.other, warm) }),
+    u.other.n > 0 && row({ ic: 'clock', t: '其它', s: `${u.other.n} 个进程：让各实例在任务管理器里归成一组的那个小进程、正在启动或关闭中的内核等`, trail: nums(u.other, warm) }),
     off.length > 0 && [sec('没开的实例', `${off.length} 个 · 不占内存`),
       off.map((i) => row({ cls: 'uoff', ic: avatar(i.color, letterOf(i), 36), t: [h('span', { class: 'mono no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))],
         s: [i.acct?.count ? `记住 ${i.acct.count} 个账号` : '没有记住的账号', i.acct?.cookieN ? `${i.acct.cookieN} 条 Cookie` : ''].filter(Boolean).join(' · '),
         trail: ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go') }))],
-    h('div', { class: 'foot noic' }, 'Windows 任务管理器里，MaskTab 的浏览器进程都叫 Chromium，分不出哪个是哪个实例的，也没有合计；想看哪个实例占了多少，以这一页为准。' + (u.rough ? '这台电脑的系统较旧，内存只能取到“工作集”（含和别的进程共用的部分），会比任务管理器“内存”那一列大一些；' : '内存是各进程的专用工作集之和，和任务管理器“内存”那一列同一个口径；') + '处理器按整机算。'),
+    h('div', { class: 'foot noic' }, 'Windows 任务管理器里，各实例的浏览器进程归成一组“MaskTab”，分不出哪个是哪个实例的；想看哪个实例占了多少，以这一页为准。' + (u.rough ? '这台电脑的系统较旧，内存只能取到“工作集”（含和别的进程共用的部分），会比任务管理器“内存”那一列大一些；' : '内存是各进程的专用工作集之和，和任务管理器“内存”那一列同一个口径；') + '处理器按整机算。'),
   ];
 }
 

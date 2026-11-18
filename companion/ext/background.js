@@ -223,12 +223,12 @@ chrome.commands.onCommand.addListener(async (cmd) => {
 // ---------- 网页翻译（决策 UI-27） ----------
 // 内容脚本 translate.js 把要翻的文字交到这里，由后台去发请求：实例的浏览器整个挂在它自己的代理端口上，后台的请求也从这个实例的出口出去（R-1）。
 // 只认这几个翻译接口的地址，内容脚本不能拿它当万能代理；不带 Cookie、不带来源页。
-const TR_HOSTS = new Set(['translate.googleapis.com', 'edge.microsoft.com', 'api-edge.cognitive.microsofttranslator.com']);
+const TR_HOSTS = new Set(['translate.googleapis.com', 'edge.microsoft.com']);
 async function trFetch(m) {
   let u;
   try { u = new URL(m.url); } catch { throw new Error('地址不对'); }
   if (u.protocol !== 'https:' || !TR_HOSTS.has(u.hostname)) throw new Error('不是翻译接口');
-  const i = m.init || {}, ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 15000);
+  const i = m.init || {}, ctl = new AbortController(), t = setTimeout(() => ctl.abort(), Math.min(15000, Math.max(2000, Number(m.ms) || 15000)));
   try {
     const r = await fetch(u, { method: i.method === 'POST' ? 'POST' : 'GET', headers: i.headers || {}, body: i.method === 'POST' ? i.body : undefined, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal: ctl.signal });
     return { ok: r.ok, status: r.status, body: await r.text() };
