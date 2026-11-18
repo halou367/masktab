@@ -127,3 +127,34 @@ func TestParseGlobalTypes(t *testing.T) {
 		t.Error("IsListURL 分不清列表网址和 HTTPS 代理")
 	}
 }
+
+// 列表网址拉回来的内容（decisions N-8）：纯文本、带端口列的 CSV、测速工具的 CSV、JSON 接口。
+func TestParseList(t *testing.T) {
+	show := func(ps []Parsed) string {
+		var s []string
+		for _, p := range ps {
+			s = append(s, p.Item()+"#"+p.Label)
+		}
+		return strings.Join(s, " ")
+	}
+	for _, c := range []struct{ name, in, want string }{
+		{"一行一个", "\ufeff1.2.3.4:443#HK\n5.6.7.8#US 洛杉矶\n# 注释\n[2606:4700::1]:2053", "1.2.3.4:443#HK 5.6.7.8#US 洛杉矶 [2606:4700::1]:2053#"},
+		{"带端口和地区列的 CSV", "IP地址,端口,TLS,数据中心,地区,城市,网络延迟,下载速度\r\n1.2.3.4,2053,TRUE,HKG,HK,Hong Kong,45,12.5\r\n2606:4700::9,443,TRUE,NRT,JP,Tokyo,80,3\r\n5.6.7.8,abc,TRUE,LAX,US,Los Angeles,150,1\n",
+			"1.2.3.4:2053#HK [2606:4700::9]:443#JP 5.6.7.8#US"},
+		{"英文表头", "ip,port,colo\n1.1.1.1,8443,SJC\n1.1.1.1,8443,SJC\n\"9.9.9.9\",\"443\",\"LAX\"", "1.1.1.1:8443#SJC 9.9.9.9:443#LAX"},
+		{"测速工具导出的 CSV（没有端口列）", "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n104.16.1.1,4,4,0.00,151.32,12.11\n104.16.2.2,4,4,0.00,160.1,9.5", "104.16.1.1# 104.16.2.2#"},
+		{"JSON 对象数组", `{"code":200,"data":[{"ip":"1.2.3.4","port":8443,"country":"SG"},{"address":"5.6.7.8:2096","colo":"FRA"},{"ip":"not an ip"}]}`, "1.2.3.4:8443#SG 5.6.7.8:2096#FRA"},
+		{"JSON 字符串数组", `["1.2.3.4:443#HK","socks5://u:p@9.9.9.9:1080","x"]`, "1.2.3.4:443#HK socks5://u:p@9.9.9.9:1080#"},
+		{"空的", "  \n", ""},
+	} {
+		if got := show(ParseList(c.in)); got != c.want {
+			t.Errorf("%s：\n得到 %s\n应为 %s", c.name, got, c.want)
+		}
+	}
+	if typ, v := SplitItem("socks5://u:p@9.9.9.9:1080"); typ != "socks5" || v != "u:p@9.9.9.9:1080" {
+		t.Errorf("SplitItem = %s %s", typ, v)
+	}
+	if typ, v := SplitItem("[2606:4700::1]:2053"); typ != "proxyip" || v != "[2606:4700::1]:2053" {
+		t.Errorf("SplitItem = %s %s", typ, v)
+	}
+}

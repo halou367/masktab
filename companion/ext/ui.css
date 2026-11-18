@@ -615,6 +615,8 @@ html.pc .ct > .ib { width: 34px; height: 34px; }
 .row .t .host.np { font-family: inherit; }
 .row .t .ipf { flex: none; } /* IP 写全，放不下时先截后面的主机名 */
 .row .s .brk { flex-basis: 100%; height: 0; }
+/* 列表展开页顶上的那一行（decisions N-8）：网址很长，整段写出来、允许在任何地方折行 */
+.srcrow .s .urlt { font-size: 12.5px; word-break: break-all; overflow-wrap: anywhere; white-space: normal; min-width: 0; }
 /* 出口国家下拉顶上的“出口类型”分段 */
 .ddm .mhd { padding: 6px 10px 4px; font-size: 12px; color: var(--on3); }
 .ddm .seg.xt { display: flex; margin: 2px 4px 6px; border-radius: 18px; box-shadow: inset 0 0 0 1px var(--div); }

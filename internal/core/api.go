@@ -739,25 +739,45 @@ func (a *App) routes(mux *http.ServeMux) {
 			reply(w, nil, err)
 			return
 		}
-		n, err := a.ImportExits(b.Text)
-		reply(w, map[string]int{"added": n}, err)
+		res, err := a.ImportExits(b.Text)
+		reply(w, res, err)
+	})
+	// 独立 IP 这一组整个换成一段文本里写的那些（decisions N-8）
+	mux.HandleFunc("PUT /api/exits/loose", func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ Text string }
+		if err := body(r, &b); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		added, removed, changed, err := a.SetLoose(b.Text)
+		reply(w, map[string]int{"added": added, "removed": removed, "changed": changed}, err)
 	})
 	mux.HandleFunc("PATCH /api/exits/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
 			Label        *string
 			Expand       *bool
 			RefreshHours *int
+			URL          *string // 列表源：换网址（先拉新的，拉到了才换）
 		}
 		if err := body(r, &b); err != nil {
 			reply(w, nil, err)
 			return
 		}
 		id := r.PathValue("id")
+		var out any
+		if b.URL != nil {
+			n, err := a.SetListURL(id, *b.URL)
+			if err != nil {
+				reply(w, nil, err)
+				return
+			}
+			out = map[string]int{"count": n}
+		}
 		a.mu.Lock()
 		e := a.exitLocked(id)
 		if e != nil {
 			setIf(&e.Label, b.Label)
-			if b.Expand != nil {
+			if b.Expand != nil && e.Source == "" { // 源一定是展开的
 				e.Expand = *b.Expand
 			}
 			if b.RefreshHours != nil {
@@ -768,8 +788,10 @@ func (a *App) routes(mux *http.ServeMux) {
 			a.bumpLocked("state", "")
 		}
 		a.mu.Unlock()
-		go a.ResolveExit(id)
-		reply(w, nil, nil)
+		if b.URL == nil && (b.Expand != nil || b.RefreshHours != nil) { // 只改备注不用重新解析
+			go a.ResolveExit(id)
+		}
+		reply(w, out, nil)
 	})
 	mux.HandleFunc("POST /api/exits/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")

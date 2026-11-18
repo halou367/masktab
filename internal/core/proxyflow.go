@@ -55,6 +55,10 @@ func exitValue(e *model.ExitEntry, item string) string {
 		}
 		return vpngate.Auth + "@" + item
 	}
+	if e.Source == listSource { // 列表源：每一项就是列表里的一个地址；源本身（网址）不是地址
+		_, v := exitRef(e, item)
+		return v
+	}
 	if e.Type != "proxyip" {
 		return e.Value
 	}

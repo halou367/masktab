@@ -46,6 +46,8 @@
 | 出口探测、IP 成色、伪装度 | `internal/probe`、`internal/core/ipq.go`、`checks.go` |
 | 密码库 | `internal/vault` |
 | 扩展库 | `internal/extlib`（入库、原地换文件）；添加 / 重载在 `internal/core/api.go` 的 `AddExtension`、`ReloadExtension`；开着的实例里把扩展关一下再开在 `companion/ext/background.js` 的 `hotReload`；实测 `scripts/ext-reload-e2e.mjs` |
+| 地址库的组：列表网址一条、独立 IP 一组（决策 N-8） | 数据和接口 `internal/core/lists.go`（`ImportExits`、`resolveList`、`absorbLocked`、`SetListURL`、`SetLoose`）；列表内容的解析 `internal/exits/list.go`（`ParseList`：txt / CSV / JSON）；页面 `companion/ext/pages.js` 的 `exitsView`（子页 `exits/g-<id>`、`exits/loose`）；测试 `lists_test.go`、页面检查 `groups` 段 |
+| 纯净度 / CF 风险（决策 N-7） | `internal/core/ippure.go`、`ipq.go`（`POST /api/ipq/cf`）；内容脚本 `companion/ext/ippure.js`（两端共用）；说法和分档 `common.js` 的 `pureInfo`、`cfRisk` |
 | 伴随扩展换版本后后台跟着换（决策 EXT-2） | `internal/core/launch.go` 的 `writeCompanion`（后台脚本叫 `sw-<版本号>.js`）、`companion/ext/swlife.js`（装好就接手）；测试 `companion_test.go`、`scripts/sw-upgrade-e2e.mjs`（进 `check.sh ext`） |
 | 在线更新 | `internal/update`（查版本）、`internal/core/update*.go`（下载安装；先走节点见 `nodeSources`，实测 `scripts/update-node-e2e.mjs`）、`installer/masktab.nsi`、手机 `Updater.kt` |
 | Windows 任务栏图标 | `internal/tbicon`、`internal/core/taskbar_windows.go` |

@@ -132,8 +132,15 @@ type ExitEntry struct {
 	UsableAsEntry *bool  `json:"usableAsEntry,omitempty"`
 	// Source：不是一个地址，而是一个“源”。vpngate = VPN Gate 的公共 SSTP 服务器列表（Type 是 sstp、Value 是 "vpngate"）：
 	// 像域名展开成 IP 一样，按 RefreshHours 从 vpngate.net 拉一次列表，Resolved 里是每台的“主机:端口”，Servers 是对应的说明。
-	Source  string     `json:"source,omitempty"`
-	Servers []VGServer `json:"servers,omitempty"`
+	//
+	// list = 一个“地址列表的网址”（接口返回的 txt / csv / json，decisions N-8）：Type 是 proxyip、Value 是网址，
+	// 按 RefreshHours 重新拉一次，Resolved 里是列表里的每一个地址（IP、IP:端口、域名；全局出口写成“类型://账号@主机:端口”），
+	// Labels 是各个地址在列表里带的备注。Label 是这个列表的名字。
+	Source  string            `json:"source,omitempty"`
+	Servers []VGServer        `json:"servers,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
+	// GoodAt：最近一次成功更新（解析域名 / 拉列表）的时间。ResolvedAt 是最近一次“试过”的时间，失败也记。
+	GoodAt int64 `json:"goodAt,omitempty"`
 }
 
 // VGServer 是 VPN Gate 列表里一台服务器的说明（只给界面看；连接用 Resolved 里的“主机:端口”）。

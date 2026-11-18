@@ -134,7 +134,7 @@ func (a *App) resolveVPNGate(id string) (changed bool) {
 	}
 	next, servers := mergeVG(list, e.Servers, inUse, func(item string) bool { return a.vgDeadLocked(e, item) })
 	changed = !sameSet(e.Resolved, next)
-	e.ResolveError, e.Resolved, e.Servers = "", next, servers
+	e.ResolveError, e.Resolved, e.Servers, e.GoodAt = "", next, servers, e.ResolvedAt
 	a.saveLocked("exits")
 	a.bumpLocked("state", "")
 	return changed

@@ -36,7 +36,7 @@ fast() {
 
 # 页面检查：各段分成五组同时跑。页面检查的时间大半是在等页面动画，不吃 CPU，所以组数不用跟着核数走。
 # 分组按各段用时排匀（2026-11：flow 31 秒，desk 22，narrow 21，shots 13，heal 14，update 11，其余个位数）；JOBS=1 改成一个进程依次跑。
-PAGE_GROUPS=("flow" "desk" "narrow" "shots light v6 tune" "heal update newtab safe import a11y sstp fp")
+PAGE_GROUPS=("flow" "desk" "narrow" "shots light v6 tune groups" "heal update newtab safe import a11y sstp fp")
 pages() {
   need_pw
   local t0=$SECONDS ext="$MT_OUT/ext" shots="$MT_OUT/pages" bad=0 groups=() i

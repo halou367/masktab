@@ -97,19 +97,20 @@ func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 			if e.Type != "proxyip" {
 				continue
 			}
-			vals := []string{exitValue(e, "")}
+			items := []string{""}
 			if e.Expand {
-				vals = vals[:0]
-				for _, ip := range e.Resolved {
-					vals = append(vals, exitValue(e, ip))
-				}
+				items = e.Resolved
 			}
-			for _, v := range vals {
+			for _, item := range items {
+				typ, v := exitRef(e, item)
+				if typ != "proxyip" || v == "" { // 列表里夹着的全局出口不是入口地址
+					continue
+				}
 				h, port := exits.SplitHostPort(v)
 				if port == 0 {
 					port = 443
 				}
-				add(nodeRef{ID: "x:" + hostPort(h, port), Server: h, Port: port, Label: e.Label, From: "pip"})
+				add(nodeRef{ID: "x:" + hostPort(h, port), Server: h, Port: port, Label: itemLabel(e, item), From: "pip"})
 			}
 		}
 		return out
@@ -166,8 +167,12 @@ func (a *App) pipsLocked(sub *model.Subscription) []pipRef {
 	for _, e := range a.Exits {
 		if expands(e) {
 			for _, ip := range e.Resolved {
-				add(pipRef{ID: e.ID + "|" + ip, Type: e.Type, Value: exitValue(e, ip), Label: e.Label})
+				typ, v := exitRef(e, ip)
+				add(pipRef{ID: e.ID + "|" + ip, Type: typ, Value: v, Label: itemLabel(e, ip)})
 			}
+			continue
+		}
+		if e.Source != "" { // 源本身不是地址（没展开出东西来就什么都没有）
 			continue
 		}
 		add(pipRef{ID: e.ID, Type: e.Type, Value: exitValue(e, ""), Label: e.Label})
@@ -202,7 +207,7 @@ func (a *App) pipValueLocked(in *model.Instance) (typ, val string) {
 		return "proxyip", v
 	}
 	if e := a.exitLocked(in.Proxy.ExitID); e != nil {
-		return e.Type, exitValue(e, in.Proxy.ExitIP)
+		return exitRef(e, in.Proxy.ExitIP)
 	}
 	return "", ""
 }
