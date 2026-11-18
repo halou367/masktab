@@ -29,6 +29,8 @@ class Tab(val inst: String, val session: GeckoSession) {
     var canFwd = false
     /** 页面滚动位置（GeckoSession 的滚动回调给的；下拉刷新只在 0 时触发）。 */
     var scrollY = 0
+    /** 网页最底下那一条的颜色（android/ext/bars.js 报的）；三键导航时导航栏涂成它（决策 UI-23 补充）。换页时清空。 */
+    var pageColor: Int? = null
     /** 标签页切换器里的缩略图（切换器打开时截的，只留在内存里）。 */
     var thumb: android.graphics.Bitmap? = null
 }
@@ -202,7 +204,7 @@ object Core {
         s.promptDelegate = PromptBridge
         s.scrollDelegate = Scroll(t)
         s.open(ensureRuntime())
-        ext?.let { s.webExtensionController.setMessageDelegate(it, sessionMsg(t.inst), NATIVE) }
+        ext?.let { s.webExtensionController.setMessageDelegate(it, sessionMsg(t.inst, t), NATIVE) }
     }
 
     /** 在实例里开一个标签页。url 为空 = 新标签页。 */
@@ -228,7 +230,7 @@ object Core {
         t.session.contentDelegate = Content(t)
         t.session.promptDelegate = PromptBridge
         t.session.scrollDelegate = Scroll(t)
-        ext?.let { t.session.webExtensionController.setMessageDelegate(it, sessionMsg(t.inst), NATIVE) }
+        ext?.let { t.session.webExtensionController.setMessageDelegate(it, sessionMsg(t.inst, t), NATIVE) }
         tabsOf(i.id).add(t)
         active[i.id] = t
         mainHandler.post { ui?.onTabsChanged() }
@@ -511,9 +513,15 @@ object Core {
      * - 内容脚本只能要本实例参数（hello）；会话本身就说明了它属于哪个实例，网页伪造不了。
      * - 扩展页面走完整的 Bridge；没写 inst 的请求按这个会话的实例算。
      */
-    fun sessionMsg(instId: String?) = object : WebExtension.MessageDelegate {
+    fun sessionMsg(instId: String?, tab: Tab? = null) = object : WebExtension.MessageDelegate {
         override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
             val j = message as? JSONObject ?: return GeckoResult.fromValue(jsonOf("error" to "格式不对").toString())
+            // 网页底部的颜色（bars.js）：只记在这个会话自己的标签页上，网页只能改自己那一页的导航栏颜色
+            if (j.str("t") == "color") {
+                val c = try { android.graphics.Color.parseColor(j.str("c")) } catch (e: Exception) { null }
+                if (tab != null && c != null && tab.pageColor != c) { tab.pageColor = c; mainHandler.post { ui?.onTabUpdated(tab) } }
+                return GeckoResult.fromValue("{}")
+            }
             if (j.str("t") == "hello") {
                 val i = Host.get(instId) ?: return GeckoResult.fromValue(jsonOf("error" to "不是实例标签页").toString())
                 return GeckoResult.fromValue(Fp.cfg(i).toString())
@@ -530,6 +538,7 @@ object Core {
 
     private class Nav(val t: Tab) : GeckoSession.NavigationDelegate {
         override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
+            if ((url ?: "") != t.url) t.pageColor = null
             t.url = url ?: ""
             ui?.onTabUpdated(t)
             saveTabs()

@@ -197,6 +197,9 @@ class MainActivity : Activity(), CoreUi {
             startup != null -> {}
             panelOn -> { top = if (pageDim) dimmed else bg; bottom = if (pageSheet) pal.surf else if (pageDim) dimmed else bg }
             isNtp(Core.curTab()) -> { bottom = if (ntpSheet) pal.surf else if (ntpDim) dimmed else bg }
+            // 网页：三键导航时导航栏涂成网页最底下那一条的颜色（bars.js 报上来的），看起来和网页连成一片（决策 UI-23 补充）；
+            // 手势导航时网页本来就画到最底下，这条颜色被网页盖住，不影响。还没报上来（刚打开、内容脚本进不去的页）用工具栏底色。
+            else -> Core.curTab()?.pageColor?.let { bottom = it }
         }
         root.paint(top, bottom)
         barIcons(Theme.isLight(if (overlay != null && overlay!!.tag == "dim") Theme.over(top, pal.scrim) else top), Theme.isLight(bottom))
