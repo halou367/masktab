@@ -392,6 +392,32 @@ try {
         }
       }
     } catch (e) { rec('warn', '单击标签后移开鼠标不会把实例拖出去', '检查没跑起来：' + e.message); }
+    // 铺满（决策 UI-20）：把当前窗口最大化（和点浏览器的最大化按钮一回事），应当变成“铺满”——看得见的部分正好是这块屏幕去掉任务栏的可用区域；
+    // 再最大化一次回到原来的位置。任务栏在上边 / 左边时可用区域的左上角不是 (0,0)，摆窗口的那个系统接口又不算任务栏，最容易差一个任务栏的宽：
+    // CI 上手动指定 taskbar: top / left 时会先把任务栏挪过去再跑到这里。
+    try {
+      const NAME3 = '最大化 = 铺满：窗口正好占满去掉任务栏的可用区域，再来一次回到原位';
+      const cur = async () => { const x = await api('GET', '/api/debug/tabbar'); const g = (x.groups || [])[0] || {}; return { x, g, w: (x.windows || []).find((q) => q.visible && q.no === g.activeNo) }; };
+      const c0 = await cur();
+      if (!c0.w) rec('warn', NAME3, '查不了：没找到当前窗口');
+      else {
+        const waFile = path.join(os.tmpdir(), 'masktab-workarea.txt'); try { fs.rmSync(waFile, { force: true }); } catch {}
+        const zoom = `Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int c);' -Name S -Namespace W; [void][W.S]::ShowWindow([IntPtr]${c0.w.hwnd},3)`;
+        await powershell(`Add-Type -AssemblyName System.Windows.Forms; $s=[System.Windows.Forms.Screen]::FromHandle([IntPtr]${c0.w.hwnd}); $w=$s.WorkingArea; $b=$s.Bounds; Set-Content -LiteralPath '${waFile.replace(/'/g, "''")}' ("{0} {1} {2} {3} {4} {5} {6} {7}" -f $w.Left,$w.Top,$w.Right,$w.Bottom,$b.Left,$b.Top,$b.Right,$b.Bottom); ${zoom}`);
+        const n = fs.readFileSync(waFile, 'utf8').trim().split(/\s+/).map(Number), work = { L: n[0], T: n[1], R: n[2], B: n[3] };
+        const where = n[1] > n[5] ? '上边' : n[0] > n[4] ? '左边' : n[2] < n[6] ? '右边' : n[3] < n[7] ? '下边' : '看不出来（可能藏着）';
+        let c1 = null; for (const t0 = Date.now(); Date.now() - t0 < 6000; await sleep(150)) { c1 = await cur(); if (c1.g.filled) break; }
+        await sleep(700); c1 = await cur();
+        const v = c1.w?.vis || {}, off = Math.max(Math.abs(v.L - work.L), Math.abs(v.T - work.T), Math.abs(v.R - work.R), Math.abs(v.B - work.B));
+        await desktopShot('6a-filled.png');
+        await powershell(zoom);
+        let c2 = null; for (const t0 = Date.now(); Date.now() - t0 < 6000; await sleep(150)) { c2 = await cur(); if (c2.g.filled === false) break; }
+        await sleep(700); c2 = await cur();
+        const a0 = c0.w.vis, a2 = c2.w?.vis || {}, back = Math.max(Math.abs(a2.L - a0.L), Math.abs(a2.T - a0.T), Math.abs(a2.R - a0.R), Math.abs(a2.B - a0.B));
+        const good = c1.g.filled === true && off <= 1 && c2.g.filled === false && back <= 1;
+        rec(good ? 'ok' : 'fail', `${NAME3}（任务栏在${where}）`, JSON.stringify({ work, filled: v, offBy: off, before: a0, after: a2, backOffBy: back, ...(good ? {} : { f1: c1.g.filled, f2: c2.g.filled, trace: (c2.x.trace || []).slice(-10) }) }));
+      }
+    } catch (e) { rec('warn', '最大化 = 铺满', '检查没跑起来：' + e.message); }
     await api('PATCH', '/api/settings', { mergeWindows: false }); await sleep(3000);
   }
   await desktopShot('6-desktop.png');
