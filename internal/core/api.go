@@ -905,6 +905,12 @@ func (a *App) routes(mux *http.ServeMux) {
 		reply(w, map[string]bool{"ok": true}, a.SetCFRisk(me(r), strings.TrimSpace(b.IP), *b.Risk))
 	})
 	mux.HandleFunc("GET /api/debug/tabbar", func(w http.ResponseWriter, r *http.Request) { reply(w, tabbar.Debug(), nil) })
+	// 各协程此刻停在哪（查“卡住不动”用：Windows 上没有别的办法让一个窗口程序吐出调用栈）。和别的接口一样要令牌。
+	mux.HandleFunc("GET /api/debug/stacks", func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 4<<20)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(buf[:runtime.Stack(buf, true)])
+	})
 	mux.HandleFunc("PATCH /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		s := a.Settings
