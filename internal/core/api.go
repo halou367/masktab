@@ -25,6 +25,20 @@ import (
 	"github.com/halou367/masktab/internal/tabbar"
 )
 
+func (a *App) lockText() string { return fmt.Sprintf("%d\n%s\n", a.apiPort, a.token) }
+
+// dropLock 退出时删锁文件和进程号文件——只删自己写的那份。
+// 以前不看内容直接删：两个核心服务碰到一起时（见 cmd/masktab 里 2026-11-18 那条），先退的把后来者的锁文件删了，
+// 留下的那个从此谁也叫不到——安装程序请不动它退出，升级就卡在“无法打开要写入的文件 masktab.exe”。
+func (a *App) dropLock() {
+	if b, err := os.ReadFile(a.p("state", "running.lock")); err == nil && string(b) == a.lockText() {
+		_ = os.Remove(a.p("state", "running.lock"))
+	}
+	if b, err := os.ReadFile(a.p("state", "running.pid")); err == nil && strings.TrimSpace(string(b)) == strconv.Itoa(os.Getpid()) {
+		_ = os.Remove(a.p("state", "running.pid"))
+	}
+}
+
 // Serve 启动本地接口（硬规则 R-4：只监听 127.0.0.1；校验令牌；带 Origin 的请求必须来自伴随扩展）。
 func (a *App) Serve() error {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -32,13 +46,21 @@ func (a *App) Serve() error {
 		return err
 	}
 	a.apiPort = ln.Addr().(*net.TCPAddr).Port
-	_ = os.WriteFile(a.p("state", "running.lock"), []byte(fmt.Sprintf("%d\n%s\n", a.apiPort, a.token)), 0o600)
+	_ = os.WriteFile(a.p("state", "running.lock"), []byte(a.lockText()), 0o600)
+	// 进程号单独记一份（锁文件的格式老版本的 -quit 还要读，不能动）：锁文件丢了、指错了的时候，
+	// 下一个启动的靠它认出“上一个核心服务还活着”，不会再起第二个去抢同一份数据（cmd/masktab staleService）。
+	_ = os.WriteFile(a.p("state", "running.pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 	mux := http.NewServeMux()
 	a.routes(mux)
 	origin := "chrome-extension://" + companion.ID
 	self := fmt.Sprintf("http://127.0.0.1:%d", a.apiPort)
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/ping" {
+			if r.Header.Get("X-MaskTab-Token") == a.token { // 带对了令牌的才告诉版本号（新启动的 masktab 用它判断在跑的是不是同一版）
+				b, _ := json.Marshal(map[string]string{"app": "masktab", "version": a.Version})
+				_, _ = w.Write(b)
+				return
+			}
 			_, _ = w.Write([]byte(`{"app":"masktab"}`))
 			return
 		}

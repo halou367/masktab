@@ -71,12 +71,21 @@ VIAddVersionKey "LegalCopyright" ""
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-; 让正在运行的 MaskTab 自己退出（关闭全部窗口、保存状态），再等可执行文件解除占用。
-!macro StopRunning
+; 让装在 $INSTDIR 里的 MaskTab 退出，再等 masktab.exe 解除占用。HELPER 是一份（新版的）masktab.exe，放在临时目录里：
+;   masktab.exe -stop-installed <目录> = 先请它自己退（关窗口、保存状态）；叫不到的（锁文件丢了、卡住了）按完整路径结束进程。
+; 为什么不用 taskkill（decisions D-5）：安装程序是 32 位的，叫到的是 32 位的 taskkill，它在有的 Windows 11（26200）上根本不工作
+; （“The remote system must be running Windows 2000 or above”）；而且按映像名杀会连累装在别处的 MaskTab。
+; 只有 HELPER 不管用时才退回去用 taskkill，并且指名用 64 位的那个。
+!macro StopRunning HELPER
   ${If} ${FileExists} "$INSTDIR\masktab.exe"
     DetailPrint "正在关闭运行中的 MaskTab…"
-    nsExec::Exec '"$INSTDIR\masktab.exe" -quit'
-    Pop $0
+    ${If} ${FileExists} "${HELPER}"
+      nsExec::Exec '"${HELPER}" -stop-installed "$INSTDIR"'
+      Pop $0
+    ${Else}
+      nsExec::Exec '"$INSTDIR\masktab.exe" -quit'
+      Pop $0
+    ${EndIf}
     StrCpy $1 0
     ${Do}
       ClearErrors
@@ -86,10 +95,16 @@ VIAddVersionKey "LegalCopyright" ""
         ${ExitDo}
       ${EndIf}
       IntOp $1 $1 + 1
-      ${If} $1 > 20
-        nsExec::Exec 'taskkill /F /IM masktab.exe'
+      ${If} $1 == 6
+        DetailPrint "还没退出，强行结束…"
+        ${If} ${FileExists} "$WINDIR\Sysnative\taskkill.exe"
+          nsExec::Exec '"$WINDIR\Sysnative\taskkill.exe" /F /IM masktab.exe'
+        ${Else}
+          nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM masktab.exe'
+        ${EndIf}
         Pop $0
-        Sleep 1000
+      ${EndIf}
+      ${If} $1 > 16
         ${ExitDo}
       ${EndIf}
       Sleep 500
@@ -97,12 +112,36 @@ VIAddVersionKey "LegalCopyright" ""
   ${EndIf}
 !macroend
 
+; 旧的关不掉：说清楚、什么都不改、退出。以前是 NSIS 自带的“无法打开要写入的文件 … 中止 / 重试 / 忽略”，
+; 点了“忽略”会装成半截（程序还是旧的，注册表里却写着新版本号）。
+!macro FailStillRunning
+  MessageBox MB_OK|MB_ICONSTOP "旧版本的 MaskTab 还在运行，安装程序关不掉它，所以什么都没有改。$\n$\n请打开任务管理器（Ctrl+Shift+Esc）→「详细信息」，把 masktab.exe 都结束掉，再重新运行这个安装程序。$\n$\n如果 MaskTab 当初是「以管理员身份运行」打开的，安装程序也要右键「以管理员身份运行」。" /SD IDOK
+  SetErrorLevel 3
+  Abort "旧版本的 MaskTab 还在运行，没有安装。"
+!macroend
+
 Section "MaskTab" SecMain
   SectionIn RO
-  !insertmacro StopRunning
+  ; 新版的 masktab.exe 先解一份到临时目录，用它去让旧的退出（同一个文件在安装包里只存一份，不占地方）
+  InitPluginsDir
+  File "/oname=$PLUGINSDIR\mt-stop.exe" "${SRC}${SEP}masktab.exe"
+  !insertmacro StopRunning "$PLUGINSDIR\mt-stop.exe"
+  ${If} ${FileExists} "$INSTDIR\masktab.exe"
+    ClearErrors
+    FileOpen $0 "$INSTDIR\masktab.exe" a
+    ${If} ${Errors}
+      !insertmacro FailStillRunning
+    ${EndIf}
+    FileClose $0
+  ${EndIf}
   SetOutPath "$INSTDIR"
-  SetOverwrite on
+  SetOverwrite try
+  ClearErrors
   File "${SRC}${SEP}masktab.exe"
+  ${If} ${Errors}
+    !insertmacro FailStillRunning
+  ${EndIf}
+  SetOverwrite on
 
 !ifdef FULL
   ; ---- 代理内核：版本相同就跳过 ----
@@ -111,7 +150,7 @@ Section "MaskTab" SecMain
     DetailPrint "代理内核 ${MVER} 已是最新，跳过"
   ${Else}
     DetailPrint "安装代理内核 ${MVER}"
-    nsExec::Exec 'taskkill /F /IM mihomo.exe'
+    nsExec::Exec '"$PLUGINSDIR\mt-stop.exe" -stop-installed "$INSTDIR"' ; 上面已经停过一遍，这里只是保险：mihomo.exe 也按完整路径停
     Pop $0
     Delete "$INSTDIR\mihomo-*.ver"
     File "/oname=mihomo.exe" "${MIHOMO}"
@@ -174,9 +213,10 @@ Section "MaskTab" SecMain
 SectionEnd
 
 Section "Uninstall"
-  !insertmacro StopRunning
-  nsExec::Exec 'taskkill /F /IM mihomo.exe'
-  Pop $0
+  ; 卸载时没有“新版”可用：把装着的 masktab.exe 复制一份到临时目录来跑（它自己停不了自己那个文件对应的进程）
+  InitPluginsDir
+  CopyFiles /SILENT "$INSTDIR\masktab.exe" "$PLUGINSDIR\mt-stop.exe"
+  !insertmacro StopRunning "$PLUGINSDIR\mt-stop.exe"
   Delete "$INSTDIR\masktab.exe"
   Delete "$INSTDIR\mihomo.exe"
   Delete "$INSTDIR\mihomo-*.ver"

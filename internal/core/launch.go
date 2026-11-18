@@ -579,7 +579,7 @@ func (a *App) shutdown() {
 	if a.core != nil {
 		a.core.Stop()
 	}
-	_ = os.Remove(a.p("state", "running.lock"))
+	a.dropLock()
 }
 
 // extsForLocked 返回该实例应加载的全局扩展目录、集合哈希、以及其中数据模式为"共享"的扩展。

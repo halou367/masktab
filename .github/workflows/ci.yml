@@ -100,6 +100,9 @@ jobs:
           New-Item -ItemType Directory -Force dist, out | Out-Null
           go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$env:VER" -o dist/masktab.exe ./cmd/masktab
           Get-Item dist/masktab.exe | Format-List Name, Length
+      - name: 按完整路径找进程、结束进程（安装程序升级时靠它，decisions D-5）
+        shell: pwsh
+        run: go test -count=1 -v ./internal/procs
       - name: 缓存浏览器内核与代理内核
         uses: actions/cache@v4
         with:
@@ -179,6 +182,44 @@ jobs:
           Need ((Get-FileHash C:\mt\data\config\instances.json).Hash -eq $data) '升级没有动数据'
           Need ((Get-Item "C:\mt\kernel\fingerprint-chromium\$env:KVER\installed.ok").LastWriteTimeUtc -eq $mark) '升级没有动浏览器内核'
 
+          # 1b) 旧服务的锁文件丢了、叫不到它自己退：安装程序要按完整路径把它结束掉再装（decisions D-5）。
+          #     2026-11-18 需求方电脑上就是这样：锁文件不指着在跑的服务，安装程序退回去用的 32 位 taskkill 在那台机器上又不工作，
+          #     升级卡在“无法打开要写入的文件 masktab.exe”，点“忽略”装成了半截。
+          function Until($sec, $what) { for ($i = 0; $i -lt $sec; $i++) { try { if (& $what) { return $true } } catch { }; Start-Sleep 1 }; return $false }
+          Start-Process -FilePath C:\mt\masktab.exe -ArgumentList '-no-open', '-keep'
+          Need (Until 30 { Test-Path C:\mt\data\state\running.lock }) '1b：MaskTab 起来了'
+          $svc = (Get-Process masktab).Id
+          Need ((Get-Content C:\mt\data\state\running.pid -Raw).Trim() -eq "$svc") '1b：running.pid 记的是核心服务的进程号'
+          Remove-Item C:\mt\data\state\running.lock
+          Remove-Item C:\mt\uninstall.exe
+          $p = Start-Process -Wait -PassThru -FilePath out\MaskTab-Setup.exe -ArgumentList '/S', '/D=C:\mt'
+          Need ($p.ExitCode -eq 0) "1b：安装程序正常结束（退出码 $($p.ExitCode)）"
+          Need ((Get-Process masktab -ErrorAction SilentlyContinue) -eq $null) '1b：锁文件丢了的旧服务被结束了'
+          Need ((Get-Process mihomo -ErrorAction SilentlyContinue) -eq $null) '1b：它的代理内核也没留下'
+          Need (Test-Path C:\mt\uninstall.exe) '1b：安装做完了'
+
+          # 1c) 锁文件丢了的时候再启动一次：新的结束旧的再接手，不会两个核心服务同时写一份数据
+          Start-Process -FilePath C:\mt\masktab.exe -ArgumentList '-no-open', '-keep'
+          Need (Until 30 { Test-Path C:\mt\data\state\running.lock }) '1c：MaskTab 起来了'
+          $a = (Get-Process masktab).Id
+          Remove-Item C:\mt\data\state\running.lock
+          Start-Process -FilePath C:\mt\masktab.exe -ArgumentList '-no-open', '-keep'
+          Need (Until 30 { $q = @(Get-Process masktab -ErrorAction SilentlyContinue); $q.Count -eq 1 -and $q[0].Id -ne $a -and (Test-Path C:\mt\data\state\running.lock) }) '1c：只剩新启动的那一个，旧的被结束了'
+          Need (Test-Path C:\mt\data\state\masktab.prev.log) '1c：上一次的日志留了一份（masktab.prev.log）'
+          Start-Process -Wait -FilePath C:\mt\masktab.exe -ArgumentList '-quit'
+          Need (Until 20 { (Get-Process masktab -ErrorAction SilentlyContinue) -eq $null }) '1c：能正常退出'
+          Need (-not (Test-Path C:\mt\data\state\running.lock) -and -not (Test-Path C:\mt\data\state\running.pid)) '1c：退出时锁文件和进程号文件都删了'
+
+          # 1d) masktab.exe 怎么也换不掉（这里用独占打开来模拟“关不掉的旧进程”）：安装程序报失败、什么都不写，不能装成半截
+          $h = [IO.File]::Open('C:\mt\masktab.exe', 'Open', 'Read', 'None')
+          Remove-Item C:\mt\uninstall.exe
+          $t = Measure-Command { $p = Start-Process -Wait -PassThru -FilePath out\MaskTab-Setup.exe -ArgumentList '/S', '/D=C:\mt' }
+          $h.Close()
+          Need ($p.ExitCode -ne 0) ("1d：masktab.exe 换不掉时安装程序报失败（退出码 $($p.ExitCode)，用时 {0:n0} 秒）" -f $t.TotalSeconds)
+          Need (-not (Test-Path C:\mt\uninstall.exe)) '1d：换不掉就什么都不写（没有装成半截）'
+          $p = Start-Process -Wait -PassThru -FilePath out\MaskTab-Setup.exe -ArgumentList '/S', '/D=C:\mt'
+          Need ($p.ExitCode -eq 0 -and (Test-Path C:\mt\uninstall.exe)) '1d：放开以后再装就成了'
+
           # 2) 再装一次完整包：内核与代理内核版本没变，应当跳过（很快）
           $t = Measure-Command { Start-Process -Wait -FilePath out\MaskTab-Setup-Full.exe -ArgumentList '/S', '/D=C:\mt' }
           "完整包覆盖安装用时 {0:n0} 秒" -f $t.TotalSeconds
@@ -193,7 +234,6 @@ jobs:
           Start-Process -FilePath C:\mt\masktab.exe -ArgumentList '-no-open', '-keep'
           Start-Sleep 6
           function Api($m, $p) { $l = (Get-Content C:\mt\data\state\running.lock -Raw).Trim() -split '\s+'; Invoke-RestMethod -Method $m -Uri "http://127.0.0.1:$($l[0])$p" -Headers @{ 'X-MaskTab-Token' = $l[1] } -TimeoutSec 90 }
-          function Until($sec, $what) { for ($i = 0; $i -lt $sec; $i++) { try { if (& $what) { return $true } } catch { }; Start-Sleep 1 }; return $false }
           $old = (Get-Process masktab).Id
           # 冒烟测试把自己建的实例都删了：这里新建一个（建好会自动打开），更新之后它应当被开回来
           $l = (Get-Content C:\mt\data\state\running.lock -Raw).Trim() -split '\s+'
