@@ -230,7 +230,7 @@ try {
 
   // 5. 伴随扩展
   await sleep(3000);
-  const sw = await evalTarget(prof(a.id), `${COMPANION}/background.js`, `(async()=>({t:await chrome.action.getTitle({}),b:await chrome.action.getBadgeText({})}))()`);
+  const sw = await evalTarget(prof(a.id), `${COMPANION}/sw-`, `(async()=>({t:await chrome.action.getTitle({}),b:await chrome.action.getBadgeText({})}))()`);
   check(!!sw.value && sw.value.t.startsWith('#' + a.no), '伴随扩展后台在运行并画出了工具栏状态', sw.missing ? '找不到 Service Worker' : sw.hang ? '卡死' : JSON.stringify(sw.value || sw).slice(0, 160));
   check(!!(await inst(a.id))?.rt?.companionSeen, '核心服务收到了该实例伴随扩展的请求');
   const nt = await evalPage(prof(a.id), 'chrome://newtab/', `document.title+'|'+location.href`, 8000, 2000);
@@ -254,7 +254,7 @@ try {
     check((st3.instances.find((x) => x.id === a.id)?.acct?.sites || []).includes('github.com'), '实例卡片拿到记住账号的站点');
     for (const x of st3.instances.filter((x) => /^smoke\d@/.test(x.name))) await api('DELETE', `/api/instances/${x.id}`);
     await evalPage(prof(a.id), PAGE, `(()=>{document.cookie='smk=1; max-age=3600';return 1})()`);
-    const ck = await evalTarget(prof(a.id), `${COMPANION}/background.js`, `(async()=>{await reportCookies(true);return 1})()`);
+    const ck = await evalTarget(prof(a.id), `${COMPANION}/sw-`, `(async()=>{await reportCookies(true);return 1})()`);
     const ckA = (await inst(a.id))?.acct;
     await evalPage(prof(a.id), PAGE, `(()=>{document.cookie='smk=; max-age=0';return 1})()`); // 别影响后面“重启后登录态”的精确比较
     rec(ckA?.cookieN > 0 ? 'ok' : 'warn', '伴随扩展上报 Cookie 汇总', ckA ? `${ckA.cookieN} 条 / ${ckA.cookies?.length || 0} 个站点` : JSON.stringify(ck).slice(0, 120));
@@ -394,7 +394,7 @@ try {
     // 无头模式下关掉全部窗口后内核不会自己退出，只能结束进程，刚写入不到 30 秒的 Cookie 会丢，所以无头时只记警告。
     rec(again === 'who=A|A' ? 'ok' : VISIBLE ? 'fail' : 'warn', '重启后登录态（刚写入的 Cookie、本地存储）还在', String(again) + (again === 'who=A|A' ? '' : VISIBLE ? '' : '（无头模式的已知限制，有界面模式下才算数）'));
     await sleep(3000);
-    const sw2 = await evalTarget(prof(a.id), `${COMPANION}/background.js`, `(async()=>({t:await chrome.action.getTitle({})}))()`);
+    const sw2 = await evalTarget(prof(a.id), `${COMPANION}/sw-`, `(async()=>({t:await chrome.action.getTitle({})}))()`);
     check(!!sw2.value && sw2.value.t.startsWith('#' + a.no), '重启后伴随扩展后台仍在运行', sw2.missing ? '找不到 Service Worker' : sw2.hang ? '卡死' : '');
     const fa3 = (await evalPage(prof(a.id), PAGE, FP)).value;
     check(fa && fa3 && fa.canvas === fa3.canvas, '重启后指纹不变');

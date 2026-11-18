@@ -731,6 +731,21 @@ func (a *App) writeCompanion(in *model.Instance) ([]string, error) {
 	if stamped == string(mb) {
 		return nil, errors.New("伴随扩展 manifest.json 里找不到版本号占位 0.1.0")
 	}
+	// 后台脚本的文件名也跟着版本号走（sw-<版本号>.js，里面只有一行 import './background.js'）。
+	// 光改版本号不够：内核按“地址没变”认定后台脚本没变，资料目录里已经登记过的旧后台脚本会一直用下去——
+	// 2026-11-18 在需求方电脑上实测：四个测试实例的 manifest 版本号是新的，跑的却还是 11-17 登记的那份 background.js，
+	// 之后加在后台里的东西（翻译、向导的快捷键、CF 风险…）在这些实例里都不生效；沙盒里也能复现。
+	// 文件名一变，内核把它当成新的后台脚本重新装（连同它 import 的文件），老实例下次启动就用上新的
+	// （scripts/sw-upgrade-e2e.mjs 把两种写法各走一遍；决策 EXT-2）。
+	swName := "sw-" + companion.Version() + ".js"
+	withSW := strings.Replace(stamped, `"service_worker": "background.js"`, `"service_worker": "`+swName+`"`, 1)
+	if withSW == stamped {
+		return nil, errors.New("伴随扩展 manifest.json 里找不到后台脚本 background.js")
+	}
+	stamped = withSW
+	if err := os.WriteFile(filepath.Join(dst, swName), []byte("import './background.js';\n"), 0o644); err != nil {
+		return nil, err
+	}
 	if err := os.WriteFile(mp, []byte(stamped), 0o644); err != nil {
 		return nil, err
 	}

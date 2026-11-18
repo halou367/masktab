@@ -34,6 +34,7 @@ var (
 // Version 返回写进 manifest 的版本号：0.1.<a>.<b>，后两段取自全部扩展文件内容的哈希。
 // 必须这样做：内核只在扩展版本号变化时才重新安装后台脚本，版本号不变时即使文件改了，
 // 资料目录里缓存的还是旧的后台脚本（实测：旧脚本会一直被执行）。所以文件一变，版本号就必须变。
+// 2026-11-18 补：只变版本号还不够，后台脚本的文件名也得变（见 internal/core/launch.go 的 writeCompanion）。
 func Version() string {
 	verOnce.Do(func() {
 		h := sha256.New()

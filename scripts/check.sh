@@ -69,6 +69,7 @@ ext() {
     # 两遍：有代理内核（要先跑过一次 smoke 才有）、没有代理内核
     if [ -x "$mh" ]; then MASKTAB_MIHOMO="$mh" node "$MT_ROOT/scripts/ext-e2e.mjs" "$MT_DEV/bin/masktab" "$MT_OUT/ext-e2e" || exit 1; fi
     node "$MT_ROOT/scripts/ext-e2e.mjs" "$MT_DEV/bin/masktab" || exit 1
+    node "$MT_ROOT/scripts/sw-upgrade-e2e.mjs" || exit 1   # 伴随扩展换版本：老资料目录里的后台脚本要跟着换（decisions EXT-2）
     node "$MT_ROOT/scripts/translate-e2e.mjs" "$MT_OUT/translate" || exit 1   # 网页翻译：真扩展 + 假接口，请求必须经代理（decisions UI-27）
     # 入口优选换入口只重载 mihomo、不关连接：用真 mihomo 验证老连接走完、新连接走新入口（decisions N-6）
     if [ -x "$mh" ]; then (cd "$MT_ROOT" && MASKTAB_MIHOMO="$mh" go test ./internal/proxy -run ReloadKeepsConnections -count=1) && echo "通过：换入口（重载 mihomo）时已有连接不断、新连接走新入口" || exit 1; fi
