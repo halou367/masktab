@@ -273,7 +273,7 @@ export function avatar(color, text, size = 40, cc, dot, ring2) {
 
 // ---------- 对话框（代替 confirm / prompt：样子和 Chrome 一致，也不依赖内核自己的弹框） ----------
 const bars = () => dispatchEvent(new Event('mt-bars')); // 手机外壳据此重算状态栏 / 导航栏的颜色（盖了一层遮罩时变暗）
-function overlay(box, center = true, cls = '') {
+export function overlay(box, center = true, cls = '') {
   const sc = h('div', { class: 'scrim' + (center ? ' center' : '') + cls }, box);
   const close = () => { sc.remove(); bars(); };
   sc.addEventListener('click', (e) => { if (e.target === sc) { close(); sc.dispatchEvent(new Event('dismiss')); } });

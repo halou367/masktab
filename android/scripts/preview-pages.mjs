@@ -363,6 +363,11 @@ if (want('flow')) {
   await calls();
   await pg.locator('.appbar button[title="新建伪装实例"]').click();
   await pg.waitForTimeout(300);
+  await pg.locator('.dlg input.field').fill('小号');
+  await pg.locator('.dlg .btn.fill').click();
+  await pg.waitForTimeout(300);
+  await pg.locator('.dlg .wzr button[title]').first().click();
+  await pg.waitForTimeout(500);
   check('实例页 → 新建实例发出请求', (await calls()).some((c) => c.m === 'POST' && c.p === '/api/instances'), {});
   await pg.locator('.cardi[data-id="p2"]').click();
   await pg.waitForTimeout(300);
