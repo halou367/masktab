@@ -394,7 +394,7 @@ try {
     } catch (e) { rec('warn', '单击标签后移开鼠标不会把实例拖出去', '检查没跑起来：' + e.message); }
     // 铺满（决策 UI-20）：把当前窗口最大化（和点浏览器的最大化按钮一回事），应当变成“铺满”——看得见的部分正好是这块屏幕去掉任务栏的可用区域；
     // 再最大化一次回到原来的位置。任务栏在上边 / 左边时可用区域的左上角不是 (0,0)，摆窗口的那个系统接口又不算任务栏，最容易差一个任务栏的宽：
-    // CI 上手动指定 taskbar: top / left 时会先把任务栏挪过去再跑到这里。
+    // CI 上手动指定 taskbar: top / left 时会先把可用区域的左上角挪开（模拟任务栏在那一边）再跑到这里。
     try {
       const NAME3 = '最大化 = 铺满：窗口正好占满去掉任务栏的可用区域，再来一次回到原位';
       const cur = async () => { const x = await api('GET', '/api/debug/tabbar'); const g = (x.groups || [])[0] || {}; return { x, g, w: (x.windows || []).find((q) => q.visible && q.no === g.activeNo) }; };

@@ -37,7 +37,7 @@ on:
         type: string
         default: windows-latest
       taskbar:
-        description: '冒烟测试前把任务栏挪到哪（空 = 不动；top / left。只有 Windows 10 那一代的系统能挪，配 winrunner: windows-2022 用；核对“铺满”在任务栏不在下边时对不对，decisions UI-20）'
+        description: '冒烟测试前模拟任务栏在哪一边（空 = 不动；top / left：把系统的可用区域左上角挪开；核对“铺满”在任务栏不在下边时对不对，decisions UI-20）'
         type: string
         default: ''
 
@@ -170,41 +170,27 @@ jobs:
           "完整包安装用时 {0:n0} 秒" -f $t.TotalSeconds
           foreach ($f in 'masktab.exe', 'mihomo.exe', 'uninstall.exe', "kernel\fingerprint-chromium\$env:KVER\installed.ok") { if (-not (Test-Path "C:\mt\$f")) { throw "安装后缺少 $f" } }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\MaskTab.lnk")) { throw "没有创建开始菜单快捷方式" }
-      - name: 把任务栏挪到上边 / 左边（只在手动指定时）
+      - name: 模拟任务栏在上边 / 左边（只在手动指定时）
         if: inputs.taskbar != ''
         shell: pwsh
         run: |
-          # 先真的挪任务栏（改注册表、重启资源管理器）；测试机上挪不动的话（44327000787：可用区域没变），
-          # 改用系统接口直接把“可用区域”的左上角挪开——窗口最大化、摆窗口的坐标换算看的都是可用区域，效果和任务栏在那一边一样。
+          # 测试机上任务栏真的挪不动（改注册表、重启资源管理器都试过：44327000787、44329848601，可用区域不变）。
+          # 改用系统接口直接把“可用区域”的左上角挪开：窗口最大化到哪、摆窗口的坐标怎么换算，系统看的都是可用区域，
+          # 对我们的代码来说和任务栏在那一边是一回事。下边原来让给任务栏的那一条照旧让着。
           Add-Type -AssemblyName System.Windows.Forms
           Add-Type -Namespace W -Name A -MemberDefinition '[StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; } [DllImport("user32.dll", SetLastError=true)] public static extern bool SystemParametersInfo(uint a, uint b, ref R r, uint f);'
           $want = '${{ inputs.taskbar }}'
-          $edge = @{ left = 0; top = 1 }[$want]
-          if ($null -eq $edge) { throw '只认 top / left' }
-          $scr = [System.Windows.Forms.Screen]::PrimaryScreen
-          $before = $scr.WorkingArea
+          if ($want -notin 'top', 'left') { throw '只认 top / left' }
+          $before = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
           $moved = { $w = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; ($want -eq 'top' -and $w.Top -gt 0) -or ($want -eq 'left' -and $w.Left -gt 0) }
-          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3'
-          try {
-            [byte[]]$v = (Get-ItemProperty $key).Settings
-            "任务栏原来在：$($v[12])（0 左 1 上 2 右 3 下）"
-            $v[12] = $edge
-            Set-ItemProperty $key -Name Settings -Value $v -Type Binary
-            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-            Start-Sleep 3
-            if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
-            for ($i = 0; $i -lt 15 -and -not (& $moved); $i++) { Start-Sleep 1 }
-          } catch { "挪任务栏出错：$_" }
-          $how = '真的把任务栏挪过去了'
-          if (-not (& $moved)) {
-            $how = '任务栏挪不动，改成直接改可用区域（模拟）'
-            $b = $scr.Bounds; $r = New-Object W.A+R
-            $r.L = $b.Left; $r.T = $b.Top; $r.Rt = $b.Right; $r.B = $b.Bottom
-            if ($want -eq 'top') { $r.T = $b.Top + 48 } else { $r.L = $b.Left + 62 }
-            if (-not [W.A]::SystemParametersInfo(0x002F, 0, [ref]$r, 3)) { throw "改可用区域失败：$([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+          for ($i = 0; $i -lt 6 -and -not (& $moved); $i++) {
+            $r = New-Object W.A+R
+            $r.L = $before.Left; $r.T = $before.Top; $r.Rt = $before.Right; $r.B = $before.Bottom
+            if ($want -eq 'top') { $r.T = $before.Top + 48 } else { $r.L = $before.Left + 62 }
+            if (-not [W.A]::SystemParametersInfo(0x002F, 0, [ref]$r, 3)) { "改可用区域失败：$([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
             Start-Sleep 2
           }
-          "$how。可用区域：$before → $([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea)"
+          "可用区域：$before → $([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea)"
           if (-not (& $moved)) { throw "可用区域的左上角没有挪开（$want）" }
       - name: 冒烟测试（对装好的那一份；内核与代理内核都来自安装包，不应再下载）
         run: node scripts/smoke.mjs --bin C:\mt\masktab.exe --data C:\mt\data --shots shots --visible
