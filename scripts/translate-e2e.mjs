@@ -73,6 +73,11 @@ const proxy = http.createServer((q, r) => {
     setTimeout(() => r.end('<h1 id="late">This part of the page arrives late</h1><p id="late2">And so does this paragraph of text.</p>'), 2500);
     return;
   }
+  // 更慢的：服务器 2 秒后才回话（这 2 秒里标签页还是空白页，没有内容脚本）
+  if (u.hostname === 'hold.test') {
+    setTimeout(() => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end('<!doctype html><meta charset="utf-8"><title>Hold</title><h1 id="late">The server took a while to answer</h1>'); }, 2000);
+    return;
+  }
   if (u.hostname === 'news.test') { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Set-Cookie': 'sid=page-cookie' }); r.end(PAGE); return; }
   r.writeHead(502); r.end();
 });
@@ -147,6 +152,19 @@ check('微软接口也经实例的代理出去', connects.includes('edge.microso
     || await pg2.evaluate(() => [document.getElementById('late')?.textContent || '', document.getElementById('late2')?.textContent || '']);
   check('页面还没加载完就点翻译：等加载完再翻，后到的正文也翻了', state === 'loading false' && /^【/.test(late[0]) && /^【/.test(late[1]), { state, late });
   await pg2.close();
+}
+
+// 网页刚点开、服务器还没回话就点了翻译（工具栏小窗 / Alt+T / 右键都走后台的 translateTab）：后台接着等，网页一来就翻
+{
+  const pg3 = await ctx.newPage();
+  pg3.goto('http://hold.test/').catch(() => {});
+  await pg3.waitForTimeout(400);
+  const r = await sw.evaluate(async () => { const ts = await chrome.tabs.query({}); const t = ts.find((x) => (x.pendingUrl || x.url || '').includes('hold.test')); return t ? [t.status, await globalThis.translateTab(t.id)] : ['no tab', ts.map((x) => x.pendingUrl || x.url)]; });
+  const late = await until(async () => { const x = await pg3.evaluate(() => document.getElementById('late')?.textContent || '').catch(() => ''); return /^【/.test(x) ? x : null; }, 15000) || await pg3.evaluate(() => document.getElementById('late')?.textContent || '').catch(() => '');
+  check('服务器还没回话就点翻译：后台接着等，网页一来就翻了', r[1] === 'wait' && /^【/.test(late), { r, late });
+  const no = await sw.evaluate(async () => { const t = await chrome.tabs.create({ url: 'about:blank' }); await new Promise((x) => setTimeout(x, 500)); const v = await globalThis.translateTab(t.id); await chrome.tabs.remove(t.id); return v; });
+  check('翻译不了的页面（空白页）：马上说不行，不干等', no === 'no', no);
+  await pg3.close();
 }
 
 // 后台只替内容脚本发翻译接口的请求：别的地址一律不发（内容脚本不能拿它当万能代理）

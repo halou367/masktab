@@ -122,7 +122,32 @@ async function wizardWindow() {
 // 翻译此页（决策 UI-27）：叫当前标签页的内容脚本整页翻成中文；再来一次换回原文。
 async function translateActive() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (tab && /^https?:/.test(tab.url || '')) await chrome.tabs.sendMessage(tab.id, { t: 'mt:translate' }).catch(() => {});
+  if (tab && /^https?:/.test(tab.url || '')) await translateTab(tab.id);
+}
+// 让这个标签页翻译 / 换回原文（工具栏小窗、Alt+T、右键菜单都走这里）。
+// 网页刚点开、服务器还没回话时，标签页里还是上一个页面或空白页，没有内容脚本接这条消息——以前就这么没反应了
+// （小窗里还提示“刷新一下”，其实等等就行）。现在：标签页还在加载就每半秒再试，最多 20 秒；内容脚本一装上（网页一开始加载就装）
+// 就接到，它自己再等网页加载完（translate.js 的 start）。返回 'ok' / 'wait'（还在试）/ 'no'（这个页面翻译不了）。
+const trWaiting = new Set();
+async function translateTab(tabId) {
+  const once = () => chrome.tabs.sendMessage(tabId, { t: 'mt:translate' }).then(() => true, () => false);
+  if (await once()) return 'ok';
+  const t = await chrome.tabs.get(tabId).catch(() => null);
+  if (!t || t.status !== 'loading') return 'no';
+  if (trWaiting.has(tabId)) return 'wait';
+  trWaiting.add(tabId);
+  (async () => {
+    try {
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (await once()) return;
+        const x = await chrome.tabs.get(tabId).catch(() => null);
+        if (!x) return;
+        if (x.status !== 'loading') { await once(); return; }
+      }
+    } finally { trWaiting.delete(tabId); }
+  })();
+  return 'wait';
 }
 
 // 长轮询事件。每次返回后调用一次扩展接口，使 Service Worker 保持存活；另有 30 秒闹钟兜底拉起。
@@ -234,10 +259,10 @@ async function trFetch(m) {
     return { ok: r.ok, status: r.status, body: await r.text() };
   } finally { clearTimeout(t); }
 }
-globalThis.trFetch = trFetch; // 测试从调试端口调用（scripts/translate-e2e.mjs）
+globalThis.trFetch = trFetch; globalThis.translateTab = translateTab; // 测试从调试端口调用（scripts/translate-e2e.mjs）
 // 右键菜单：在网页上右键 → 翻译此页 / 显示原文
 function trMenu() { try { chrome.contextMenus.removeAll(() => chrome.contextMenus.create({ id: 'mt-translate', title: '翻译此页 / 显示原文（MaskTab）', contexts: ['page', 'selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] }, () => void chrome.runtime.lastError)); } catch { /* 没有右键菜单权限 */ } }
-chrome.contextMenus?.onClicked.addListener((info, tab) => { if (info.menuItemId === 'mt-translate' && tab?.id >= 0) chrome.tabs.sendMessage(tab.id, { t: 'mt:translate' }).catch(() => {}); });
+chrome.contextMenus?.onClicked.addListener((info, tab) => { if (info.menuItemId === 'mt-translate' && tab?.id >= 0) translateTab(tab.id); });
 
 chrome.alarms.onAlarm.addListener(() => { loop(); reportCookies().catch(() => {}); });
 chrome.runtime.onInstalled.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); trMenu(); loop(); });
@@ -246,6 +271,11 @@ chrome.runtime.onMessage.addListener((m, sender, send) => {
   if (m && typeof m === 'object' && String(m.t).startsWith('vault:')) {
     if (sender.id !== chrome.runtime.id) return false;
     vaultMsg(m, sender).then((r) => send({ ok: true, r }), (e) => send({ ok: false, error: e.message }));
+    return true;
+  }
+  if (m && m.t === 'tr:tab') { // 工具栏小窗点了“翻译此页”：只认扩展自己的页面
+    if (sender.id !== chrome.runtime.id || sender.tab) return false;
+    translateTab(Number(m.tabId)).then(send, () => send('no'));
     return true;
   }
   if (m && m.t === 'tr:fetch') { // 网页翻译：只认本扩展自己的内容脚本

@@ -226,10 +226,24 @@ browser.runtime.onMessage.addListener((m, sender) => {
   // 实例菜单里的“录入登录”（扩展自己的页面发来）：转给这个实例正显示着的网页；没有就记下来，等下一个网页接手。
   if (t === 'rec-start' && !sender.tab?.url?.startsWith('http')) return recStart(String(m.inst || ''));
 });
-// 翻译此页：转给这个实例正显示着的网页（translate.js）。网页里没有内容脚本（内部页、刚打开还没载完）就算了。
-function trStart(inst) {
+// 翻译此页：转给这个实例正显示着的网页（translate.js）。网页刚点开、还没有内容脚本时每半秒再试，最多 20 秒
+// （内容脚本在网页一开始加载时就装上，它自己再等网页加载完）；内部页一直没有，试完就算了。
+const trWaiting = new Set();
+async function trStart(inst) {
   const tab = visTab.get(inst);
-  if (tab != null) browser.tabs.sendMessage(tab, { t: 'mt:translate' }).catch(() => {});
+  if (tab == null || trWaiting.has(tab)) return;
+  const once = () => browser.tabs.sendMessage(tab, { t: 'mt:translate' }).then(() => true, () => false);
+  if (await once()) return;
+  trWaiting.add(tab);
+  try {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (await once()) return;
+      const x = await browser.tabs.get(tab).catch(() => null);
+      if (!x) return;
+      if (x.status !== 'loading') { await once(); return; }
+    }
+  } finally { trWaiting.delete(tab); }
 }
 function recStart(inst) {
   const tab = visTab.get(inst);

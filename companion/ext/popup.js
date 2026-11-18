@@ -22,7 +22,9 @@ const record = () => run(async () => {
 const translate = () => run(async () => {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab || !/^https?:/.test(tab.url || '')) throw new Error('先打开要翻译的网页');
-  try { await chrome.tabs.sendMessage(tab.id, { t: 'mt:translate' }); } catch { throw new Error('这个页面翻译不了（浏览器自己的页面、应用商店等）；普通网页的话刷新一下再点'); }
+  // 交给后台去叫网页翻译：网页刚点开还没内容时后台会接着等（小窗关了也不耽误）
+  const r = await chrome.runtime.sendMessage({ t: 'tr:tab', tabId: tab.id }).catch(() => 'no');
+  if (r === 'no') throw new Error('这个页面翻译不了（浏览器自己的页面、应用商店等）；普通网页的话刷新一下再点');
   window.close();
 });
 
