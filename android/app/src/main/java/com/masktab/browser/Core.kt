@@ -228,6 +228,45 @@ object Core {
         return t
     }
 
+    // ---------- app 发起的下载（长按“保存图片 / 下载链接”、三点菜单“下载此页”；决策 A-14）----------
+    // 内核没有“把这个网址下下来”的接口。做法：在这个实例里开一个不进标签列表的会话去打开这个网址（经引导页登记到实例，和普通标签页一样），
+    // 引导页告诉内置扩展“这个标签页接下来那一次是下载”（地址里的 dl=<编号>），扩展把那一次的响应标成附件，
+    // 内核就不显示它、当下载交回来（onExternalResponse）。请求是内核自己发的：线路、Cookie、UA、TLS 特征都和网页一样。
+    // 服务器回了错误、连不上：扩展报回来（Bridge：POST /ui/dl-fail）；90 秒什么都没等到也算失败。
+    private class DlJob(val n: String, val inst: String, val url: String, val from: String, val session: GeckoSession) { var got = false }
+    private val dlJobs = HashMap<String, DlJob>()
+
+    /** 在主线程调用。ref = 要带的来源页（按浏览器默认规则算好的；没有就不带）。 */
+    fun download(i: Inst, url: String, from: String, ref: String?) {
+        val j = DlJob(randomHex(6), i.id, url, from, newSession(i))
+        dlJobs[j.n] = j
+        val s = j.session
+        s.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                if (j.got || dlJobs[j.n] !== j) return
+                j.got = true
+                Downloads.fromResponse(j.inst, response, j.from) { dlEnd(j) }
+            }
+        }
+        s.promptDelegate = PromptBridge // 下载地址要用户名密码时照样能问
+        s.open(ensureRuntime())
+        s.loadUri(bootUrl(i.id, url) + "&dl=" + j.n + (if (!ref.isNullOrEmpty()) "&ref=" + URLEncoder.encode(ref, "UTF-8") else ""))
+        logi("下载：请内核去取 实例 ${i.id} ${url.take(160)}")
+        mainHandler.postDelayed({ if (!j.got) dlFail(j.n, "等了 90 秒没有回应") }, 90_000)
+    }
+
+    /** 内置扩展报来的：这次下载没成（服务器回了错误、连不上）。 */
+    fun dlFail(n: String, err: String) = ui {
+        val j = dlJobs[n]
+        if (j != null && !j.got) { j.got = true; Downloads.failed(j.inst, j.url, j.from, err); dlEnd(j) }
+    }
+
+    private fun dlEnd(j: DlJob) {
+        if (dlJobs.remove(j.n) == null) return
+        try { j.session.close() } catch (e: Exception) { }
+        logi("下载用的会话已关掉")
+    }
+
     /** onNewSession（网页 window.open / target=_blank）：同一实例里开新标签，保留 opener 关系。 */
     private fun popupTab(instId: String, opener: Tab? = null): GeckoSession? {
         val i = Host.get(instId) ?: return null
@@ -312,6 +351,7 @@ object Core {
     fun dropInst(id: String) {
         closeAll(id)
         Downloads.dropInst(id)
+        dlJobs.values.filter { it.inst == id }.forEach { dlEnd(it) }
         runtime?.storageController?.clearDataForSessionContext("mt-$id")
         ui?.onTabsChanged()
         saveTabs()

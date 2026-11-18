@@ -67,18 +67,21 @@ object Bridge {
                     "cancel" -> { Downloads.cancel(it); null }
                     "remove" -> { Downloads.remove(it, false); null }
                     "delete" -> { Downloads.remove(it, true); null }
-                    // 重新下载：在它原来的实例里把网址再开一遍，由内核去取（带着这个实例的 Cookie、走它的线路）
-                    "retry" -> if (!it.url.startsWith("http")) "这个文件是网页临时生成的，要回到那个网页重新点下载" else if (Host.get(it.inst) == null) "它的实例已经删掉了" else {
-                        Downloads.remove(it, false)
-                        mainHandler.post { Core.ui?.closeSheet(); if (Host.current != it.inst) Core.switchTo(it.inst); Core.openTab(it.inst, it.url) }
-                        null
+                    // 重新下载：在它原来的实例里让内核把这个网址再取一遍（带着这个实例的 Cookie、走它的线路；见 Core.download）
+                    "retry" -> {
+                        val i = Host.get(it.inst)
+                        if (!it.url.startsWith("http")) "这个文件是网页临时生成的，要回到那个网页重新点下载" else if (i == null) "它的实例已经删掉了" else if (!i.running) "实例 #${i.no} 还没启动，先打开它" else {
+                            Downloads.remove(it, false)
+                            mainHandler.post { Downloads.fromUrl(i, it.url, it.from) }
+                            null
+                        }
                     }
                     else -> "不认识的操作"
                 }
                 if (err == null) ok(null) else fail(err)
             }
-            // 下载要带的 Cookie：内置扩展后台的回话（见 Downloads.cookiesFor）
-            k == "POST /ui/dl-cookies" -> { Downloads.cookieReply(b.str("n"), b.str("cookie")); ok(null) }
+            // app 发起的下载没成（服务器回了错误、连不上）：内置扩展后台报来的（见 Core.download）
+            k == "POST /ui/dl-fail" -> { Core.dlFail(b.str("n"), b.str("err").ifEmpty { "没下成" }.take(120)); ok(null) }
             // 在线更新的最后一步：安装包是核心服务下载、校验的，交给系统安装归 app（Updater.kt，决策 N-3）
             k == "POST /api/update/install" -> Updater.install(ok, fail)
             k == "GET /api/diag" -> bg { val t = try { Core.diag() } catch (e: Exception) { "诊断信息没取全：$e" }; ui { ok(jsonOf("text" to t)) } }

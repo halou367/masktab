@@ -45,7 +45,7 @@ function connect() {
   try {
     const port = browser.runtime.connectNative(NATIVE);
     // rec-start：头像菜单（app 原生画的）里的“录入登录”；tr-start：三点菜单里的“翻译此页”（决策 UI-27）
-    port.onMessage.addListener((msg) => { if (msg?.t === 'state') applyState(msg); else if (msg?.t === 'rec-start') recStart(String(msg.inst || '')); else if (msg?.t === 'tr-start') trStart(String(msg.inst || '')); else if (msg?.t === 'dl-cookies') dlCookies(msg); });
+    port.onMessage.addListener((msg) => { if (msg?.t === 'state') applyState(msg); else if (msg?.t === 'rec-start') recStart(String(msg.inst || '')); else if (msg?.t === 'tr-start') trStart(String(msg.inst || '')); });
     port.onDisconnect.addListener(() => setTimeout(connect, 2000));
   } catch (e) { console.warn('connectNative 失败', e); setTimeout(connect, 2000); }
 }
@@ -204,6 +204,7 @@ browser.runtime.onMessage.addListener((m, sender) => {
   const t = String(m.t || '');
   // 新标签页 / 引导页（扩展自己的页面）登记：这个标签页属于 m.inst
   if (t === 'bind' && sender.tab) {
+    if (m.dl && String(sender.url || '').startsWith(browser.runtime.getURL('newtab.html'))) dlBind(sender.tab.id, m.dl, m.ref);
     return ready.then(() => bind(sender.tab, String(m.inst))).then(() => {
       console.info('MaskTab 标签页登记', sender.tab.id, sender.tab.cookieStoreId, '→', m.inst);
       return { ok: true, cs: sender.tab.cookieStoreId, reg: 'sync' };
@@ -252,26 +253,54 @@ function recStart(inst) {
   return browser.tabs.sendMessage(tab, { t: 'mt:rec-start' }).then(() => { recWant.delete(inst); return { ok: true }; }, () => ({ ok: true, later: true }));
 }
 
-// ---------- 下载要带的 Cookie（决策 A-14） ----------
-// 长按“下载链接 / 保存图片”是 app 自己去取的（内核没有“把这个地址下载下来”的接口），走的是这个实例的线路；
-// 它还要带上这个实例访问那个网址时会带的 Cookie，登录后才看得到的图片、文件才下得下来。app 来问，这里按实例的容器查了回话。
-// 只给不分区的那些（和在地址栏里直接打开这个网址时带的一样）。
-async function dlCookies(m) {
-  let cookie = '';
-  try {
-    await ready;
-    const all = await browser.cookies.getAll({ url: String(m.url || ''), storeId: csOf(String(m.inst || '')) });
-    cookie = all.map((c) => `${c.name}=${c.value}`).join('; ');
-  } catch (e) { console.warn('MaskTab 取下载用的 Cookie 失败', e?.message || e); }
-  native('POST', '/ui/dl-cookies', { n: m.n, cookie }).catch(() => {});
+// ---------- app 发起的下载（长按“保存图片 / 下载链接”、三点菜单“下载此页”；决策 A-14）----------
+// 内核没有“把这个网址下下来”的接口。app 在实例里开一个看不见的标签页去打开这个网址（经引导页，地址里带 dl=<编号>），
+// 这里把它接下来那一次整页请求的响应标成附件：内核就不显示它，当下载交给 app。请求是内核发的，线路、Cookie、UA 都和网页一样。
+// 来源页（Referer）按 app 算好的带上（浏览器默认规则）。服务器回了错误、连不上：告诉 app（/ui/dl-fail）。
+const dlWant = new Map(); // 标签页 id → { n, ref }
+function dlBind(tabId, n, ref) {
+  dlWant.set(tabId, { n: String(n), ref: String(ref || '') });
+  console.info('MaskTab 下载登记', tabId, n);
 }
+const dlFail = (w, err) => native('POST', '/ui/dl-fail', { n: w.n, err }).catch(() => {});
+const DL_NET = { urls: ['http://*/*', 'https://*/*'], types: ['main_frame'] };
+browser.webRequest.onBeforeSendHeaders.addListener((d) => {
+  const w = dlWant.get(d.tabId);
+  if (!w || !w.ref || w.sent) return undefined;
+  w.sent = true; // 只管第一跳；跳转之后的由内核按规则带
+  const hs = d.requestHeaders.filter((x) => x.name.toLowerCase() !== 'referer');
+  hs.push({ name: 'Referer', value: w.ref });
+  return { requestHeaders: hs };
+}, DL_NET, ['blocking', 'requestHeaders']);
+browser.webRequest.onHeadersReceived.addListener((d) => {
+  const w = dlWant.get(d.tabId);
+  if (!w) return undefined;
+  if (d.statusCode >= 300 && d.statusCode < 400) return undefined; // 跳转：等最后那一个
+  dlWant.delete(d.tabId);
+  if (d.statusCode < 200 || d.statusCode >= 300) { dlFail(w, `服务器回了 ${d.statusCode}`); return { cancel: true }; }
+  // 原来的文件名参数（filename=…）留着，只把“在页面里显示”改成“附件”
+  const old = d.responseHeaders.find((x) => x.name.toLowerCase() === 'content-disposition')?.value || '';
+  const hs = d.responseHeaders.filter((x) => x.name.toLowerCase() !== 'content-disposition');
+  hs.push({ name: 'Content-Disposition', value: 'attachment' + old.replace(/^[^;]*/, '') });
+  return { responseHeaders: hs };
+}, DL_NET, ['blocking', 'responseHeaders']);
+browser.webRequest.onErrorOccurred.addListener((d) => {
+  const w = dlWant.get(d.tabId);
+  if (!w) return;
+  dlWant.delete(d.tabId);
+  const e = String(d.error || '');
+  dlFail(w, /PROXY|CONNECTION_REFUSED|NET_RESET|NET_INTERRUPT/.test(e) ? '连不上（这个实例的线路不通）' : /UNKNOWN_HOST/.test(e) ? '找不到这个网站' : /TIMEOUT/.test(e) ? '等了太久没有回应' : '没连上：' + e.replace(/^NS_ERROR_/, ''));
+}, DL_NET);
+browser.tabs.onRemoved.addListener((id) => dlWant.delete(id));
 
 // ---------- Cookie 汇总 ----------
+const cookieSeen = new Map(); // 实例 id → 上次数到几个（变了才进日志）
 async function reportCookies() {
   await ready;
   for (const [cs, id] of csInst) {
     let all = [];
     try { all = await browser.cookies.getAll({ storeId: cs, partitionKey: {} }); } catch { try { all = await browser.cookies.getAll({ storeId: cs }); } catch { continue; } }
+    if (cookieSeen.get(id) !== all.length) { cookieSeen.set(id, all.length); console.info('MaskTab Cookie 汇总', id, all.length); }
     const by = new Map();
     for (const c of all) { const d = baseDomain(c.domain.replace(/^\./, '')); by.set(d, (by.get(d) || 0) + 1); }
     const domains = [...by].map(([d, n]) => ({ d, n }));

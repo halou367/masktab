@@ -15,7 +15,8 @@ const go = q.get('go');
 const root = document.getElementById('root');
 
 let bound = null;
-try { bound = await Promise.race([browser.runtime.sendMessage({ t: 'bind', inst }), new Promise((r) => setTimeout(() => r(null), 3000))]); } catch { bound = null; }
+// dl / ref：这个标签页是 app 为了下载一个文件开的（长按“保存图片”等，决策 A-14），登记时一并告诉后台，后台把接下来那一次响应标成附件
+try { bound = await Promise.race([browser.runtime.sendMessage({ t: 'bind', inst, dl: q.get('dl') || '', ref: q.get('ref') || '' }), new Promise((r) => setTimeout(() => r(null), 3000))]); } catch { bound = null; }
 if (go) {
   // 只跳网页地址；登记失败时照样跳：认不出实例的请求会被后台拒绝，不会直连
   if (/^https?:\/\//i.test(go)) location.replace(go);

@@ -30,20 +30,16 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.Proxy
 import java.net.URL
 import java.net.URLDecoder
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 // 下载文件（决策 A-14）。
 //
 // 两条路，都只走这个实例自己的线路，绝不直连：
 //   1. 网页里点出来的下载（内核的 onExternalResponse）：内容是内核已经在这个实例的线路上、带着它的 Cookie 取回来的，这里只管把它存下来。
-//   2. 长按菜单里的“下载链接 / 保存图片”、三点菜单的“下载此页”：内核没有“把这个地址下载下来”的接口，app 自己去取——
-//      经这个实例在 mihomo 里的本地入站口（和它的网页同一个出口），带上它的 UA、来源页，Cookie 向内置扩展要（browser.cookies，按这个实例的容器）。
+//   2. 长按菜单里的“下载链接 / 保存图片”、三点菜单的“下载此页”：内核没有“把这个地址下载下来”的接口。让内核在这个实例里再开一次这个网址，
+//      内置扩展把这一次的响应标成附件（Content-Disposition: attachment），内核就把它当下载交回来，接着走第 1 条路（Core.download）。
+//      请求仍是内核发的：线路、Cookie、UA、TLS 特征都和网页一样。app 自己从不出网取文件。
 //
 // 存到哪：安卓 10 及以上放进系统的“下载”文件夹（MediaStore，不用申请存储权限，文件管理器、相册都看得到）；
 // 安卓 8、9 放在 app 自己的外部目录 Android/data/com.masktab.browser/files/Download（同样不用权限），打开 / 分享时经 FileProvider 交出去。
@@ -270,16 +266,31 @@ object Downloads {
         start(it, onEnd) { body }
     }
 
-    /** 长按“下载链接 / 保存图片”、三点菜单“下载此页”：app 自己经这个实例的线路去取。kind 只用在提示里（图片 / 视频 / 文件）。 */
+    /**
+     * 长按“下载链接 / 保存图片”、三点菜单“下载此页”。内核没有“把这个网址下下来”的接口，app 也不自己去取
+     * （自己取就拿不到这个实例的 Cookie：内核的扩展接口按 GeckoView 的会话分组查不了 Cookie，模拟器里实测存要登录的图片回 403）。
+     * 做法见 Core.download：让内核在这个实例里再开一次这个网址，内置扩展把这一次的响应标成附件，内核就把它当下载交回来。
+     * kind 只用在提示里（图片 / 视频 / 文件）。
+     */
     fun fromUrl(i: Inst, url: String, from: String, kind: String = "文件") {
         if (url.startsWith("data:")) { fromData(i.id, url, from, kind); return }
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             Core.ui?.toast(if (url.startsWith("blob:")) "这个${kind}是网页临时生成的，存不了；用网页自己的下载按钮试试" else "这个地址下载不了")
             return
         }
-        if (!i.running || i.port <= 0) { Core.ui?.toast("实例 #${i.no} 还没启动，下载不了"); return }
-        val it = Item(randomHex(6), i.id, fileName("", url, ""), url, from, "", -1L, System.currentTimeMillis())
-        start(it, {}) { x -> fetch(i, x) }
+        if (!i.running) { Core.ui?.toast("实例 #${i.no} 还没启动，下载不了"); return }
+        Core.download(i, url, from, referer(from, url))
+    }
+
+    /** 还没开始存就失败了（服务器回了 403、连不上……）：记一条“没下成”，界面上照常提示。 */
+    fun failed(inst: String, url: String, from: String, err: String) {
+        load()
+        val it = Item(randomHex(6), inst, fileName("", url, ""), url, from, "", -1L, System.currentTimeMillis())
+        it.state = FAIL; it.err = err
+        synchronized(list) { list.add(0, it); while (list.size > MAX) list.removeAt(list.size - 1) }
+        save()
+        logi("下载没成 ${it.name}：$err")
+        ui { Keep.finished(it); Core.ui?.onDownload(it) }
     }
 
     /** 浏览器默认的来源页规则（strict-origin-when-cross-origin）：同站给完整地址，跨站只给站点，https → http 不给。 */
@@ -291,39 +302,6 @@ object Downloads {
             else if (f.protocol == t.protocol && f.host == t.host && f.port == t.port) from.substringBefore('#')
             else f.protocol + "://" + f.authority + "/"
         } catch (e: Exception) { null }
-    }
-
-    private fun fetch(i: Inst, it: Item): InputStream {
-        var u = it.url
-        for (hop in 0 until 8) {
-            val c = URL(u).openConnection(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", i.port))) as HttpURLConnection
-            it.src = Closeable { c.disconnect() }
-            c.instanceFollowRedirects = false // 自己跟：每一跳都要按那一跳的网址带 Cookie，http ↔ https 也要能跟
-            c.connectTimeout = 20000
-            c.readTimeout = 60000
-            c.setRequestProperty("User-Agent", Fp.userAgent(i.seed))
-            c.setRequestProperty("Accept", "*/*")
-            c.setRequestProperty("Accept-Encoding", "identity")
-            referer(it.from, u)?.let { r -> c.setRequestProperty("Referer", r) }
-            cookiesFor(i.id, u).takeIf { s -> s.isNotEmpty() }?.let { s -> c.setRequestProperty("Cookie", s) }
-            if (it.stop) { c.disconnect(); throw Stopped() }
-            val code = c.responseCode
-            if (code in 300..399 && code != 304) {
-                val loc = c.getHeaderField("Location")
-                c.disconnect()
-                if (loc.isNullOrEmpty()) throw IOException("服务器回了 $code，没说跳到哪")
-                u = URL(URL(u), loc).toString()
-                if (!u.startsWith("http://") && !u.startsWith("https://")) throw IOException("跳到了下载不了的地址")
-                continue
-            }
-            if (code !in 200..299) { c.disconnect(); throw IOException("服务器回了 $code") }
-            it.mime = (c.contentType ?: "").substringBefore(';').trim()
-            it.total = c.contentLengthLong
-            it.exact = c.getHeaderField("Content-Encoding").isNullOrEmpty()
-            it.name = fileName(c.getHeaderField("Content-Disposition") ?: "", u, it.mime)
-            return c.inputStream
-        }
-        throw IOException("跳转太多次")
     }
 
     private fun fromData(inst: String, url: String, from: String, kind: String) {
@@ -338,31 +316,6 @@ object Downloads {
             x.total = bytes.size.toLong()
             ByteArrayInputStream(bytes)
         }
-    }
-
-    // ---------- Cookie：向内置扩展要 ----------
-
-    private val cookieWait = HashMap<String, (String) -> Unit>()
-
-    /** 这个实例访问 url 时会带的 Cookie 头（没有、或扩展 1.5 秒内没回话就是空）。在后台线程调用。 */
-    private fun cookiesFor(inst: String, url: String): String {
-        val n = randomHex(6)
-        val latch = CountDownLatch(1)
-        var out = ""
-        synchronized(cookieWait) { cookieWait[n] = { c -> out = c; latch.countDown() } }
-        ui {
-            try { Core.bgPort?.postMessage(jsonOf("t" to "dl-cookies", "n" to n, "inst" to inst, "url" to url)) ?: latch.countDown() }
-            catch (e: Exception) { latch.countDown() }
-        }
-        latch.await(1500, TimeUnit.MILLISECONDS)
-        synchronized(cookieWait) { cookieWait.remove(n) }
-        return out
-    }
-
-    /** 扩展的回话（Bridge：POST /ui/dl-cookies）。 */
-    fun cookieReply(n: String, cookie: String) {
-        val cb = synchronized(cookieWait) { cookieWait.remove(n) }
-        cb?.invoke(cookie)
     }
 
     // ---------- 列表里的操作 ----------

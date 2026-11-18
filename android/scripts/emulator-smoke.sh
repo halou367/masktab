@@ -552,10 +552,11 @@ download_phase() {
   nodehits() { grep -c "$HOSTIP:18081" $W/server.log; }
   # 网页里的控件：先按无障碍标签找；找不到就按测试页定死的版面算（纵坐标 = 网页区域顶边 + CSS 像素 × 屏幕密度）
   local DPR; DPR=$(A shell wm density | grep -o '[0-9]\+' | tail -1); DPR=${DPR:-420}
+  # 网页正文（标签页里的网页）报的坐标就是实际位置，不用像弹出页那样修正（run 44359388053 量的：按 half 点会高出半个工具栏，点到上面一个控件）
   tap_page() { # tap_page <标签> <控件中心的 CSS 纵坐标>
-    tap_desc "$1" && return 0
+    tap_native "$1" && return 0
     local wt y; wt=$(grep -o '<node[^>]*class="android.webkit.WebView"[^>]*>' "$OUT/ui-dump.xml" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]' | grep -o '[0-9]*\]$' | tr -d ']')
-    [ "$OFFMODE" = half ] && wt=$(( ${wt:-256} / 2 )); y=$(( ${wt:-128} + $2 * DPR / 160 ))
+    y=$(( ${wt:-296} + $2 * DPR / 160 ))
     echo "说明：无障碍信息里没找到“$1”，按版面位置点 (540,$y)"
     if [ -n "${HOLD:-}" ]; then A shell input swipe 540 $y 540 $y "$HOLD"; else A shell input tap 540 $y; fi
   }
@@ -602,19 +603,30 @@ download_phase() {
     dlwait "下载完成 pic" 30 "$n0"; shot 29-image-saved
     sum=$(sha256sum $D/pic.png | awk '{print $1}'); got=$(devsum "pic.png")
     if [ -n "$got" ] && [ "$got" = "$sum" ]; then echo "通过：长按 → 保存图片：图片存进了下载文件夹，内容一致"; else echo "失败：长按 → 保存图片：没存对（${got:-没有这个文件}）"; fail=1; grep "MaskTab.*下载" "$L" | tail -4 | cut -c1-260; fi
-    if [ "$(nodehits)" -gt "$c0" ]; then echo "通过：保存图片：app 自己取的这一次也是经实例 #1 的节点出去的"; else echo "失败：保存图片：节点服务端日志里没有这次连接"; fail=1; fi
-    # app 自己取的那一次（Accept-Encoding: identity）：带着这个实例的 Cookie、来源页，UA 和网页自己取图时一样
+    if [ "$(nodehits)" -gt "$c0" ]; then echo "通过：保存图片：取图的这一次也是经实例 #1 的节点出去的"; else echo "失败：保存图片：节点服务端日志里没有这次连接"; fail=1; fi
+    sleep 2
+    if [ "$(count "下载用的会话已关掉")" -ge 1 ]; then echo "通过：保存图片：为它开的看不见的会话下完就关了"; else echo "失败：保存图片：为它开的会话没有关"; fail=1; fi
+    # 为保存而取的那一次（单独打开这个地址，Accept 里有 text/html）：带着这个实例的 Cookie、来源页，UA 和网页自己取图时一样
     python3 - "$R" "$B" <<'P' || fail=1
 import json, sys
 rows = [json.loads(x) for x in open(sys.argv[1]) if x.strip()]
 pic = [r for r in rows if r['p'].startswith('/dl/pic.png')]
-web = [r for r in pic if r['ae'] != 'identity' and r['st'] == 200]
-app = [r for r in pic if r['ae'] == 'identity']
+web = [r for r in pic if 'text/html' not in r['acc'] and r['st'] == 200]
+app = [r for r in pic if 'text/html' in r['acc']]
 ok = bool(app) and bool(web) and app[-1]['st'] == 200 and 'mt=1' in app[-1]['cookie'] and app[-1]['ref'] == sys.argv[2] + '/dl/page.html' and app[-1]['ua'] == web[-1]['ua']
-print(('通过' if ok else '失败') + '：保存图片：app 取图时带了这个实例的 Cookie 和来源页，UA 和网页一样' + ('' if ok else ' ' + json.dumps({'app': app[-1:], 'web': web[-1:]}, ensure_ascii=False)[:600]))
+print(('通过' if ok else '失败') + '：保存图片：取图时带了这个实例的 Cookie 和来源页，UA 和网页一样' + ('' if ok else ' ' + json.dumps({'app': app[-1:], 'web': web[-1:]}, ensure_ascii=False)[:600]))
 sys.exit(0 if ok else 1)
 P
   else echo "失败：长按菜单里没找到“保存图片”"; fail=1; A shell input keyevent KEYCODE_BACK; fi
+
+  # 2a. 防盗链的图片（单独打开回 403）：要明白地说没下成，不能存下一个错误页，也不能留下打不开的会话
+  sleep 6; n0=$(count "下载没成 pic2.png"); c0=$(count "下载用的会话已关掉")
+  HOLD=1300 tap_page "防盗链图片" 605; sleep 3
+  if tap_native "保存图片"; then dlwait "下载没成 pic2.png" 15 "$n0"; sleep 1; shot 29-image-refused
+    k=$(A shell "ls -a /sdcard/Download" 2>/dev/null | grep -c "pic2")
+    if [ "$(count "下载没成 pic2.png：服务器回了 403")" -gt "$n0" ] && [ "$k" = "0" ] && [ "$(count "下载用的会话已关掉")" -gt "$c0" ]; then echo "通过：服务器不给的图片：提示“没下成：服务器回了 403”，没有存下错误页，会话关了"
+    else echo "失败：服务器不给的图片（日志 $(count "下载没成 pic2.png")，下载文件夹里 pic2 的文件 $k 个，会话 $c0 → $(count "下载用的会话已关掉")）"; fail=1; grep "MaskTab.*下载" "$L" | tail -4 | cut -c1-260; fi
+  else echo "失败：长按防盗链图片没有出“保存图片”"; fail=1; A shell input keyevent KEYCODE_BACK; fi
 
   # 2b. 在网页里点下载链接（最常见的情形）：文件下下来，网页留在原地不变
   sleep 6; n0=$(count "下载完成 测试 报告"); c0=$(count "下载用的空标签页已关掉")
@@ -695,6 +707,7 @@ P
   sleep 2; A shell am start -n $ACT --es mt_open downloads > /dev/null; sleep 5; shot 42-downloads-final; closepanel
   A shell "ls -la /sdcard/Download" > "$OUT/dl-files.txt" 2>&1
   cp $R "$OUT/dl-requests.log" 2>/dev/null; cp $W/dl-server.log "$OUT/dl-server.log" 2>/dev/null
+  echo "说明：内置扩展按实例数到的 Cookie（测试页给实例 #1 种了一个）：$(grep "MaskTab Cookie 汇总" "$L" | sed 's/.*MaskTab Cookie 汇总 //' | tr -d '\r' | tr '\n' ';' | cut -c1-200)"
   grep "MaskTab.*\(下载\|长按\|选择文件\|选了\)" "$L" | sed 's/.*MaskTab *: //' | cut -c1-200 | tail -30
   return 0
 }
