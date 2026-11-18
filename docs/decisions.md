@@ -1505,5 +1505,5 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   - 认进程的地方（清上次留下的进程、pid 复用的保护）两个名字都认。卸载时 `masktab-net*.exe` 和记号一起删（内核那份在 `kernel\` 里，整个目录删）。
   - 设置里自己指定的内核仍然不动（不是我们的目录，不往里写）；开发时 `MASKTAB_BRAND_ANY=1` 可以让它也做副本。
   - **检查**：Windows 冒烟多一项“进程的文件名是 MaskTab 的”（`masktab-browser.exe` ≥ 3 个、`masktab-net.exe` 1 个、没有 `mihomo.exe`）；卸载检查多一项“删掉了代理内核的副本”。
-  - **实测**见 PROGRESS 2026-11-18 那一节（需求方电脑的开发版和装着的那份）。
+  - **实测**见 PROGRESS “v0.1.239” 那一节（需求方电脑的开发版和装着的那份）。
 - **怎么撤**：设 `MASKTAB_NO_BRAND=1`（照旧起 `chrome.exe`、`mihomo.exe`，副本留着不用，可以手动删）；成组——`MASKTAB_NO_ANCHOR=1`。
