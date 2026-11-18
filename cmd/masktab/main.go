@@ -232,7 +232,7 @@ func staleService(dir string) int {
 // stopInstalled 让装在 dir 里的 MaskTab 退出，等 masktab.exe 解除占用。安装程序在替换文件前把新版的 masktab.exe
 // 解到临时目录来跑这个（所以“自己”不在 dir 里，不会把自己结束掉）。
 //  1. 锁文件叫得通就请它自己退（关窗口、保存状态）；
-//  2. 还在的（锁文件丢了、卡住了），按完整路径结束：只动 dir 里的 masktab 和它的 mihomo，别处的不碰；
+//  2. 还在的（锁文件丢了、卡住了），按完整路径结束：只动 dir 里的 masktab 和它的代理内核（mihomo / masktab-net），别处的不碰；
 //  3. 等文件能写了返回 0；10 秒还不行返回 1（多半是那个进程权限比安装程序高）。
 func stopInstalled(dir string) int {
 	dir, _ = filepath.Abs(dir)
@@ -249,6 +249,7 @@ func stopInstalled(dir string) int {
 	}
 	procs.Stop(exe, 5*time.Second)
 	procs.Stop(filepath.Join(dir, "mihomo"+ext), 3*time.Second)
+	procs.Stop(filepath.Join(dir, "masktab-net"+ext), 3*time.Second) // 0.1.21x 起代理内核以这份副本的名字在跑（decisions UI-30）
 	for i := 0; i < 100; i++ {
 		if _, err := os.Stat(exe); err != nil {
 			return 0
