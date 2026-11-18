@@ -174,22 +174,38 @@ jobs:
         if: inputs.taskbar != ''
         shell: pwsh
         run: |
+          # 先真的挪任务栏（改注册表、重启资源管理器）；测试机上挪不动的话（44327000787：可用区域没变），
+          # 改用系统接口直接把“可用区域”的左上角挪开——窗口最大化、摆窗口的坐标换算看的都是可用区域，效果和任务栏在那一边一样。
           Add-Type -AssemblyName System.Windows.Forms
-          $before = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-          $edge = @{ left = 0; top = 1 }['${{ inputs.taskbar }}']
+          Add-Type -Namespace W -Name A -MemberDefinition '[StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; } [DllImport("user32.dll", SetLastError=true)] public static extern bool SystemParametersInfo(uint a, uint b, ref R r, uint f);'
+          $want = '${{ inputs.taskbar }}'
+          $edge = @{ left = 0; top = 1 }[$want]
           if ($null -eq $edge) { throw '只认 top / left' }
+          $scr = [System.Windows.Forms.Screen]::PrimaryScreen
+          $before = $scr.WorkingArea
+          $moved = { $w = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; ($want -eq 'top' -and $w.Top -gt 0) -or ($want -eq 'left' -and $w.Left -gt 0) }
           $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3'
-          $v = (Get-ItemProperty $key).Settings
-          $v[12] = $edge
-          Set-ItemProperty $key -Name Settings -Value $v
-          Stop-Process -Name explorer -Force
-          Start-Sleep 3
-          if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
-          $after = $before
-          for ($i = 0; $i -lt 30; $i++) { Start-Sleep 1; $after = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; if ($after -ne $before) { break } }
-          "可用区域：$before → $after"
-          if ('${{ inputs.taskbar }}' -eq 'top' -and $after.Top -le 0) { throw '任务栏没有挪到上边' }
-          if ('${{ inputs.taskbar }}' -eq 'left' -and $after.Left -le 0) { throw '任务栏没有挪到左边' }
+          try {
+            [byte[]]$v = (Get-ItemProperty $key).Settings
+            "任务栏原来在：$($v[12])（0 左 1 上 2 右 3 下）"
+            $v[12] = $edge
+            Set-ItemProperty $key -Name Settings -Value $v -Type Binary
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Sleep 3
+            if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
+            for ($i = 0; $i -lt 15 -and -not (& $moved); $i++) { Start-Sleep 1 }
+          } catch { "挪任务栏出错：$_" }
+          $how = '真的把任务栏挪过去了'
+          if (-not (& $moved)) {
+            $how = '任务栏挪不动，改成直接改可用区域（模拟）'
+            $b = $scr.Bounds; $r = New-Object W.A+R
+            $r.L = $b.Left; $r.T = $b.Top; $r.Rt = $b.Right; $r.B = $b.Bottom
+            if ($want -eq 'top') { $r.T = $b.Top + 48 } else { $r.L = $b.Left + 62 }
+            if (-not [W.A]::SystemParametersInfo(0x002F, 0, [ref]$r, 3)) { throw "改可用区域失败：$([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+            Start-Sleep 2
+          }
+          "$how。可用区域：$before → $([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea)"
+          if (-not (& $moved)) { throw "可用区域的左上角没有挪开（$want）" }
       - name: 冒烟测试（对装好的那一份；内核与代理内核都来自安装包，不应再下载）
         run: node scripts/smoke.mjs --bin C:\mt\masktab.exe --data C:\mt\data --shots shots --visible
       - name: 扩展“重载”不用重启（两个开着的实例，改了代码点重载就生效；决策 EXT-1）
