@@ -368,3 +368,26 @@ func Tint(c, bg [3]int, a float64) [3]int {
 func OnDark(c [3]int) bool {
 	return 299*c[0]+587*c[1]+114*c[2] < 150*1000
 }
+
+// DIPBounds 把屏幕上的一块（像素）换成浏览器命令行认的写法：左、上、宽、高，单位是按缩放折算过的“点”。
+// 新开的实例带着它启动，窗口一出来就在合并窗口现在的位置（decisions UI-31），不用先在别处亮一下再被挪过来。
+func DIPBounds(r Rect, scale float64) [4]int {
+	if scale <= 0 {
+		scale = 1
+	}
+	rd := func(v int) int { return int(float64(v)/scale + 0.5*sign(v)) }
+	return [4]int{rd(r.L), rd(r.T), rd(r.W()), rd(r.H())}
+}
+
+func sign(v int) float64 {
+	if v < 0 {
+		return -1
+	}
+	return 1
+}
+
+// InPlace：新窗口是不是已经（差不多）在该在的位置上了——四条边都差不出 slack 个像素。
+func InPlace(got, want Rect, slack int) bool {
+	d := func(a, b int) bool { return a-b <= slack && b-a <= slack }
+	return want.W() > 0 && d(got.L, want.L) && d(got.T, want.T) && d(got.R, want.R) && d(got.B, want.B)
+}

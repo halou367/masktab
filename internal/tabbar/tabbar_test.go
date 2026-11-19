@@ -349,3 +349,33 @@ func TestMorph(t *testing.T) {
 		t.Fatal("节奏不对")
 	}
 }
+
+// 新开的实例带着合并窗口的位置启动（decisions UI-31）：像素按屏幕缩放折成浏览器命令行用的点；负坐标（副屏在左边）照样四舍五入。
+func TestDIPBounds(t *testing.T) {
+	if got := DIPBounds(Rect{L: 100, T: 50, R: 1700, B: 1050}, 1); got != [4]int{100, 50, 1600, 1000} {
+		t.Fatalf("1 倍：%v", got)
+	}
+	if got := DIPBounds(Rect{L: 150, T: 75, R: 2550, B: 1575}, 1.5); got != [4]int{100, 50, 1600, 1000} {
+		t.Fatalf("1.5 倍：%v", got)
+	}
+	if got := DIPBounds(Rect{L: -1913, T: -7, R: -313, B: 993}, 1.25); got != [4]int{-1530, -6, 1280, 800} {
+		t.Fatalf("负坐标：%v", got)
+	}
+	if got := DIPBounds(Rect{L: 10, T: 10, R: 810, B: 610}, 0); got != [4]int{10, 10, 800, 600} {
+		t.Fatalf("缩放没量到按 1 倍：%v", got)
+	}
+}
+
+// 新窗口已经在位（差几个像素不算）就不用再盖一层渐变；差得多的（没带上位置、被系统挪过）照旧。
+func TestInPlace(t *testing.T) {
+	want := Rect{L: 100, T: 50, R: 1700, B: 1050}
+	if !InPlace(Rect{L: 108, T: 50, R: 1692, B: 1042}, want, 24) {
+		t.Fatal("差 8 个像素应该算在位")
+	}
+	if InPlace(Rect{L: 130, T: 80, R: 1330, B: 880}, want, 24) {
+		t.Fatal("浏览器默认位置不算在位")
+	}
+	if InPlace(want, Rect{}, 24) {
+		t.Fatal("没有目标位置不算在位")
+	}
+}

@@ -305,6 +305,14 @@ func (a *App) Launch(id string) error {
 		return nil
 	}
 	a.step(id, 7)
+	// 合并窗口开着、已经有窗口：新窗口带着那一组现在的位置和大小启动，一出来就在位（decisions UI-31）。
+	// 以前它先按浏览器自己的默认位置亮出来，四分之一秒里被发现、再挪过去——看到的就是“闪一下多了个窗口”。
+	// 要在拿 a.mu 之前问：管实例栏的线程办事时会回头问核心服务的状态。
+	var bounds *[4]int
+	if hr, hs, ok := tabbar.Home(); ok && !a.hosted() {
+		b := tabbar.DIPBounds(hr, hs)
+		bounds = &b
+	}
 	a.mu.Lock()
 	// 这次没探出出口，但线路和上次一样：窗口按上次那个出口的时区、语言启动。线路只是一时不通的话，
 	// 恢复以后出口多半还在原来的国家，不用为了时区再重启一次。主通道仍然断着，要等 refresh 现探确认。
@@ -328,7 +336,7 @@ func (a *App) Launch(id string) error {
 		ProfileDir: a.p("profiles", in.ID), No: in.No, Normal: !masked, Color: hexColor(in.Color),
 		Seed: seed32(in.FP.Seed), HardwareConcurrency: cores(in), PlatformVersion: in.FP.PlatformVersion, Platform: in.FP.Platform, Brand: in.FP.Brand,
 		DisableSpoofing: in.FP.DisableSpoofing, Timezone: tz, Lang: lang,
-		NewTabURL: "chrome-extension://" + companion.ID + "/newtab.html",
+		NewTabURL: "chrome-extension://" + companion.ID + "/newtab.html", Bounds: bounds,
 	}
 	if lang != "" {
 		l.AcceptLang = lang

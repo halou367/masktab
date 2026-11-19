@@ -112,6 +112,8 @@ var (
 	pending string               // Focus 要切到的实例
 	stopped bool
 	snap    map[string]any // 给诊断接口看的现状
+	homeR   Rect           // 新开的实例的窗口该出现在哪（见 Home）；宽为 0 = 没有
+	homeSc  float64
 )
 
 // Run 开始管窗口并一直处理消息；不返回。在自己的 goroutine 里调用。
@@ -220,6 +222,15 @@ func keys(m map[uintptr]bool) []uintptr {
 	return out
 }
 
+// Home：新开的实例的窗口该出现在哪——它要并进去的那一组当前窗口的位置和大小（像素），以及那块屏幕的缩放。
+// 核心服务启动浏览器时带上（decisions UI-31）：窗口一出来就在位，不是先按浏览器自己的默认位置亮一下、再被挪过来。
+// 没开合并窗口、还没有窗口、当前窗口最小化着：ok = false，照浏览器自己记的位置开。哪个 goroutine 都可以调。
+func Home() (Rect, float64, bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	return homeR, homeSc, homeR.W() > 0 && !stopped
+}
+
 // Debug 返回现状（诊断、实机测试用）。
 func Debug() map[string]any {
 	mu.Lock()
@@ -316,6 +327,20 @@ func (m *mgr) home() *group {
 		return m.groups[0]
 	}
 	return m.newGroup()
+}
+
+// homePeek 和 home 一样挑一组，但不新建（只是看看）。
+func (m *mgr) homePeek() *group {
+	if m.alive(m.want) && time.Since(m.wantAt) < 30*time.Second {
+		return m.want
+	}
+	if m.alive(m.cur) {
+		return m.cur
+	}
+	if len(m.groups) > 0 {
+		return m.groups[0]
+	}
+	return nil
 }
 
 func (g *group) ids() []string {
@@ -617,7 +642,13 @@ func (g *group) switchTo(id string) {
 	t0 := time.Now()
 	if cur != 0 && cur != tgt && isWindow(cur) && isVisible(cur) && !isIconic(cur) {
 		r = winRect(cur)
-		if !m.drag.on { // 换实例不闪：先把现在的样子盖在上面，底下换好了再让它淡出去（decisions UI-18）
+		// 新开的实例带着这一组的位置启动（Home，decisions UI-31）：它的窗口一出来就盖在当前窗口上，系统给它放的是“打开”的动画。
+		// 这时再拍一张屏幕盖上去就多余了——拍到的已经是新窗口（或者它放到一半的动画），盖上去再淡出就是多闪一下。直接把底下那个藏起来。
+		inPlace := isVisible(tgt) && !isIconic(tgt) && InPlace(winRect(tgt), r, px(24, g.scale))
+		if inPlace {
+			m.note("switch: fresh window already in place")
+		}
+		if !m.drag.on && !inPlace { // 换实例不闪：先把现在的样子盖在上面，底下换好了再让它淡出去（decisions UI-18）
 			v = g.veilUp(cur)
 		}
 	}
@@ -846,6 +877,9 @@ func (g *group) hideBar() {
 
 // letGo：开关关了、或者一个实例都没有了。把藏着的窗口放出来（稍微错开，免得叠成一摞看不出有几个），拆掉所有的实例栏。
 func (m *mgr) letGo() {
+	mu.Lock()
+	homeR = Rect{} // 不管窗口了：新开的实例照浏览器自己记的位置开
+	mu.Unlock()
 	if m.off {
 		return
 	}
@@ -919,11 +953,20 @@ func (m *mgr) snapshot() {
 	for k, v := range cur { // 最近用过的那一组的情况也放在最外层：只有一组时测试脚本不用管“组”
 		s[k] = v
 	}
+	var hr Rect
+	hs := 1.0
+	if g := m.homePeek(); g != nil {
+		if h := m.main[g.active]; h != 0 && isWindow(h) && !isIconic(h) && !isZoomed(h) {
+			hr, hs = winRect(h), scaleOf(h)
+		}
+	}
+	s["home"] = hr
 	s["enabled"], s["groups"], s["windows"], s["dragging"] = m.st.Enabled, groups, wins, m.drag.on
 	s["compact"] = m.st.Compact
 	s["trace"] = append([]string(nil), m.trace...)
 	mu.Lock()
 	snap = s
+	homeR, homeSc = hr, hs
 	mu.Unlock()
 }
 

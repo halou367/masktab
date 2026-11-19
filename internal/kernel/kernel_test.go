@@ -53,3 +53,20 @@ func TestArgs(t *testing.T) {
 		}
 	}
 }
+
+// 合并窗口：新窗口带着位置和大小启动（decisions UI-31）；没给、或者小得不像话就不带，浏览器用自己记的。
+func TestArgsBounds(t *testing.T) {
+	l := Launch{ProfileDir: "/p/3", No: 3, Bounds: &[4]int{-1530, 40, 1280, 800}}
+	a := Get("fingerprint-chromium").Args(l)
+	if !has(a, "--window-position=-1530,40") || !has(a, "--window-size=1280,800") {
+		t.Fatalf("应带窗口位置和大小：%v", a)
+	}
+	for _, b := range []*[4]int{nil, {0, 0, 120, 80}} {
+		l.Bounds = b
+		for _, x := range Get("ungoogled").Args(l) {
+			if strings.HasPrefix(x, "--window-position") || strings.HasPrefix(x, "--window-size") {
+				t.Fatalf("不该带窗口位置：%v", x)
+			}
+		}
+	}
+}

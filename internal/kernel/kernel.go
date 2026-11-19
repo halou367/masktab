@@ -29,7 +29,8 @@ type Launch struct {
 	Lang                string
 	AcceptLang          string
 	StartURL            string
-	NewTabURL           string // 新标签页地址（伴随扩展的页面）；内核支持 --custom-ntp 时使用
+	NewTabURL           string  // 新标签页地址（伴随扩展的页面）；内核支持 --custom-ntp 时使用
+	Bounds              *[4]int // 窗口一出来就摆在这里：左、上、宽、高（按屏幕缩放折算过的点）。nil = 浏览器自己记的位置（decisions UI-31）
 }
 
 type Caps struct {
@@ -95,6 +96,9 @@ func commonArgs(l Launch) []string {
 		// 已经被这样停用的，带上这个参数重开就自己好了。每次冒烟都实测（scripts/ext-reload-e2e.mjs）。
 		// 注意：内核只认最后一个 --disable-features，以后要再关别的功能得写在同一个参数里（用逗号隔开）。
 		"--disable-features=ExtensionDisableUnsupportedDeveloper",
+	}
+	if b := l.Bounds; b != nil && b[2] >= 300 && b[3] >= 200 {
+		a = append(a, fmt.Sprintf("--window-position=%d,%d", b[0], b[1]), fmt.Sprintf("--window-size=%d,%d", b[2], b[3]))
 	}
 	if l.ProxyPort > 0 {
 		a = append(a,
