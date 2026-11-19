@@ -11,6 +11,7 @@
 //   history         最近访问（app 按实例记）
 //   downloads       下载内容（app 按实例记，文件在系统的“下载”文件夹里；决策 A-14）
 //   new             新建实例向导（头像菜单的“新建实例”打开它，决策 UI-25）
+//   mail/<id>[/<key>]  这个实例的信箱（decisions MB-1；和电脑同一份 mail.js）
 //   menu            头像菜单的页面版（平时头像菜单是 app 原生画的、浮在网页上，决策 UI-2；这个路由留作兜底）
 //   __back          app 的系统返回键：由页面按自己的返回栈处理（见 goBack）
 // 数据全部来自核心服务（和电脑版是同一个程序，决策 D-4），经 app 的 Bridge 转一道；这里没有手机专用的接口和状态。
@@ -23,6 +24,7 @@ import { syncIcons, siteIcon } from './sites.js';
 import { panel } from './panel.js';
 import { setLinker } from './common.js';
 import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView, verifyView } from './pages.js';
+import { mailView, mailBack as mailBack0 } from './mail.js';
 
 const root = document.getElementById('root');
 const BOOT = window.MTBOOT || { report() {}, fail() {}, ready: false };
@@ -46,6 +48,7 @@ function goBack() {
   const p = pageOf();
   if ((p === 'node' || p === 'fp') && panel.back()) return;
   if (p === 'instances' && route().includes('/')) { navving = true; navDir = 'back'; location.replace('#instances'); return; }
+  if (p === 'mail' && mailBack0(() => render(true))) return; // 信箱里开着一封信：先回到列表
   const prev = stack.pop();
   if (prev) { navving = true; navDir = 'back'; location.replace('#' + prev); } else closeMe();
 }
@@ -203,7 +206,7 @@ function render(force) {
     const view = {
       settings: () => settingsHome(c), 'settings/adv': () => settingsAdv(c), 'settings/about': () => settingsAbout(c), 'settings/ntp': () => settingsNtp(c), 'settings/verify': () => verifyView(c),
       node: () => panel.kids(), fp: () => panel.kids(), instances: () => instancesView({ st, act, load, render: () => render(true), lite: true, back, openNode: (id) => open('node/' + id), open }),
-      exits: () => exitsView(c), addons: addonsPage, diag: () => diagView(c), history: historyPage, downloads: downloadsPage,
+      exits: () => exitsView(c), addons: addonsPage, mail: () => { const [, mid, key] = route().split('/'); return mailView({ ...c, load }, mid || st.me.id, key ? decodeURIComponent(key) : ''); }, diag: () => diagView(c), history: historyPage, downloads: downloadsPage,
       menu: () => [appBar('', back), menuView(st, { node: () => open('node'), fp: () => open('fp'), open, render: () => render(true) })],
       // 新建实例向导（头像菜单的“新建实例”由 app 打开这一页，决策 UI-25）：建好后 app 收起页面并切到新实例；取消 = 收起
       // 点了“创建”之后向导留着显示启动进度（决策 UI-31）；开好了 app 自己切到新实例并收起这一页（Bridge.after → Core.openWhenReady），

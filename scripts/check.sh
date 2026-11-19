@@ -2,7 +2,7 @@
 # 本地检查，从快到慢四层。改了什么就跑到哪一层（分级见 AGENTS.md“改动分三级”）。CI 跑的也是这个脚本。
 #   scripts/check.sh fast            秒级：格式、go vet（Linux + Windows）、go test、界面脚本语法
 #   scripts/check.sh pages [段…]     十几秒～一分钟：两端页面的点按流程（假状态 + 真页面）。不写段名 = 全部，分几个进程同时跑
-#                                    段名：shots narrow light flow newtab desk v6 tune update safe import a11y heal sstp fp downloads
+#                                    段名：shots narrow light flow newtab desk v6 tune update safe import a11y heal sstp fp downloads mail
 #   scripts/check.sh kt              半分钟：安卓 app 的 Kotlin 代码类型检查（不用安卓 SDK；第一次要下约 400 MB 的工具）
 #   scripts/check.sh ext             半分钟：真 Chromium 里装上真扩展 + 真核心服务（录入登录、自动填写、工具栏图标、网页翻译）
 #   scripts/check.sh smoke           三分钟：真内核 + 真核心服务（开实例、指纹、隔离、断流、订阅、编号…）
@@ -17,7 +17,7 @@ need_pw() { [ -d "$MT_PW/node_modules/playwright" ] || { echo "还没装 Playwri
 
 # 手机内置扩展 = companion/ext 里这几样共用文件 + android/ext 里的全部。
 # 这份清单还有一处要同步：android/app/build.gradle.kts 的 BuildExt（打进 APK 的就是它列的那些）。
-SHARED_EXT="ui.js ui.css sites.js menu.js instances.js wizard.js translate.js ippure.js autofill.js common.js panel.js panel.css pages.js ntp.js vaultmsg.js assets"
+SHARED_EXT="ui.js ui.css sites.js menu.js instances.js wizard.js translate.js ippure.js autofill.js common.js panel.js panel.css pages.js ntp.js vaultmsg.js mail.js assets"
 
 fast() {
   local t0=$SECONDS bad=0 out
@@ -37,7 +37,7 @@ fast() {
 
 # 页面检查：各段分成五组同时跑。页面检查的时间大半是在等页面动画，不吃 CPU，所以组数不用跟着核数走。
 # 分组按各段用时排匀（2026-11：flow 31 秒，desk 22，narrow 21，shots 13，heal 14，update 11，其余个位数）；JOBS=1 改成一个进程依次跑。
-PAGE_GROUPS=("flow" "desk" "narrow" "shots light v6 tune groups" "heal update newtab safe import a11y sstp fp downloads")
+PAGE_GROUPS=("flow" "desk" "narrow" "shots light v6 tune groups" "heal update newtab safe import a11y sstp fp downloads mail")
 pages() {
   need_pw
   local t0=$SECONDS ext="$MT_OUT/ext" shots="$MT_OUT/pages" bad=0 groups=() i

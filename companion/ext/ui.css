@@ -718,6 +718,42 @@ html.wzwin .wzpage > .wz > .vp { flex: 0 1 auto; min-height: 0; overflow-y: auto
 html.wzwin body.bye #main { opacity: 0; transition: opacity var(--d-s) var(--e-acc); }
 
 /* “减少动画”（系统设置 / 浏览器 prefers-reduced-motion）：时长全部归零，只留转圈这类表示“正在进行”的 */
+/* ---------- 信箱（mail.js，decisions MB-1）：列表、详情、设置对话框。两端共用 ---------- */
+.mhead { display: flex; align-items: center; gap: 8px; padding: 2px 16px 8px; font-size: 13px; color: var(--on2); flex-wrap: wrap; }
+.mhead .el { max-width: 60%; min-width: 0; color: var(--on); }
+.mtabs { padding: 0 16px 8px; }
+.mlist { display: flex; flex-direction: column; padding: 0 8px; }
+.mrow { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 8px; border-radius: 16px; color: var(--on); min-height: 64px; }
+.mrow:hover { background: var(--st); }
+.mrow .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mrow .l1 { display: flex; gap: 8px; align-items: baseline; }
+.mrow .from { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--on2); }
+.mrow .when { flex: none; font-size: 12px; color: var(--on3); }
+.mrow .subj { font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mrow .prev { font-size: 12.5px; color: var(--on3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mrow.unread .from, .mrow.unread .subj { color: var(--on); font-weight: 600; }
+.mdot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: transparent; }
+.mrow.unread .mdot { background: var(--acc); }
+.mdot.n { width: auto; height: 18px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--acc); color: var(--onacc); font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; margin-left: 6px; }
+.mcode { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px; border-radius: 15px; background: var(--tonal); color: var(--ontonal); font-size: 13px; }
+.mdetail { padding: 0 16px 24px; display: flex; flex-direction: column; gap: 10px; }
+.msubj { margin: 4px 0 0; font-size: 20px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.mmeta { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; color: var(--on3); }
+.mmeta b { font-weight: 400; color: var(--on); min-width: 0; overflow-wrap: anywhere; }
+.mcodebox { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border-radius: 16px; background: var(--tonal); color: var(--ontonal); }
+.mcodebox b { flex: 1; font-size: 22px; letter-spacing: 2px; }
+.mdetail .warn { margin: 0; }
+.mframe { display: block; width: 100%; height: 62vh; min-height: 320px; border: 1px solid var(--div); background: #fff; }
+.mtext { margin: 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.6 inherit; background: var(--surf2); }
+.mempty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 40px 24px; text-align: center; color: var(--on2); }
+.mempty .ic { color: var(--on3); } .mempty b { font-size: 16px; color: var(--on); } .mempty .sub { max-width: 420px; line-height: 1.5; font-size: 13.5px; }
+.dlg.mset { width: min(440px, calc(100% - 32px)); }
+.mset .mlbl { display: block; margin: 4px 24px 6px; font-size: 13px; color: var(--on2); }
+.mset textarea { min-height: 76px; }
+.mset .mcard { margin: 0 24px 12px; padding: 8px 12px; border-radius: 12px; background: var(--surf2); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--on2); }
+.mset .mhint { margin-top: -6px; font-size: 12.5px; } .mset .mhint.bad { color: var(--bad); }
+.mset .acts .grow { flex: 1; }
+.mchip { color: inherit; padding: 0 2px; min-height: 0; } .mchip.on { color: var(--acc); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   :root { --d-xs: 0ms; --d-s: 0ms; --d-m: 0ms; --d-l: 0ms; }
   *, *::before, *::after { animation-duration: 0ms !important; animation-delay: 0ms !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }

@@ -36,6 +36,7 @@ async function render() {
     recent: () => api('GET', `/ui/recent?inst=${encodeURIComponent(me.id)}`).then((r) => r || []),
     openNode: () => api('POST', '/ui/open', { route: 'node' }),
     openUpdate: () => api('POST', '/ui/open', { route: 'settings/about' }),
+    openMail: (id) => api('POST', '/ui/open', { route: 'mail/' + id }), // 信箱（decisions MB-1）
   });
   if (bound?.reg === 'async') root.append(h('div', { class: 'foot noic', title: '这台设备的内核不支持按容器同步注入指纹脚本，已改为页面加载后注入' }, '指纹异步注入'));
 }

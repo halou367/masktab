@@ -13,5 +13,6 @@ const recent = () => new Promise((res) => {
 try {
   const st = await api('GET', '/api/state');
   await renderNtp(root, st, st.me, { pc: true, recent, openNode: () => chrome.tabs.create({ url: chrome.runtime.getURL('app.html#node') }),
-    openUpdate: () => chrome.tabs.create({ url: chrome.runtime.getURL('app.html#settings/about') }) });
+    openUpdate: () => chrome.tabs.create({ url: chrome.runtime.getURL('app.html#settings/about') }),
+    openMail: (id) => chrome.tabs.create({ url: chrome.runtime.getURL('app.html#mail/' + id) }) });
 } catch (e) { root.replaceChildren(h('div', { class: 'empty' }, '核心服务未连接：' + e.message)); }

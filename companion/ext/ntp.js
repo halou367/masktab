@@ -31,6 +31,12 @@ export async function renderNtp(root, st, me, host) {
   if (up?.available && st.settings?.updateSkip !== up.latest && host.openUpdate) {
     kids.push(h('button', { class: 'nswarn out upd', 'aria-label': '有新版本', onclick: () => host.openUpdate() }, icon('update', 16), `MaskTab 有新版本 ${up.latest}`, h('span', { class: 'grow' }), up.phase === 'ready' ? '已下载，去安装' : '去更新', icon('chevR', 16)));
   }
+  // 信箱有新邮件（decisions MB-1）：一行提示，点了打开这个实例的信箱。手机上没有系统通知（GeckoView 的扩展用不了通知接口），靠这一行和实例卡片上的未读数。
+  const mu = me.mail?.unread || 0, mn = me.mail?.newest?.[0];
+  if (mu > 0 && host.openMail) {
+    kids.push(h('button', { class: 'nswarn out mailnew', 'aria-label': '有新邮件', onclick: () => host.openMail(me.id) }, icon('mail', 16),
+      h('span', { class: 'el' }, `${mu} 封新邮件${mn ? '：' + (mn.code ? `验证码 ${mn.code} · ` : '') + (mn.subject || mn.from || '') : ''}`), h('span', { class: 'grow' }), '查看'));
+  }
   // 有要重启才生效的改动（加了扩展、改了指纹…）：一行提示，点了就重启这个实例（决策 UI-19）。
   // 电脑上“出口时区变了”那种是断着网的，在下面的卡片里用红色的那一行说（也是点了就重启）。
   if (me.rt?.running && me.rt.needRestart?.length && !(st.host !== 'android' && me.rt.needRestart.includes('timezone'))) {

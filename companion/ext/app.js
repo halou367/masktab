@@ -5,9 +5,10 @@ import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
 import { exitsView, settingsHome, settingsAdv, settingsAbout, settingsNtp, diagView } from './pages.js';
 import { usageView } from './usage.js';
+import { mailView } from './mail.js';
 
 // 电脑版设置页的外壳：左边导航（照 Chrome 桌面设置页），右边一栏放共用的页面（pages.js / instances.js / panel.js，和手机同一份）。
-// 路由 = 地址 # 后面：settings（概览）、instances[/id|/import]、node[/实例 id]、fp、exits、extensions、settings/adv|about|ntp、diag。
+// 路由 = 地址 # 后面：settings（概览）、instances[/id|/import]、node[/实例 id]、fp、exits、extensions、settings/adv|about|ntp、diag、mail/<实例 id>[/<邮件 key>]（信箱，decisions MB-1）。
 // node 是本窗口这个实例的节点；node/<id> 是从实例管理点进来、改另一个实例的（它不用开着，决策 F-HEAL）。
 // 左边导航照定稿的演示（决策 UI-10）：上面一组是 MaskTab 自己的页，下面“浏览器”一组是基本设置和高级。
 // 没有“概览”：它只是把左边这几项再列一遍。“新标签页”的设置从“基本设置”里点进去。
@@ -104,7 +105,7 @@ function render() {
   // 新建向导的小窗口有自己的一页（wizard.html，决策 UI-31）；老地址 app.html#new 转过去
   if (p === 'new') { location.replace('wizard.html'); return; }
   const tid = p === 'node' ? route().split('/')[1] || '' : ''; // 节点面板对着哪个实例（空 = 本窗口的）
-  const at = p === 'settings/ntp' ? 'settings' : tid ? 'instances' : p; // “新标签页”的设置是从“基本设置”点进去的；改别的实例的节点算在“实例”里
+  const at = p === 'settings/ntp' ? 'settings' : tid || p === 'mail' ? 'instances' : p; // 信箱是某个实例的，算在“实例”里 // “新标签页”的设置是从“基本设置”点进去的；改别的实例的节点算在“实例”里
   document.getElementById('nav').replaceChildren(h('div', { class: 'h' }, h('span', { class: 'lg' }, icon('mask', 20)), 'MaskTab'),
     ...NAV.flatMap(([g, l]) => [g && h('div', { class: 'g' }, g), ...l.map(([r, ic, t]) => h('button', { class: at === r ? 'on' : '', onclick: () => open(r) }, icon(ic, 20), t))]).filter(Boolean));
   const c = { st, act, open, back, render, link: (u) => chrome.tabs.create({ url: u }), diag: diagText };
@@ -118,7 +119,8 @@ function render() {
   } else {
     // 左边导航里有的页没有“返回”（导航就在旁边）；只有从“基本设置”点进去的“新标签页”有
     kids = ({ settings: () => settingsHome({ ...c, back: null, pc: true }), instances: () => instancesView(ic), exits: () => exitsView({ ...c, back: null }), extensions,
-      'settings/adv': () => settingsAdv({ ...c, back: null }), 'settings/about': () => settingsAbout({ ...c, back: null }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back: null }), usage: () => usageView({ ...c, back: null }) }[p] || (() => instancesView(ic)))();
+      'settings/adv': () => settingsAdv({ ...c, back: null }), 'settings/about': () => settingsAbout({ ...c, back: null }), 'settings/ntp': () => settingsNtp({ ...c, back }), diag: () => diagView({ ...c, back: null }), usage: () => usageView({ ...c, back: null }),
+      mail: () => { const [, mid, key] = route().split('/'); return mailView({ ...c, load, back: { fn: () => open('instances/' + mid), title: '回到实例' } }, mid, key ? decodeURIComponent(key) : ''); } }[p] || (() => instancesView(ic)))();
   }
   const snap = lastPage === p ? flipSnap(main) : null; // 同一页里重画：列表增删、换位置有过渡（决策 UI-26）
   main.dataset.page = p;
@@ -127,7 +129,7 @@ function render() {
   flipPlay(snap, main);
   if (lastPage !== p) { scrollTo(0, 0); pageIn(main, 'fade'); }
   lastPage = p;
-  document.title = 'MaskTab · ' + (TITLES[p] || '设置');
+  document.title = 'MaskTab · ' + (TITLES[p] || (p === 'mail' ? '信箱' : '设置'));
 }
 let lastPage = '';
 addEventListener('hashchange', () => render());

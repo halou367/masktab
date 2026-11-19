@@ -100,3 +100,17 @@ export function cfRisk(st, inst) {
   return { n: null, st: '', text: '未测', note: '越低越好。要用这个实例的浏览器去测：点“实测”打开 ippure.com，数字出来后自动记下', tip: `CF 风险还没测\n${CF_WHAT}\n要用这个实例的浏览器经这条出口去测：点“实测”打开 ippure.com/cloudflare，数字出来后自动记下`, can: true };
 }
 export const TYPE_NAME = { res: '住宅', dc: '机房', mobile: '移动' };
+
+// 信箱（decisions MB-1）
+/** 这个实例有哪些还没通知过的新邮件。seen = 通知过的 key；返回 { notes: [{ key, title, message }], seen: 新的 key 集合 }。
+ *  第一次（seen 为 null）只记下现在的，不弹——后台刚起来时不把以前的未读再弹一遍。 */
+export function mailNotes(inst, seen) {
+  const list = inst?.mail?.newest || [], keys = list.map((m) => m.key);
+  if (!seen) return { notes: [], seen: keys };
+  const old = new Set(seen), notes = [];
+  for (const m of list) {
+    if (old.has(m.key)) continue;
+    notes.push({ key: m.key, title: `#${inst.no} 新邮件：${m.from || '（未知发件人）'}`, message: (m.code ? `验证码 ${m.code} · ` : '') + (m.subject || '（无主题）') });
+  }
+  return { notes, seen: [...new Set([...keys, ...seen])].slice(0, 50) };
+}

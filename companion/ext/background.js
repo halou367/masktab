@@ -1,6 +1,7 @@
 import './swlife.js'; // 新后台一装好就接手（放最前面：事件要在脚本第一遍执行时挂上）
 import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText, letterOf } from './api.js';
 import { avatarPx, hexRgb } from './icon.js';
+import { mailNotes } from './common.js';
 import './vaultmsg.js'; // 挂出 globalThis.MTVault（和手机的后台共用，所以不是模块导出）
 
 let seq = 0;
@@ -59,6 +60,9 @@ async function paint(st) {
   if (rt.running) lines.push(`↑ ${fmtBytes(rt.upRate)}/s  ↓ ${fmtBytes(rt.downRate)}/s`, `已用 ↑ ${fmtBytes(rt.up)}  ↓ ${fmtBytes(rt.down)}`);
   if (rt.needRestart?.length) { badge = '↻'; bcolor = '#1a73e8'; lines.push('需重启：' + rt.needRestart.map((w) => RESTART_WHY[w] || w).join('、')); }
   if (rt.notice) lines.push(noticeText(rt.notice));
+  // 信箱的未读数（decisions MB-1）：角标没别的事要说时写未读数；悬停提示里写一行
+  const unread = me.mail?.unread || 0;
+  if (unread > 0) { lines.push(`信箱：${unread} 封未读`); if (!badge) { badge = unread > 99 ? '99+' : String(unread); bcolor = '#1a73e8'; } }
   await setIcon(kind, ex?.country, me.color, me, dot);
   globalThis.lastIcon = { kind, text: letterOf(me), cc: ex?.country || '', dot, badge }; // 测试从调试端口看“图标上画了什么”
   await chrome.action.setBadgeText({ text: badge });
@@ -95,8 +99,33 @@ async function refresh() {
   const st = await api('GET', '/api/state');
   await paint(st);
   hotReload(st);
+  mailNotify(st).catch(() => {});
   return st;
 }
+
+// ---------- 信箱的新邮件通知（decisions MB-1） ----------
+// 核心服务在状态里给本实例最新的几封未读（me.mail.newest）；没通知过的弹一条系统通知，点通知打开本实例的信箱页（直接打开那一封）。
+// 通知过哪些记在 storage.session（后台会被收走再拉起；浏览器一关就清，下次启动不把老的未读再弹一遍）。
+async function mailNotify(st) {
+  const me = st.me;
+  if (!chrome.notifications || !me) return;
+  const { mailSeen = null } = await chrome.storage.session.get('mailSeen');
+  if (!me.mail) { if (mailSeen == null) await chrome.storage.session.set({ mailSeen: [] }); return; } // 还没设卡密：记一个空的，设好以后收到的第一批照样弹
+  const { notes, seen } = mailNotes(me, mailSeen);
+  await chrome.storage.session.set({ mailSeen: seen });
+  for (const n of notes.slice(0, 3)) {
+    chrome.notifications.create(`mail|${me.id}|${n.key}`, { type: 'basic', iconUrl: chrome.runtime.getURL('assets/icon128.png'), title: n.title, message: n.message, priority: 1 });
+  }
+  globalThis.lastMailNotes = notes; // 测试从调试端口看“弹了什么”
+}
+chrome.notifications?.onClicked.addListener(async (nid) => {
+  if (!nid.startsWith('mail|')) return;
+  const rest = nid.slice(5), i = rest.indexOf('|'), inst = rest.slice(0, i), key = rest.slice(i + 1);
+  chrome.notifications.clear(nid);
+  const url = chrome.runtime.getURL(`app.html#mail/${inst}/${encodeURIComponent(key)}`);
+  const tab = await chrome.tabs.create({ url }).catch(() => null);
+  if (tab?.windowId != null) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+});
 
 async function handle(e, c) {
   if (e.type === 'close' && e.inst === c.instanceId) { // 核心服务要求本实例正常退出：关掉全部窗口

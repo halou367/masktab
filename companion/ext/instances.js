@@ -6,6 +6,7 @@ import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, appBar, se
 import { newWizard } from './wizard.js';
 import { siteIcon, siteName, siteKey, uniqSites } from './sites.js';
 import { face, stepLine } from './menu.js';
+import { mailRows, cardLines } from './mail.js';
 
 const MAXI = 9; // 卡片上最多几个站点图标，多的显示 +N
 let ctx;        // { st, act, load, render, lite?, back?, openNode?, open? }；lite = 手机精简版（一行一张卡片，照 demo/unified 的 mInstsLite），back = 标题左边的返回，
@@ -116,8 +117,12 @@ function exitLine(i) {
     ex ? [h('span', { class: 'xi' }, flag(ex.country), h('span', { class: 'mono', title: [cname(ex.country), ex.city, ex.org].filter(Boolean).join(' · ') }, ex.ip)), rt.running && h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency))]
       : h('span', {}, on ? '出口未探测' : '直连'),
     i.acct?.count > 0 && h('span', { class: 'cnt2', title: `${i.acct.count} 个账号` }, icon('key', 13), i.acct.count),
-    i.acct?.cookieN > 0 && h('span', { class: 'cnt2', title: `${i.acct.cookieN} 条 Cookie` }, icon('cookie', 13), i.acct.cookieN));
+    i.acct?.cookieN > 0 && h('span', { class: 'cnt2', title: `${i.acct.cookieN} 条 Cookie` }, icon('cookie', 13), i.acct.cookieN),
+    mailChip(i));
 }
+// 信箱的未读数（decisions MB-1）：设了卡密才有；点了直接进这个实例的信箱
+const mailChip = (i) => i.mail && h('button', { class: 'cnt2 mchip' + (i.mail.unread ? ' on' : ''), title: i.mail.unread ? `${i.mail.unread} 封未读邮件，点开看` : `信箱：${i.mail.email}`, 'aria-label': i.mail.unread ? `${i.mail.unread} 封未读邮件` : '信箱',
+  onclick: (e) => { e.stopPropagation(); ctx.open ? ctx.open(`mail/${i.id}`) : (location.hash = `mail/${i.id}`); } }, icon('mail', 13), i.mail.unread || '');
 // 手机精简版的卡片：一行——头像（国旗角标、运行点）、编号和名称、延迟、开 / 关；有记住账号或 Cookie 的网站时下面多一排图标。
 function cardLite(i) {
   const rt = i.rt, on = i.proxy.state === 'on', sites = cardSites(i), MAXL = 8;
@@ -253,6 +258,7 @@ function drawer(i) {
             : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)))),
       h('div', { class: 'sw2', style: { padding: '4px 16px 0' }, title: '实例颜色' }, ctx.st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, title: '实例颜色', onclick: () => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
       netRows(i),
+      mailRows({ ...ctx, load: ctx.load }, i),
       h('h3', {}, icon('key', 16), '账号管理', h('span', { class: 'grow' }), ibtn('plus', '手动添加一条', () => { editing = 'new'; ctx.render(); })),
       h('div', { class: 'sub hint' }, '在这个实例里登录过的账号会自动记住；网站不让浏览器记密码也照样记。下次打开登录页自动填好，不会替你点登录。'),
       editing === 'new' && form(null),
@@ -265,15 +271,18 @@ function drawer(i) {
 
 // ---------- 导入邮箱 ----------
 let imp = { text: '', pass: '', save: true };
-function parse(text) { // 与核心服务 vault.ParseEmails 同规则，只用来预览数量
-  const seen = new Set(); let ok = 0, bad = 0, own = 0;
-  for (const raw of text.split('\n')) {
+function parse(text) { // 与核心服务 vault.ParseEmails 同规则，只用来预览数量。卡密行（mailbox.ParseCard）先挑出来单算（decisions MB-1）
+  const { cards, rest } = cardLines(text);
+  const seen = new Set(cards.map((c) => c.email.toLowerCase())); let ok = cards.length, bad = 0, own = 0;
+  for (const raw of rest.split('\n')) {
     const line = raw.trim(); if (!line || line.startsWith('#')) continue;
-    const m = /^([^\s,;|：:]+@[^\s,;|：:]+\.[^\s,;|：:]+)(?:\s*(?:----|\t|\||,|;|：|:|\s)\s*(.+))?$/.exec(line);
+    const dd = line.indexOf('----'); // 先认 ----（和 ParseEmails 的分隔符次序一样）：邮箱里允许有 -，不先切开的话“邮箱----密码”整个被当成邮箱
+    const m = dd > 0 ? /^([^\s,;|：:]+@[^\s,;|：:]+\.[^\s,;|：:]+)$/.exec(line.slice(0, dd).trim()) && [line, line.slice(0, dd).trim(), line.slice(dd + 4).trim()]
+      : /^([^\s,;|：:]+@[^\s,;|：:]+\.[^\s,;|：:]+)(?:\s*(?:\t|\||,|;|：|:|\s)\s*(.+))?$/.exec(line);
     if (!m) { bad++; continue; }
     const e = m[1].toLowerCase(); if (seen.has(e)) continue; seen.add(e); ok++; if (m[2]) own++;
   }
-  return { ok, bad, own };
+  return { ok, bad, own, cards: cards.length };
 }
 function importBox() {
   const p = parse(imp.text), hasDef = ctx.st.vault?.hasDefault;
@@ -281,16 +290,17 @@ function importBox() {
   return h('div', { class: 'scrim center', onclick: (ev) => ev.target === ev.currentTarget && close() },
     h('div', { class: 'modal' },
       h('h3', {}, icon('mail', 18), '导入邮箱', h('span', { class: 'grow' }), ibtn('x', '关闭', close)),
-      h('div', { class: 'sub hint' }, '一行一个邮箱，可以在后面跟它自己的密码（空格、逗号、|、---- 都行）。每个邮箱建一个实例，用邮箱命名，相互隔离；登录时自动填邮箱和密码，注册新站时提示用默认密码。没写密码的邮箱用下面的默认密码' + (hasDef ? '（留空 = 用已保存的那个）。' : '。')),
+      h('div', { class: 'sub hint' }, '一行一个邮箱，可以在后面跟它自己的密码（空格、逗号、|、---- 都行）。每个邮箱建一个实例，用邮箱命名，相互隔离；登录时自动填邮箱和密码，注册新站时提示用默认密码。没写密码的邮箱用下面的默认密码' + (hasDef ? '（留空 = 用已保存的那个）。' : '。')
+        + '也可以直接粘贴卡密（email----password----client_id----refresh_token，或单独一个 iCloud 邮箱）：自动建实例并记住卡密，有新邮件会提示。'),
       h('textarea', { rows: 8, placeholder: 'alice@gmail.com\nbob@outlook.com----他自己的密码\ncarol@gmail.com', value: imp.text, oninput: (ev) => { imp.text = ev.target.value; const s = ev.target.selectionStart; ctx.render(); const t = document.querySelector('.modal textarea'); t.focus(); t.setSelectionRange(s, s); } }),
       h('div', { class: 'frow' }, icon('key', 18),
         h('input', { class: 'grow', type: 'text', autocomplete: 'off', placeholder: hasDef ? '默认密码（可留空）' : '默认密码', title: hasDef ? '留空 = 用已保存的默认密码' : '没写密码的邮箱用它', value: imp.pass, oninput: (ev) => { imp.pass = ev.target.value; } }),
         h('label', { class: 'ck', title: '以后注册新站、导入时都用它' }, h('input', { type: 'checkbox', checked: imp.save, onchange: (ev) => { imp.save = ev.target.checked; } }), '设为默认')),
-      h('div', { class: 'frow' }, h('span', { class: 'sub grow' }, p.ok ? `将创建 ${p.ok} 个实例${p.own ? `，其中 ${p.own} 个带自己的密码` : ''}${p.bad ? `；${p.bad} 行不是邮箱，会跳过` : ''}` : '还没有邮箱'),
+      h('div', { class: 'frow' }, h('span', { class: 'sub grow' }, p.ok ? `将创建 ${p.ok} 个实例${p.cards ? `，其中 ${p.cards} 个是卡密（带信箱）` : ''}${p.own ? `，${p.own} 个带自己的密码` : ''}${p.bad ? `；${p.bad} 行不是邮箱，会跳过` : ''}` : '还没有邮箱'),
         h('button', { class: 'btn pri', disabled: !p.ok, onclick: () => run(async () => {
-          if (!imp.pass && !hasDef && p.own < p.ok && !confirm('没有设默认密码，没写密码的邮箱将只记邮箱、不记密码。继续？')) return;
+          if (!imp.pass && !hasDef && p.own + p.cards < p.ok && !confirm('没有设默认密码，没写密码的邮箱将只记邮箱、不记密码。继续？')) return;
           const r = await api('POST', '/api/import/emails', { text: imp.text, password: imp.pass, save: imp.save });
-          toast(`已创建 ${r.created} 个实例${r.skipped ? `，${r.skipped} 个已存在跳过` : ''}`);
+          toast(`已创建 ${r.created} 个实例${r.cards ? `，记住 ${r.cards} 个卡密` : ''}${r.attached ? `（${r.attached} 个补给了已有的实例）` : ''}${r.skipped ? `，${r.skipped} 个已存在跳过` : ''}`);
           imp = { text: '', pass: '', save: true }; close(); await ctx.load(true);
         }) }, icon('plus', 16), '创建实例'))));
 }

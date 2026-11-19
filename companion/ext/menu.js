@@ -61,7 +61,8 @@ export function menuView(st, nav) {
   kids.push(h('div', { class: 'mis' }, mi('key', '账号管理', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),
     mi('globe', '节点与出口', nav.node, ex ? [flag(ex.country), h('span', { class: 'cn' }, cname(ex.country))] : on ? '' : '直连'),
     me.kind !== 'normal' && mi('finger', '指纹与伪装', nav.fp, dz.total ? `${dz.pass}/${dz.total}` : ''),
-    nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : '')));
+    nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : ''),
+    me.mail && mi('mail', '信箱', () => nav.open(`mail/${me.id}`), me.mail.unread ? h('span', { class: 'mdot n' }, String(me.mail.unread)) : ''))); // 设了卡密才有（decisions MB-1）
 
   // 开着的排在前面（和实例页“运行中 / 休眠”两组一个次序），组内还是拖出来的次序：要切过去的多半是开着的
   const live = (x) => (x.rt.running || x.rt.starting ? 0 : 1);
