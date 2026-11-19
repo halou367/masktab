@@ -286,17 +286,17 @@ func InkAlpha(e float64) float64 {
 // Morph 画自动收起的栏在 e 这一刻的样子（不含字）：e = 0 收着，只有色条；e = 1 完全展开。
 // 中间：每一段色条往下长成标签（颜色、圆角一起过渡），底色从透明变实并从上往下铺开，×、＋ 最后淡入。
 // 位图高 OpenH、预乘透明度，直接交给分层窗口。最上面 stripUp 行在窗口上沿外面，什么都不画（只接鼠标）；色条、底色都从窗口上沿开始。
-// 没展开完的时候，Band 那一条里没画东西的点留一丝透明度（看不出来，但接得住鼠标），别处全透明、点得穿。
+// Band 那一条里没画东西的点留一丝透明度（看不出来，但接得住鼠标），别处全透明、点得穿。
+// 展开以后也留着（2026-11-20，decisions UI-17 补充）：以前完全展开时这一条（窗口上沿外面那 4 行）是全透明的，
+// 鼠标停在那里时系统把它算到下面的窗口上 → 当成“离开了” → 收起 → 收起的画面又接住鼠标 → 又展开……一秒抖好几下（需求方：“鼠标靠近离开反复会一直弹”）。
 func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlus bool) *Canvas {
 	e = math.Max(0, math.Min(1, e))
 	h, up := px(OpenH, scale), px(stripUp, scale)
 	c := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4), Premul: true}
-	if e < 1 {
-		band := Band(l, scale)
-		for y := band.T; y < band.B && y < h; y++ {
-			for x := band.L; x < band.R && x < w; x++ {
-				c.Pix[(y*w+x)*4+3] = 1
-			}
+	band := Band(l, scale)
+	for y := band.T; y < band.B && y < h; y++ {
+		for x := band.L; x < band.R && x < w; x++ {
+			c.Pix[(y*w+x)*4+3] = 1
 		}
 	}
 	if e > 0 { // 底

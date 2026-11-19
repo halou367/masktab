@@ -8,7 +8,10 @@
 // 与平台无关的部分（排版、摆放的计算）在这个文件里，有测试；动窗口的部分在 bar_windows.go。
 package tabbar
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Tab 是实例栏上的一个标签 = 一个正在运行的实例。
 type Tab struct {
@@ -306,6 +309,54 @@ func Band(l Layout, scale float64) Rect {
 // Reach 报告鼠标是不是在收起的色条上（该展开了）。
 func Reach(strip Rect, l Layout, x, y int, scale float64) bool {
 	return Band(l, scale).Has(x-strip.L, y-strip.T)
+}
+
+// Hover 判断自动收起的栏该展开还是收着，带一点意图延迟和迟滞（decisions UI-17 补充，2026-11-20，需求方：“鼠标靠近离开反复会一直弹”）：
+//   - 鼠标到了色条上要停 HoverIn 才展开：只是路过（往上去点浏览器的标签页、地址栏，一划而过）不弹；
+//   - 展开以后离开栏附近要满 HoverOut 才收：边上抖一下、擦过去不收；
+//   - 收起以后，鼠标得先离开色条一次，才会再因为“在色条上”展开：哪怕别的原因让它刚好收在鼠标底下，也不会一开一合地来回弹。
+//
+// 点在色条上不受这些影响（当场展开，见 bar_windows.go 的鼠标消息处理）。
+// 两个时长都很短：前两版 0.08 / 0.35 秒需求方嫌“不跟手”（UI-17），这里只用来滤掉路过和抖动。
+type Hover struct {
+	inSince, outSince time.Time
+	rearm             bool // 刚收起、鼠标还没离开过色条
+}
+
+const (
+	HoverIn  = 40 * time.Millisecond
+	HoverOut = 100 * time.Millisecond
+)
+
+// Want 报告该不该展开着。cur：现在（或正在变成）展开的；on：收着时 = 鼠标在色条上，展开时 = 鼠标在栏附近（Reach / Stay 的结果）。
+func (h *Hover) Want(cur, on bool, now time.Time) bool {
+	if !cur {
+		h.outSince = time.Time{}
+		if !on {
+			h.inSince, h.rearm = time.Time{}, false
+			return false
+		}
+		if h.rearm {
+			return false
+		}
+		if h.inSince.IsZero() {
+			h.inSince = now
+		}
+		return now.Sub(h.inSince) >= HoverIn
+	}
+	h.inSince = time.Time{}
+	if on {
+		h.outSince = time.Time{}
+		return true
+	}
+	if h.outSince.IsZero() {
+		h.outSince = now
+	}
+	if now.Sub(h.outSince) < HoverOut {
+		return true
+	}
+	h.outSince, h.rearm = time.Time{}, true
+	return false
 }
 
 // Stay 报告鼠标是不是还在展开的栏附近（四周放宽 10 像素）：不在了就收起。

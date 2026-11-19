@@ -1,6 +1,7 @@
 import { api, fmtBytes, noticeText } from './api.js';
 import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, sw, appBar, sec, row, ringEl, pbar, scoreCls, choose, dropdown, ask, confirmDlg, isV6, ipSpan, avatar, typeTag, XT_NAME, XT_ORDER } from './ui.js';
 import { disguise, cfRisk, pureInfo, openWeb, CF_TEST_URL, restartText, restartPath } from './common.js';
+import { openInst, launching } from './menu.js';
 
 // 节点面板（电脑和手机共用，决策 D-4）：节点与出口、指纹与伪装，以及几个占满页面的列表（订阅线路、出口国家、出口、入口）。
 // 电脑版由 popup.js 放进工具栏弹窗、由 app.js 放进设置页；安卓版由 main.js 放进“节点与出口”“指纹与伪装”两页。
@@ -33,7 +34,7 @@ const load = () => host.load();
 const render = () => host.render();
 const patch = (body) => run(async () => { await api('PATCH', `/api/instances/${cur().id}`, body); await load(); });
 const stop = (fn) => (ev) => { ev.stopPropagation(); fn(ev); };
-const go = (v) => () => { view = v; flt = ''; kindFlt = ''; typeFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; if (v === 'entry') sortBy = 'tune'; /* 入口列表默认按本时段的优选分数排（没有分数时退回延迟） */ fresh = true; render(); };
+const go = (v) => () => { view = v; frozen.key = ''; flt = ''; kindFlt = ''; typeFlt = ''; resOnly = false; if (v !== 'exit' && sortBy === 'score') sortBy = 'delay'; if (v === 'entry') sortBy = 'tune'; /* 入口列表默认按本时段的优选分数排（没有分数时退回延迟） */ fresh = true; render(); };
 const home = () => { if (view === 'fp' && fpDirect) { host.back?.(); return; } view = ''; fresh = true; render(); };
 
 // ---------- 小工具 ----------
@@ -124,11 +125,21 @@ const SORTS = { tune: ['tune', '本时段', '按入口优选在当前时段的�
 let sortsNow = ['delay'];
 let tuneNow = null; // 入口列表：当前时段的优选分数（入口 id → 分数，decisions N-6）；别的列表是 null
 const sortBtn = () => sortsNow.length > 1 && h('button', { class: 'sortb', title: '排序', 'aria-label': '排序', 'aria-haspopup': 'listbox',
-  onclick: async (ev) => { const v = await dropdown(ev.currentTarget, sortsNow.map((k) => [k, SORTS[k][1]]), sortBy); if (v && v !== sortBy) { sortBy = v; render(); } } }, icon('sort', 18), SORTS[sortBy][1]);
+  // 选了排序（选同一个也算）= 用户要重新排：按现在的数重排一次
+  onclick: async (ev) => { const v = await dropdown(ev.currentTarget, sortsNow.map((k) => [k, SORTS[k][1]]), sortBy); if (v) { sortBy = v; frozen.key = ''; render(); } } }, icon('sort', 18), SORTS[sortBy][1]);
+// 列表的次序定住（决策 UI-32；需求方：“开关后整个列表顺序会打乱位置跳走……应该保持相对位置不变”）：
+// 进这一页、换了排序 / 筛选时按当时的数排一次，记下每一行的位置；之后延迟、下载、纯净度、在用的那个变了（测一个、点一行、后台测完一轮）
+// 都只改这一行里的字，不挪位置。新出现的接在后面，没了的拿掉。要按新的数重排：点“排序”再选一次，或者退出去再进来。
+let frozen = { key: '', pos: new Map() };
 function filtered(items, countryOf, ipOf) {
   const out = items.filter((it) => (flt === '~dead' ? it.delay < 0 : flt ? it.delay >= 0 && countryOf(it) === flt : true) && (!kindFlt || it.kind === kindFlt) && (!resOnly || !ipOf || ipq(ipOf(it))?.type === 'res'));
   const sp = (x) => (x.speed > 0 ? x.speed : -1), sc = (x) => (ipOf ? scoreOf(ipOf(x)) : -1), ts = (x) => (x.delay > 0 ? tuneNow?.[x.id] ?? 0 : -1);
-  return out.sort((a, b) => (sortBy === 'tune' ? (ts(b) - ts(a)) || (rank(a) - rank(b)) : sortBy === 'speed' ? (sp(b) - sp(a)) || (rank(a) - rank(b)) : sortBy === 'score' ? ((b.delay > 0) - (a.delay > 0)) || (sc(b) - sc(a)) || (rank(a) - rank(b)) : rank(a) - rank(b)));
+  const sorted = out.sort((a, b) => (sortBy === 'tune' ? (ts(b) - ts(a)) || (rank(a) - rank(b)) : sortBy === 'speed' ? (sp(b) - sp(a)) || (rank(a) - rank(b)) : sortBy === 'score' ? ((b.delay > 0) - (a.delay > 0)) || (sc(b) - sc(a)) || (rank(a) - rank(b)) : rank(a) - rank(b)));
+  const key = [view, target, cur()?.proxy?.subscriptionId, sortBy, flt, kindFlt, typeFlt, resOnly].join('|');
+  if (frozen.key !== key) { frozen = { key, pos: new Map(sorted.map((x, k) => [x.id, k])) }; return sorted; }
+  const base = frozen.pos.size;
+  sorted.forEach((x, k) => { if (!frozen.pos.has(x.id)) frozen.pos.set(x.id, base + k); });
+  return sorted.slice().sort((a, b) => frozen.pos.get(a.id) - frozen.pos.get(b.id));
 }
 // 添加地址（edgetunnel 的地址库）：右下角的“+”。
 const addAddr = async () => {
@@ -239,7 +250,7 @@ function exitView(me, sub) {
   return [head(sub, '出口', `${all.filter((p) => p.delay > 0).length} / ${all.length}`, rows, (p) => (p.type === 'proxyip' ? p.key : p.type + '|' + p.value)),
     chips(all, pcc, [resChip, tChips]),
     h('div', { class: 'ls', role: 'listbox' },
-      rows.map((p) => { const on = p.id === curId; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (p.delay < 0 ? ' dead' : ''), role: 'option', 'aria-selected': on ? 'true' : 'false', title: tipOf(p), onclick: () => pickIt(p.id) },
+      rows.map((p) => { const on = p.id === curId; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (p.delay < 0 ? ' dead' : ''), role: 'option', 'data-k': 'x:' + p.id, 'aria-selected': on ? 'true' : 'false', title: tipOf(p), onclick: () => pickIt(p.id) },
         flagOf(pcc(p), guessCC(p.label)),
         // 两行（演示定稿）：上面是写全的地址；下面是类型图标、纯净度（短条 + 分数）、城市 · 运营商。不通的下面写原因。
         h('span', { class: 'grow' },
@@ -278,7 +289,7 @@ function entryView(me, sub) {
   return [head(sub, et ? '入口 优选 IP' : '节点', `${alive} / ${sub.nodes.length}`, rows, keyOf, tuneB),
     chips(sub.nodes, ecc, et && [kf('cf', '优选'), kf('proxy', '反代')]),
     h('div', { class: 'ls', role: 'listbox' },
-      rows.map((n) => { const on = n.id === cur; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (n.delay < 0 ? ' dead' : ''), role: 'option', 'aria-selected': on ? 'true' : 'false', title: tipOf(n), onclick: () => pickIt(n) },
+      rows.map((n) => { const on = n.id === cur; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (n.delay < 0 ? ' dead' : ''), role: 'option', 'data-k': 'n:' + n.id, 'aria-selected': on ? 'true' : 'false', title: tipOf(n), onclick: () => pickIt(n) },
         flagOf(ecc(n), guessCC(n.label)),
         // 两行：上面是地址（通用订阅是节点名）；下面是优选 / 反代、机房、备注。
         h('span', { class: 'grow' },
@@ -332,9 +343,17 @@ function subView(me, sub) {
 // ---------- 节点与出口（首页） ----------
 // 当前出口（一张卡片说完，下面的行不再重复）：这是哪类网站的出口、国旗 + 写全的 IP（点一下复制）、类型图标、城市 · 运营商、纯净度和 CF 风险两行（各带一句说明）、CF 信誉、延迟、纯净度圆环；
 // 两路出口不同时第二行列另一路（“普网” = 普通网站），不在同一国家时给黄色提示。国名、“住宅 / 机房”不写字：国旗和图标已经说了（悬停有字）。
+// 改了节点 / 出口 / 入口（拨开关、选一行）以后，核心服务先把出口清空、断流，确认完新出口再放行（proxyflow.go 的 refresh），要几秒。
+// 以前这几秒里出口卡片缩成一行“正在探测出口…”、上面再冒出一条红色“断网中：正在确认出口”，下面的开关整体往上跳一大截，
+// 刚拨的开关就跑到别处去了（需求方：“关了自动看一眼，视觉中心变成入口的了”）。现在卡片留着上一次的出口、同样的高度，
+// 只在角上写“正在确认出口…”（决策 UI-32）。lastProbe 只在这个页面里记着，不落盘。
+const lastProbe = new Map();
+const CONFIRMING = '正在确认出口'; // proxyflow.go 的 refreshTry 写的 r.Cut：几秒就过去的状态，不当成断网提示
 function exitCard(me, fixAuto) {
-  const p = me.rt.probe;
-  if (!p && !(me.rt.running || me.rt.starting)) return null; // 没在运行：没有出口可说（以前这里一直转圈）
+  const p0 = me.rt.probe, live = me.rt.running || me.rt.starting;
+  if (p0) lastProbe.set(me.id, p0);
+  const p = p0 || (live ? lastProbe.get(me.id) : null), again = !p0 && !!p; // again：正在重新确认，先画上一次的
+  if (!p && !live) return null; // 没在运行：没有出口可说（以前这里一直转圈）
   if (!p) return h('div', { class: 'card xcard' }, h('span', { class: 'ic spin' }, icon('refresh', 20)), h('span', { class: 'sub' }, '正在探测出口…'));
   if (!(p.cf || p.direct)) return null;
   const main = (me.tz?.source === 'exit-direct' ? p.direct || p.cf : p.cf || p.direct);
@@ -343,13 +362,14 @@ function exitCard(me, fixAuto) {
   const copy = (ip) => (e) => { e.stopPropagation(); navigator.clipboard?.writeText(ip).then(() => toast('已复制 IP'), () => toast('复制失败', true)); };
   const q = ipq(main.ip), pu = pureInfo(q), cf = cfRisk(st, me), len = (ip) => (ip.length > 24 ? ' long' : ip.length > 15 ? ' mid' : '');
   const capOf = (x) => (x === p.cf ? 'CF 网站' : '普网'), capTip = (x) => (x === p.cf ? '托管在 Cloudflare 上的网站看到的出口' : '普通网站看到的出口');
-  return h('div', { class: 'card' },
+  return h('div', { class: 'card' + (again ? ' again' : ''), 'data-k': 'xcard', 'aria-busy': again ? 'true' : null },
     h('div', { class: 'xcard', style: { width: '100%' } },
       h('div', { class: 'grow' },
-        h('div', { class: 'xcap', title: other ? capTip(main) : '所有网站看到的都是这个出口' }, icon(other ? (main === p.cf ? 'cloud' : 'globe') : 'globe', 14), other ? capOf(main) : '全部网站'),
+        h('div', { class: 'xcap', title: other ? capTip(main) : '所有网站看到的都是这个出口' }, icon(other ? (main === p.cf ? 'cloud' : 'globe') : 'globe', 14), other ? capOf(main) : '全部网站',
+          again && h('span', { class: 'xagain', title: '刚改了线路，正在确认新的出口；确认之前不放行（不会直连）' }, h('span', { class: 'ic spin' }, icon('refresh', 12)), '正在确认出口…')),
         h('div', { class: 'ipl' + len(main.ip) }, flagOf(cc(main)), h('button', { class: 'mono', title: '复制 IP', 'aria-label': '复制 IP', onclick: copy(main.ip) }, main.ip), tyIcon(main.ip, 18)),
         where(main) && h('div', { class: 'loc' }, where(main)),
-        h('div', { class: 'chips2' }, h('span', { class: 'lat ' + delayCls(me.rt.latency) }, delayText(me.rt.latency)))),
+        h('div', { class: 'chips2' }, h('span', { class: 'lat ' + delayCls(again ? 0 : me.rt.latency) }, again ? '—' : delayText(me.rt.latency)))),
       pu ? h('span', { title: pu.tip }, ringEl(pu.score, 64, '纯净度', pu.cls)) : null),
     // 这条出口的两个数，各占一行，把“哪头好、数从哪来”直接写出来（手机上没有悬停；决策 N-7）：
     //   纯净度  越高越干净 = 100 − IPPure 系数（IP 本身干不干净）
@@ -375,10 +395,11 @@ function mainView(me, sub) {
     on && live && h('button', { class: 'ib', title: '重新探测出口', 'aria-label': '重新探测出口', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); }, '正在探测…') }, icon('refresh', 22))));
   // 对着别的实例（从实例管理点进来的）：最上面写清楚改的是谁，旁边就能打开 / 关闭它
   if (!mine) {
-    kids.push(row({ ic: avatar(me.color, String(me.no), 24, null, rt.running ? 'on' : rt.starting ? 'st' : null), t: `#${me.no} ${me.name || '未命名'}`, s: rt.starting ? '正在打开…' : rt.stopping ? (rt.reopen ? '正在关闭，关完重新打开…' : '正在关闭…') : rt.running ? '运行中' : '没在运行：改好以后再打开', 
+    kids.push(row({ k: 'who', ic: avatar(me.color, String(me.no), 24, null, rt.running ? 'on' : rt.starting || launching(me) ? 'st' : null), t: `#${me.no} ${me.name || '未命名'}`, s: rt.starting || launching(me) ? '正在打开…' : rt.stopping ? (rt.reopen ? '正在关闭，关完重新打开…' : '正在关闭…') : rt.running ? '运行中' : '没在运行：改好以后再打开', 
       trail: rt.stopping && !rt.reopen ? h('button', { class: 'btn tonal', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/launch`); await load(); }, '关完后会重新打开') }, '打开')
         : rt.starting || rt.running ? h('button', { class: 'btn', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/stop`); await load(); }) }, rt.starting ? '取消' : '关闭')
-        : h('button', { class: 'btn tonal', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/launch`); await load(); }, '正在打开…') }, '打开') }));
+        : launching(me) ? h('button', { class: 'btn tonal busy', 'aria-disabled': 'true', 'aria-busy': 'true', onclick: (e) => e.stopPropagation() }, h('span', { class: 'ic spin' }, icon('refresh', 16)), '打开中')
+          : h('button', { class: 'btn tonal', onclick: () => openInst(me) }, '打开') }));
   }
   const banner = (bad, text, ...acts) => h('div', { class: 'warn' + (bad ? ' bad' : '') }, icon('warn', 20), h('span', { class: 'tx' }, text), acts);
   const lk = (text, fn) => h('button', { class: 'lk', onclick: fn }, text);
@@ -401,18 +422,18 @@ function mainView(me, sub) {
   if (rt.needRestart?.length) kids.push(banner(false, restartText(rt), lk('立即重启', () => run(restartNow))));
   else if (noexit) kids.push(banner(true, noticeText(rt.notice, cname), lk('换国家', (ev) => pickRegion(ev.currentTarget, me, sub))));
   else if (pipGone) kids.push(banner(true, '出口不通：CF 网站连不上', lk('选别的', go('exit')), lk('改自动', allAuto)));
-  else if (rt.cut || rt.error) kids.push(banner(true, [live && h('b', {}, '断网中（没有直连）：'), rt.error || rt.cut], fixes()));
+  else if (rt.error || (rt.cut && !(rt.cut === CONFIRMING && lastProbe.has(me.id)))) kids.push(banner(true, [live && h('b', {}, '断网中（没有直连）：'), rt.error || rt.cut], fixes())); // 正在确认出口：写在出口卡片里，不另起一条
   else if (rt.notice && rt.notice !== 'switched' && rt.notice !== 'tuned') kids.push(banner(false, noticeText(rt.notice, cname)));
   // 程序替用户改过选择（订阅被删、节点没了…）：说清楚改了什么，看过就收起
   if (rt.fixed) kids.push(banner(false, rt.fixed, lk('知道了', () => run(async () => { await api('POST', `/api/instances/${me.id}/ack`); await load(); }))));
 
-  kids.push(row({ ic: 'shield', t: '代理', s: on ? (me.kind === 'normal' ? '普通窗口' : '经订阅出网，不通时断流，不会直连') : '关闭：直连，网站看到真实 IP', trail: sw(on, on ? '关闭代理' : '开启代理', (v) => patch({ proxy: { state: v ? 'on' : 'off' } })) }));
+  kids.push(row({ k: 'proxy', ic: 'shield', t: '代理', s: on ? (me.kind === 'normal' ? '普通窗口' : '经订阅出网，不通时断流，不会直连') : '关闭：直连，网站看到真实 IP', trail: sw(on, on ? '关闭代理' : '开启代理', (v) => patch({ proxy: { state: v ? 'on' : 'off' } })) }));
 
   // 订阅
   kids.push(sec('订阅'));
   const curPf = curProfile(me, sub);
-  if (!st.subscriptions.length) kids.push(row({ ic: 'add', t: '添加订阅', s: 'edgetunnel 或通用订阅', onclick: () => addSub(me) }));
-  else kids.push(row({ ic: 'sub', t: sub ? (curPf?.host || sub.name) : '选一条线路', s: sub ? [netTag(isET(sub) ? curPf : null), sub.lastError ? h('span', { class: 'bad' }, '刷新失败') : cntOf(sub), ' · ' + ago(sub.fetchedAt)] : `${linesOf().length} 条线路`, chev: true, aria: '订阅线路', onclick: go('sub') }));
+  if (!st.subscriptions.length) kids.push(row({ k: 'sub', ic: 'add', t: '添加订阅', s: 'edgetunnel 或通用订阅', onclick: () => addSub(me) }));
+  else kids.push(row({ k: 'sub', ic: 'sub', t: sub ? (curPf?.host || sub.name) : '选一条线路', s: sub ? [netTag(isET(sub) ? curPf : null), sub.lastError ? h('span', { class: 'bad' }, '刷新失败') : cntOf(sub), ' · ' + ago(sub.fetchedAt)] : `${linesOf().length} 条线路`, chev: true, aria: '订阅线路', onclick: go('sub') }));
 
   if (sub) {
     // 出口（edgetunnel）/ 节点（通用订阅）
@@ -424,27 +445,27 @@ function mainView(me, sub) {
     const toAuto = () => patch({ proxy: { exitMode: 'auto', region: (pip && pcc(pip)) || (!et && entry && ecc(entry)) || region, state: 'on' } });
     const nextBtn = exitAuto && h('button', { class: 'lk', disabled: !canNext, title: '在这个国家里换一个出口', onclick: stop(() => run(async () => { await api('POST', `/api/instances/${me.id}/next`); await load(); }, '正在换…')) }, '换一个');
     kids.push(sec(et ? '出口' : '节点', nextBtn || null));
-    kids.push(row({ ic: 'tune', t: '自动选择', s: exitAuto ? (et ? '只挑国家和类型，不通自动换' : '只挑国家，不通自动换') : '固定一个，不自动换', trail: sw(exitAuto, '出口自动选择', (v) => (v ? toAuto() : patch({ proxy: { exitMode: 'manual' } }))) }));
+    kids.push(row({ k: 'exitAuto', ic: 'tune', t: '自动选择', s: exitAuto ? (et ? '只挑国家和类型，不通自动换' : '只挑国家，不通自动换') : '固定一个，不自动换', trail: sw(exitAuto, '出口自动选择', (v) => (v ? toAuto() : patch({ proxy: { exitMode: 'manual' } }))) }));
     if (exitAuto) {
       const xt = et ? px.exitType || '' : '', inT = xt ? (sub.pips || []).filter((x) => x.delay > 0 && x.type === xt && (!region || pcc(x) === region)) : [];
       const resT = inT.filter((x) => ipq(x.cf?.ip || x.exit?.ip)?.type === 'res').length;
-      kids.push(row({ ic: 'flagI', t: '出口国家', s: xt ? [typeTag(xt), `${inT.length} 个可用${resT ? ` · 住宅 ${resT}` : ''}`] : null, trail: region ? [flag(region), cname(region)] : '不限', drop: true, aria: '出口国家', onclick: (ev) => pickRegion(ev.currentTarget, me, sub) }));
+      kids.push(row({ k: 'exitRegion', ic: 'flagI', t: '出口国家', s: xt ? [typeTag(xt), `${inT.length} 个可用${resT ? ` · 住宅 ${resT}` : ''}`] : null, trail: region ? [flag(region), cname(region)] : '不限', drop: true, aria: '出口国家', onclick: (ev) => pickRegion(ev.currentTarget, me, sub) }));
     } else if (et) {
       // 手动：从列表里选，或者填一个自定义的。正在用的那一行换底色，并写出用的是哪个（写全，不截断）。
       const own = !!pip && !pip.derived, live = (sub.pips || []).filter((x) => x.delay > 0).length;
       const cur = pip ? [flagOf(pcc(pip), guessCC(pip.label)), ipSpan(pipName(pip)), dly(pip)] : null;
-      kids.push(row({ ic: 'swap', t: '从列表里选', s: !own ? (cur || (curId ? h('span', { class: 'bad' }, '已不在列表里') : '不指定 · 服务端默认')) : `${live} 个可用`, cls: own ? '' : 'on', chev: true, aria: '选出口', onclick: go('exit') }));
-      kids.push(row({ ic: 'edit', t: '自定义 ProxyIP', s: own ? cur : 'IP、域名或 socks5 / http 代理', cls: own ? 'on' : '', aria: '自定义 ProxyIP', onclick: () => customAddr(me, sub, 'exit') }));
+      kids.push(row({ k: 'exitList', ic: 'swap', t: '从列表里选', s: !own ? (cur || (curId ? h('span', { class: 'bad' }, '已不在列表里') : '不指定 · 服务端默认')) : `${live} 个可用`, cls: own ? '' : 'on', chev: true, aria: '选出口', onclick: go('exit') }));
+      kids.push(row({ k: 'exitCustom', ic: 'edit', t: '自定义 ProxyIP', s: own ? cur : 'IP、域名或 socks5 / http 代理', cls: own ? 'on' : '', aria: '自定义 ProxyIP', onclick: () => customAddr(me, sub, 'exit') }));
     } else {
       const cur = entry ? [flagOf(ecc(entry), guessCC(entry.label)), h('span', {}, entry.label || addrText(entry)), dly(entry)] : '未选择';
-      kids.push(row({ ic: 'swap', t: '从列表里选', s: cur, cls: entry ? 'on' : '', chev: true, aria: '选节点', onclick: go('entry') })); // 还没选时不换底色
+      kids.push(row({ k: 'nodeList', ic: 'swap', t: '从列表里选', s: cur, cls: entry ? 'on' : '', chev: true, aria: '选节点', onclick: go('entry') })); // 还没选时不换底色
     }
     if (et) {
       const er = (px.entryRegion || '').toUpperCase();
       const cur = entry ? [flagOf(ecc(entry), guessCC(entry.label)), ipSpan(addrText(entry)), entry.colo && h('span', { class: 'colo', title: '机房' }, entry.colo), dly(entry)] : null;
       kids.push(sec('入口 优选 IP'));
       // 自动时“现在用的是哪个入口”写在开关的副标题里（不另起一行）；手动时写在正在用的那一行里。
-      kids.push(row({ ic: 'tune', t: '自动选择', s: entryAuto ? (cur || '挑延迟最低的') : '固定一个，不自动换', trail: sw(entryAuto, '入口自动选择', (v) => patch({ proxy: { entryMode: v ? 'auto' : 'manual' } })) }));
+      kids.push(row({ k: 'entryAuto', ic: 'tune', t: '自动选择', s: entryAuto ? (cur || '挑延迟最低的') : '固定一个，不自动换', trail: sw(entryAuto, '入口自动选择', (v) => patch({ proxy: { entryMode: v ? 'auto' : 'manual' } })) }));
       // 当前时段最佳（入口优选，decisions N-6）：后台每小时按“下载为主、延迟为辅”给入口打分、分小时记下，
       // 同一个出口国家里有明显更好的就自动换过去（不断开、出口不变）。这里写出它是谁、为什么。
       const tv = sub.tune, tb = me.tune;
@@ -455,16 +476,16 @@ function mainView(me, sub) {
           `今天用了 ${fmtBytes(tv.used || 0)} / 每天最多 ${fmtBytes(tv.budget || 0)}`, tv.last ? `上一轮：${new Date(tv.last).toLocaleTimeString()}` : '还没测过',
           tv.next ? `下一轮：${new Date(tv.next).toLocaleTimeString()} 之后` : null, '换入口时不断开已有的连接；出口国家不变'].filter(Boolean).join('\n');
         // 点这一行看全部入口在这个时段的分数（列表默认按“本时段”排）；“立即优选”在列表顶上
-        kids.push(row({ ic: 'speed', t: '当前时段最佳', cls: 'tbr', title: tip, chev: true, aria: '当前时段最佳', onclick: go('entry'),
+        kids.push(row({ k: 'tuneBest', ic: 'speed', t: '当前时段最佳', cls: 'tbr', title: tip, chev: true, aria: '当前时段最佳', onclick: go('entry'),
           s: tb ? (using ? [h('span', { class: 'good' }, '正在用'), why] : [flagOf(ecc(bn || {}), ''), ipSpan(tb.key.replace(/:443$/, '')), why])
             : tv.busy ? '正在测…' : '还没有下载记录 · 后台会自动测，点开可以现在测' }));
       }
       if (entryAuto) {
-        kids.push(row({ ic: 'flagI', t: '入口国家', trail: er ? [flag(er), cname(er)] : '跟随出口', drop: true, aria: '入口国家', onclick: (ev) => pickEntryRegion(ev.currentTarget, me, sub) }));
+        kids.push(row({ k: 'entryRegion', ic: 'flagI', t: '入口国家', trail: er ? [flag(er), cname(er)] : '跟随出口', drop: true, aria: '入口国家', onclick: (ev) => pickEntryRegion(ev.currentTarget, me, sub) }));
       } else {
         const own = !!entry && entry.from !== 'sub', live = sub.nodes.filter((n) => n.delay > 0).length;
-        kids.push(row({ ic: 'enter', t: '从列表里选', s: !own ? (cur || '未选择') : `${live} 个可用`, cls: own || !entry ? '' : 'on', chev: true, aria: '选入口', onclick: go('entry') }));
-        kids.push(row({ ic: 'edit', t: '自定义入口地址', s: own ? cur : 'IP 或域名', cls: own ? 'on' : '', aria: '自定义入口地址', onclick: () => customAddr(me, sub, 'entry') }));
+        kids.push(row({ k: 'entryList', ic: 'enter', t: '从列表里选', s: !own ? (cur || '未选择') : `${live} 个可用`, cls: own || !entry ? '' : 'on', chev: true, aria: '选入口', onclick: go('entry') }));
+        kids.push(row({ k: 'entryCustom', ic: 'edit', t: '自定义入口地址', s: own ? cur : 'IP 或域名', cls: own ? 'on' : '', aria: '自定义入口地址', onclick: () => customAddr(me, sub, 'entry') }));
       }
     }
   }
@@ -473,9 +494,9 @@ function mainView(me, sub) {
   if (me.kind !== 'normal') {
     const fi = me.fpInfo || {}, dz = disguise(me), tz = fi.tz || rt.launchedTz || '';
     kids.push(sec('伪装'));
-    kids.push(row({ ic: 'finger', t: '指纹与伪装', s: [PLAT[fi.platform] || fi.platform, tz ? utc(tz) || tz : '系统时区', fi.lang || '系统语言'].filter(Boolean).join(' · '), trail: dz.total ? h('span', { class: scoreCls(dz.pct) }, `${dz.pass}/${dz.total}`) : null, chev: true, aria: '指纹与伪装', onclick: () => { fpDirect = false; view = 'fp'; fresh = true; render(); } }));
+    kids.push(row({ k: 'fp', ic: 'finger', t: '指纹与伪装', s: [PLAT[fi.platform] || fi.platform, tz ? utc(tz) || tz : '系统时区', fi.lang || '系统语言'].filter(Boolean).join(' · '), trail: dz.total ? h('span', { class: scoreCls(dz.pct) }, `${dz.pass}/${dz.total}`) : null, chev: true, aria: '指纹与伪装', onclick: () => { fpDirect = false; view = 'fp'; fresh = true; render(); } }));
   }
-  if (on && live) kids.push(row({ ic: 'speed', t: '流量', s: h('span', { class: 'mono', title: `已用 ↑ ${fmtBytes(rt.up || 0)}  ↓ ${fmtBytes(rt.down || 0)}` }, `↑ ${fmtBytes(rt.upRate)}/s   ↓ ${fmtBytes(rt.downRate)}/s`) }));
+  if (on && live) kids.push(row({ k: 'traffic', ic: 'speed', t: '流量', s: h('span', { class: 'mono', title: `已用 ↑ ${fmtBytes(rt.up || 0)}  ↓ ${fmtBytes(rt.down || 0)}` }, `↑ ${fmtBytes(rt.upRate)}/s   ↓ ${fmtBytes(rt.downRate)}/s`) }));
   kids.push(h('div', { class: 'foot' }, '出口 = 网站看到的 IP；入口 = 连到服务端用的地址。'));
   return kids;
 }
@@ -539,7 +560,7 @@ function fpView(me) {
     kids.push(h('div', { class: 'foot' }, '系统和浏览器固定的原因：' + why + '。'));
   }
   kids.push(sec('伪装项'));
-  if (caps.spoof) for (const [k, t, ic] of SPOOF) kids.push(row({ ic, t, s: off.has(k) ? '未伪装（真实值）' : '按种子伪装', trail: sw(!off.has(k), `${t}指纹`, (v) => { const s2 = new Set(off); v ? s2.delete(k) : s2.add(k); patch({ fp: { disableSpoofing: [...s2] } }); }) }));
+  if (caps.spoof) for (const [k, t, ic] of SPOOF) kids.push(row({ k: 'sp:' + k, ic, t, s: off.has(k) ? '未伪装（真实值）' : '按种子伪装', trail: sw(!off.has(k), `${t}指纹`, (v) => { const s2 = new Set(off); v ? s2.delete(k) : s2.add(k); patch({ fp: { disableSpoofing: [...s2] } }); }) }));
   else kids.push(row({ ic: 'shield', t: HOSTED_SPOOF.join('、'), s: 'WebRTC 只走代理；页面里按种子改写', trail: h('span', { class: 'fixed', title: '手机的伪装在页面里做，项目固定、不能逐项开关' }, '固定') }));
   kids.push(row({ ic: 'seed', t: '指纹种子', s: h('span', { class: 'mono el' }, String(fi.seed64 ?? fi.seed ?? '—')), trail: h('button', { class: 'lk', onclick: async () => {
     if (await confirmDlg('换一套新指纹？', caps.live ? '这个实例的标签页会按原网址重开，已登录的网站可能要求重新验证。' : '已登录的网站可能要求重新验证。', '换一套')) patch({ fp: { newSeed: true } });

@@ -14,7 +14,7 @@ const [dir, out, desk] = process.argv.slice(2).filter((a) => !a.startsWith('--')
 // 分段跑（--only=段名,段名）：整套要两分多钟，改哪一块就只跑哪一段；scripts/check.sh pages 会把各段分给几个进程同时跑。
 // 段名见下面每一段开头的 want('…')；不带 --only 就全跑。新加的检查放进合适的段，或者新开一段（记得写进 scripts/check.sh 的 PAGE_SECTIONS）。
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean);
-const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads', 'mail'];
+const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads', 'mail', 'jank'];
 for (const s of ONLY) if (!SECTIONS.includes(s)) { console.error(`没有这一段：${s}（有：${SECTIONS.join(' ')}）`); process.exit(2); }
 const took = []; let cur = null;
 const want = (name) => { const t = Date.now(); if (cur) took.push(`${cur.name} ${((t - cur.t) / 1000).toFixed(0)}s`); cur = null; const ok = !ONLY.length || ONLY.includes(name); if (ok) cur = { name, t }; return ok; };
@@ -1816,6 +1816,162 @@ if (want('mail')) {
   }
 }
 if (flow.length > ml0) console.log(flow.slice(ml0).join('\n'));
+// ---------- 卡顿、跳位、点了没反应（决策 UI-32，2026-11-20 需求方：“打开下拉选择实例会卡断然后重新刷新实例列表，鼠标靠近离开反复会一直弹，
+// 节点出口入口开关后整个列表顺序会打乱位置跳走……打开实例没进度动画”） ----------
+// 假的核心服务：事件每 150 毫秒来一个、每次取状态流量的数都变（逼着页面一直重画），打开实例过 0.4 秒才报“启动中”，
+// 改节点时先清掉出口、断流“正在确认出口”0.6 秒再恢复（和 proxyflow.go 的 refresh 一样）。
+const jl0 = flow.length;
+if (desk && want('jank')) {
+  const js = JSON.parse(JSON.stringify(fixture));
+  const sub = js.subscriptions[0];
+  // 出口列表放 30 个，延迟有高有低（要滚动、要能看出“排序变没变”）
+  sub.pips = Array.from({ length: 30 }, (_, k) => ({ ...sub.pips[0], id: `j${k}|203.0.113.${k + 1}`, key: `198.51.100.${k + 1}:443`, value: `198.51.100.${k + 1}:443`, label: '', derived: false, delay: 40 + ((k * 37) % 300), cf: { ...sub.pips[0].cf, ip: `203.0.113.${k + 1}` } }));
+  // 三个没开的实例：q1 正常打开、q2 在实例页上点、q3 打开失败
+  for (const [id, no] of [['q1', 7], ['q2', 8], ['q3', 9]]) js.instances.push({ ...JSON.parse(JSON.stringify(js.instances[0])), id, no, name: `idle${no}`, rt: { running: false, starting: false } });
+  const meI = () => js.instances.find((x) => x.id === js.me.id);
+  let seq = js.seq || 1, stateDelay = 0, tick = 0;
+  const calls = [];
+  const bump = () => { seq++; };
+  const jsrv = http.createServer((q, r) => {
+    const u = new URL(q.url, 'http://x'), j = (o, code = 200) => { r.writeHead(code, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(o)); };
+    if (u.pathname === '/config.json') return j({ port: jsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' });
+    if (u.pathname.startsWith('/api/')) {
+      let body = ''; q.on('data', (c) => { body += c; });
+      q.on('end', () => {
+        let b = null; try { b = body ? JSON.parse(body) : null; } catch { b = null; }
+        if (q.method !== 'GET') calls.push({ m: q.method, p: u.pathname, b });
+        const lm = /^\/api\/instances\/([^/]+)\/launch$/.exec(u.pathname);
+        if (lm && q.method === 'POST') {
+          if (lm[1] === 'q3') return j({ error: '测试：浏览器内核还没准备好' }, 500);
+          setTimeout(() => { const i = js.instances.find((x) => x.id === lm[1]); if (i) { i.rt = { ...i.rt, starting: true, step: 2 }; bump(); } }, 400);
+          return j({ ok: true });
+        }
+        if (u.pathname === '/api/instances/p2' && q.method === 'PATCH') {
+          for (const m of [js.me, meI()]) { Object.assign(m.proxy, b?.proxy || {}); m.rt.probe0 = m.rt.probe0 || m.rt.probe; m.rt.probe = null; m.rt.cut = '正在确认出口'; }
+          bump();
+          setTimeout(() => { for (const m of [js.me, meI()]) { m.rt.probe = m.rt.probe0; m.rt.cut = ''; } bump(); }, 600);
+          return j({ ok: true });
+        }
+        if (u.pathname === '/api/state') {
+          tick++; js.me.rt.upRate = 1000 + tick * 17; meI().rt.upRate = js.me.rt.upRate; js.seq = seq; // 流量每次都变：页面每次都要重画
+          return setTimeout(() => j(js), stateDelay);
+        }
+        if (u.pathname === '/api/events') return setTimeout(() => j({ seq: ++seq }), 150);
+        if (u.pathname === '/api/vault/icons') return j({ icons: fixture.__icons });
+        if (u.pathname === '/api/vault') return j({ items: [] });
+        return j({ ok: true });
+      });
+      return;
+    }
+    const f = path.join(desk, decodeURIComponent(u.pathname));
+    if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); r.end(); return; }
+    r.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream' }); r.end(fs.readFileSync(f));
+  }).listen(0);
+  const jb = `http://127.0.0.1:${jsrv.address().port}/`;
+  const stub = () => { window.chrome = { runtime: { getURL: (x) => new URL(x, location.origin + '/').href, sendMessage: () => Promise.resolve() }, tabs: { create: () => {}, query: async () => [] } }; window.close = () => {}; };
+
+  // 1. 头像菜单（工具栏弹窗）：一直有新状态进来，实例列表的节点一个都不换、悬停提示不动
+  const pc = await br.newContext({ viewport: { width: 380, height: 600 }, deviceScaleFactor: 1, locale: 'zh-CN' });
+  await pc.addInitScript(stub);
+  let pp = await pc.newPage(); watch(pp, 'jank-popup');
+  await pp.goto(jb + 'popup.html'); await pp.waitForSelector('.amenu .ai', { timeout: 8000 });
+  await pp.waitForTimeout(400);
+  await pp.evaluate(() => {
+    document.querySelectorAll('.amenu .ai').forEach((e) => { e.__mark = 1; });
+    window.__mut = { kids: 0, title: 0 };
+    const l = document.querySelector('.amenu .insts');
+    new MutationObserver((ms) => { for (const m of ms) { if (m.type === 'childList' && m.target === l) window.__mut.kids++; if (m.type === 'attributes' && m.attributeName === 'title') window.__mut.title++; } }).observe(l, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'] });
+    window.__tf0 = document.querySelector('.amenu .hero .tf')?.textContent;
+  });
+  const ai2 = pp.locator('.amenu .ai').nth(1);
+  await ai2.hover();
+  await pp.waitForTimeout(1600); // 这期间有十来次新状态
+  const m1 = await pp.evaluate(() => ({ all: [...document.querySelectorAll('.amenu .ai')].every((e) => e.__mark === 1), n: document.querySelectorAll('.amenu .ai').length, mut: window.__mut, tf: document.querySelector('.amenu .hero .tf')?.textContent !== window.__tf0,
+    hov: document.querySelector('.amenu .ai:hover')?.__mark === 1 }));
+  check('头像菜单：一直有新状态进来（流量数变了）时，实例列表的节点一个都不换（不整列重画），列表里没有增删、悬停提示（title）不重设，鼠标下面还是同一个元素', m1.all && m1.n >= 4 && m1.mut.kids === 0 && m1.mut.title === 0 && m1.tf && m1.hov, m1);
+  // 2. 再打开一次弹窗：核心服务回得慢（1.5 秒）也先用缓存画出来
+  await pp.close(); stateDelay = 1500;
+  pp = await pc.newPage(); pp.on('pageerror', (e) => errors.push(`jank-popup2: ${e.message}`)); // 控制台里那条 500 是故意的（打开失败）
+  const t0 = Date.now();
+  await pp.goto(jb + 'popup.html', { waitUntil: 'domcontentloaded' });
+  await pp.waitForSelector('.amenu .ai', { timeout: 3000 }).catch(() => {});
+  const fast = Date.now() - t0, n2 = await pp.locator('.amenu .ai').count();
+  await pp.evaluate(() => document.querySelectorAll('.amenu .ai').forEach((e) => { e.__mark = 2; }));
+  await pp.waitForTimeout(1800); stateDelay = 0;
+  await pp.waitForTimeout(1700); // 慢的那一份取完
+  const kept = await pp.evaluate(() => [...document.querySelectorAll('.amenu .ai')].every((e) => e.__mark === 2));
+  check('头像菜单：第二次打开时核心服务 1.5 秒才回话，实例列表也马上画出来（用上次的缓存），新状态到了以后原地更新、节点不换', fast < 1000 && n2 >= 4 && kept, { fast, n2, kept });
+  // 3. 点“打开”：100 毫秒内这一行就是“正在打开”，连点只发一次；它的位置不跳；状态里出现“启动中”后接上启动步骤
+  const order0 = await pp.evaluate(() => [...document.querySelectorAll('.amenu .ai')].map((e) => e.dataset.iid));
+  const r3 = await pp.evaluate(async () => {
+    const el = document.querySelector('.amenu .ai[data-iid="q1"]'), t = performance.now();
+    el.click();
+    await new Promise((res) => requestAnimationFrame(() => res()));
+    const row = document.querySelector('.amenu .ai[data-iid="q1"]');
+    const dt = performance.now() - t, busy = !!row.querySelector('.stp.pend') && row.getAttribute('aria-busy') === 'true';
+    row.click(); row.click();
+    return { dt, busy };
+  });
+  await pp.waitForTimeout(900);
+  const r3b = await pp.evaluate(() => ({ order: [...document.querySelectorAll('.amenu .ai')].map((e) => e.dataset.iid), step: !!document.querySelector('.amenu .ai[data-iid="q1"] .stp:not(.pend) .stb')}));
+  const nLaunch = calls.filter((c) => c.p === '/api/instances/q1/launch').length;
+  check('头像菜单：点“打开”后 100 毫秒内这一行变成“正在打开”（进度条 + aria-busy），连点三下只发一次；核心服务报“启动中”后接上启动步骤；这一行留在原位不跳到最上面', r3.dt < 100 && r3.busy && nLaunch === 1 && r3b.step && JSON.stringify(r3b.order) === JSON.stringify(order0), { ...r3, nLaunch, ...r3b, order0 });
+  // 4. 打开失败：红色提示写原因，这一行回到“打开”
+  await pp.evaluate(() => document.querySelector('.amenu .ai[data-iid="q3"]').click());
+  await pp.waitForTimeout(400);
+  const r4 = await pp.evaluate(() => ({ toast: document.querySelector('#toast.bad')?.textContent || '', busy: !!document.querySelector('.amenu .ai[data-iid="q3"] .stp.pend') }));
+  check('头像菜单：打开失败时弹红色提示写明原因（“#9 没能打开：…”），这一行不再转', /#9 没能打开：测试：浏览器内核还没准备好/.test(r4.toast) && !r4.busy, r4);
+  await pp.screenshot({ path: path.join(out, 'jank-popup.png') });
+  await pc.close();
+
+  // 5. 实例页：卡片上的“打开”点下去当场转圈、不能再点；节点面板里拨开关，开关不跑；出口列表测完延迟不挪位置
+  const ac = await br.newContext({ viewport: { width: 1180, height: 700 }, deviceScaleFactor: 1, locale: 'zh-CN' });
+  await ac.addInitScript(stub);
+  const ap = await ac.newPage(); watch(ap, 'jank-app');
+  await ap.goto(jb + 'app.html#instances'); await ap.waitForSelector('.cardi[data-id="q2"]', { timeout: 8000 });
+  await ap.waitForTimeout(300);
+  const r5 = await ap.evaluate(async () => {
+    const c = document.querySelector('.cardi[data-id="q2"]'); c.__mark = 1;
+    const b = c.querySelector('.ib.go'), t = performance.now(); b.click();
+    await new Promise((res) => requestAnimationFrame(() => res()));
+    const c2 = document.querySelector('.cardi[data-id="q2"]');
+    const r = { dt: performance.now() - t, busy: !!c2.querySelector('.ib.busy[aria-disabled="true"]') && !!c2.querySelector('.stp.pend'), same: c2.__mark === 1 };
+    c2.querySelector('.ib.busy')?.click(); // 再点一下转圈的按钮：不再发，也不能把详情抽屉点开
+    r.drawer = !!document.querySelector('.drawer');
+    return r;
+  });
+  await ap.waitForTimeout(300);
+  check('实例页：卡片上点“打开”后 100 毫秒内按钮转圈、不能再点、卡片上出“正在打开…”，只发一次，再点转圈的按钮也不会打开详情；卡片还是原来那个元素（没有整页重建）', r5.dt < 100 && r5.busy && r5.same && !r5.drawer && calls.filter((c) => c.p === '/api/instances/q2/launch').length === 1, r5);
+
+  await ap.goto(jb + 'app.html#node'); await ap.waitForSelector('[data-k="exitAuto"] .sw', { timeout: 8000 });
+  await ap.waitForTimeout(400);
+  await ap.evaluate(() => scrollTo(0, 120));
+  const before = await ap.evaluate(() => Math.round(document.querySelector('[data-k="exitAuto"]').getBoundingClientRect().top));
+  await ap.click('[data-k="exitAuto"] .sw');
+  const tops = [];
+  for (let k = 0; k < 30; k++) { await ap.waitForTimeout(50); tops.push(await ap.evaluate(() => { const e = document.querySelector('[data-k="exitAuto"]'); return { t: e ? Math.round(e.getBoundingClientRect().top) : null, ban: [...document.querySelectorAll('.warn.bad')].some((w) => /正在确认出口/.test(w.textContent)), again: !!document.querySelector('.card.again') }; })); }
+  const drift = Math.max(...tops.map((x) => Math.abs((x.t ?? 1e9) - before))), sawAgain = tops.some((x) => x.again), sawBan = tops.some((x) => x.ban);
+  check('节点与出口：拨“出口 · 自动选择”后，核心服务清出口、断流确认、再恢复的这一秒多里，这个开关一直在原来的高度（偏差 ≤ 1 像素）；出口卡片留着上次的出口写“正在确认出口…”，不再冒红色断网条', drift <= 1 && sawAgain && !sawBan, { before, drift, sawAgain, sawBan, tops: tops.map((x) => x.t).join(',') });
+  await ap.screenshot({ path: path.join(out, 'jank-node.png') });
+
+  // 出口列表：进来时按延迟排；之后延迟全变了（倒过来），行不挪、滚动不跳；点“排序”选一次才按新的数重排
+  await ap.click('[data-k="exitList"]'); await ap.waitForSelector('.ls .iprow[data-k^="x:j"]', { timeout: 5000 });
+  await ap.waitForTimeout(300);
+  await ap.evaluate(() => scrollTo(0, 400));
+  const o1 = await ap.evaluate(() => ({ ids: [...document.querySelectorAll('.ls .iprow[data-k^="x:j"]')].map((e) => e.dataset.k), y: scrollY }));
+  for (const p of sub.pips) p.delay = 400 - p.delay; // 延迟整个倒过来：原来最快的变最慢
+  bump();
+  await ap.waitForTimeout(700);
+  const o2 = await ap.evaluate(() => ({ ids: [...document.querySelectorAll('.ls .iprow[data-k^="x:j"]')].map((e) => e.dataset.k), y: scrollY, d0: document.querySelector('.ls .iprow[data-k^="x:j"] .d')?.textContent }));
+  check('出口列表：延迟全变了（倒过来）以后，行的次序和滚动位置都不变，只改每行里的数', JSON.stringify(o1.ids) === JSON.stringify(o2.ids) && o1.y === o2.y && o1.ids.length === 30, { y1: o1.y, y2: o2.y, same: JSON.stringify(o1.ids) === JSON.stringify(o2.ids), d0: o2.d0 });
+  await ap.click('.sortb'); await ap.waitForSelector('.ddm .opt', { timeout: 3000 });
+  await ap.click('.ddm .opt.on');
+  await ap.waitForTimeout(400);
+  const o3 = await ap.evaluate(() => [...document.querySelectorAll('.ls .iprow[data-k^="x:j"]')].map((e) => e.dataset.k));
+  check('出口列表：点“排序”再选一次延迟，按新的数重排（第一行是现在最快的）', JSON.stringify(o3) === JSON.stringify([...o1.ids].reverse()) || o3[0] === o1.ids[o1.ids.length - 1], { first: o3[0], wasLast: o1.ids[o1.ids.length - 1] });
+  await ac.close(); jsrv.close();
+}
+if (flow.length > jl0) console.log(flow.slice(jl0).join('\n'));
 want('');
 if (took.length) console.log('用时：' + took.join('，'));
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');

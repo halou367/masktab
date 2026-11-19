@@ -9,6 +9,7 @@
 // 主题、发件人这些只用 textContent 写进页面（h() 的文字子节点就是 textContent）。
 import { api } from './api.js';
 import { h, icon, ibtn, toast, run, appBar, sec, row, pill, overlay, confirmDlg, choose } from './ui.js';
+import { openInst, launching } from './menu.js';
 
 export const DEFAULT_BASE = 'https://email.nloop.cc/';
 
@@ -252,8 +253,11 @@ export function mailView(c, id, key) {
   const shown = q ? d.mails.filter((m) => [m.from, m.subject, m.preview, m.code].some((x) => (x || '').toLowerCase().includes(q))) : icloud ? d.mails : inF(S.folder);
   const tab = (f, t) => { const u = inF(f).filter((m) => m.unread).length; return [f, [t, u ? h('span', { class: 'pcnt', 'aria-label': `${u} 封未读` }, String(u)) : null], u ? `${t}：${u} 封未读` : t]; };
   // 一次只显示一种提示
-  const stat = s.k === 'off' ? h('div', { class: 'mstat off' }, icon('power', 18), h('span', { class: 'tx' }, '实例没开，不收新信；收到过的信照样能看'),
-    h('button', { class: 'btn tonal sm', onclick: () => run(() => api('POST', `/api/instances/${id}/launch`), '正在打开实例') }, icon('play', 16), '打开实例'))
+  // “打开实例”点下去当场变成“正在打开…”、不能连点；核心服务报了“启动中”以后这里换成启动中的提示（menu.js 的 openInst，决策 UI-32）
+  const stat = s.k === 'off' && launching(inst) ? h('div', { class: 'mstat off', 'aria-busy': 'true' }, h('i', { class: 'dotspin' }), h('span', { class: 'tx' }, '正在打开实例…'),
+    h('button', { class: 'btn tonal sm busy', 'aria-disabled': 'true', onclick: (e) => e.stopPropagation() }, h('span', { class: 'ic spin' }, icon('refresh', 16)), '正在打开'))
+    : s.k === 'off' ? h('div', { class: 'mstat off' }, icon('power', 18), h('span', { class: 'tx' }, '实例没开，不收新信；收到过的信照样能看'),
+      h('button', { class: 'btn tonal sm', onclick: () => openInst(inst) }, icon('play', 16), '打开实例'))
     : s.k === 'err' ? h('div', { class: 'warn bad mstat' }, icon('warn', 20), h('span', { class: 'tx' }, s.t), h('button', { class: 'lk', onclick: () => fetchNow(c, id) }, '重试'))
       : null;
   const subTx = s.k === 'wait' || s.k === 'busy' ? h('span', { class: 'sub mprog', title: s.tip || (d.via ? '收信走：' + d.via : '') }, h('i', { class: 'dotspin' }), s.t)
@@ -296,7 +300,8 @@ function detail(c, id, d, inst) {
   let body;
   if (html) {
     const fr = h('iframe', { class: 'mframe', sandbox: MAIL_SANDBOX, referrerpolicy: 'no-referrer', title: '邮件正文' });
-    const wrap = h('div', { class: 'mblk mbody loading' }, fr, h('div', { class: 'mload' }, h('i', { class: 'dotspin' }), ' 正文加载中…'));
+    // data-keep：同一封、同样的图片设置时，重画（状态每变一次）整块原样留着——不重新加载正文、不再闪“正文加载中”（决策 UI-32）
+    const wrap = h('div', { class: 'mblk mbody loading', 'data-keep': `${o.key}|${imgs ? 1 : 0}|${html.length}` }, fr, h('div', { class: 'mload' }, h('i', { class: 'dotspin' }), ' 正文加载中…'));
     fr.addEventListener('load', () => wrap.classList.remove('loading'));
     fr.srcdoc = mailDoc(html, imgs);
     body = wrap;

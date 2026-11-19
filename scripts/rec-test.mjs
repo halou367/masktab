@@ -389,6 +389,66 @@ await page.goto('https://app.one.test/welcome');
 await sleep(800);
 check('没有输入框的页面不提示', await u.ask.count() === 0);
 
+// 十一、实例菜单（工具栏弹窗）接真的核心服务（决策 UI-32）：真扩展的 popup.html，状态、事件、打开实例全走真核心服务。
+//   一直有事件进来时实例列表的节点不换、悬停提示不重设；点“打开”100 毫秒内这一行就是“正在打开”、连点只发一次；
+//   宿主模式没有浏览器内核，核心服务会拒绝打开——红色提示要写出它给的原因。
+// 页面的请求由这个进程转给核心服务（核心服务只认伴随扩展的来源，网页直接请求会被拒，硬规则 R-4）。
+console.log(`[${kind}] 十一 实例菜单：不整列重画、打开有即时反馈`);
+{
+  const C = (await api('POST', '/api/instances', {})).id; // 第三个实例：菜单里“其它实例”至少两行
+  const launches = [];
+  const ctx = await browser.newContext({ viewport: { width: 380, height: 600 } });
+  await ctx.addInitScript(() => { window.chrome = { runtime: { getURL: (x) => new URL(x, location.origin + '/').href, sendMessage: () => Promise.resolve() }, tabs: { create: () => {}, query: async () => [] } }; window.close = () => {}; });
+  await ctx.route('https://ext.test/**', async (r) => {
+    const u = new URL(r.request().url());
+    if (u.pathname === '/config.json') return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ port: 9, token: 'x', instanceId: A }) });
+    const f = path.join(EXT, decodeURIComponent(u.pathname));
+    if (!existsSync(f)) return r.fulfill({ status: 404, body: 'nf' });
+    r.fulfill({ contentType: { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html; charset=utf-8', '.png': 'image/png' }[path.extname(f)] || 'application/octet-stream', body: readFileSync(f) });
+  });
+  await ctx.route('http://127.0.0.1:9/**', async (r) => { // 转给真的核心服务
+    const q = r.request(), u = new URL(q.url());
+    if (/\/launch$/.test(u.pathname)) launches.push(u.pathname);
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}${u.pathname}${u.search}`, { method: q.method(), headers: { 'X-MaskTab-Token': token, 'X-MaskTab-Inst': A, ...(q.postData() ? { 'Content-Type': 'application/json' } : {}) }, body: q.postData() || undefined });
+      r.fulfill({ status: res.status, contentType: 'application/json', body: await res.text() });
+    } catch { r.abort(); }
+  });
+  const p = await ctx.newPage();
+  p.on('pageerror', (e) => { console.log('失败：弹窗报错', e.message); fails++; });
+  await p.goto('https://ext.test/popup.html');
+  await until(() => p.locator('.amenu .ai').count(), 8000);
+  await sleep(500);
+  await p.evaluate(() => {
+    document.querySelectorAll('.amenu .ai').forEach((e) => { e.__mark = 1; });
+    window.__mut = { kids: 0, title: 0 };
+    const l = document.querySelector('.amenu .insts');
+    new MutationObserver((ms) => { for (const m of ms) { if (m.type === 'childList' && m.target === l) window.__mut.kids++; if (m.type === 'attributes') window.__mut.title++; } }).observe(l, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'] });
+  });
+  // 改两次 B 的名字（真的事件 → 真的新状态）：只有那一行的名字变，节点都还是原来的
+  await p.locator(`.amenu .ai[data-iid="${B}"]`).hover();
+  await api('PATCH', `/api/instances/${B}`, { name: 'rec-b1' }); await sleep(600);
+  await api('PATCH', `/api/instances/${B}`, { name: 'rec-b2' }); await sleep(800);
+  const m = await p.evaluate((b) => ({ same: [...document.querySelectorAll('.amenu .ai')].every((e) => e.__mark === 1), n: document.querySelectorAll('.amenu .ai').length, mut: window.__mut,
+    name: document.querySelector(`.amenu .ai[data-iid="${b}"] .n`)?.textContent || '' }), B);
+  check('实例菜单：核心服务推来新状态（改了一个实例的名字）后，只有那一行的字变了，实例列表的节点一个都没换、没有增删', m.same && m.n >= 2 && m.mut.kids === 0 && /rec-b2/.test(m.name), JSON.stringify(m));
+  const r = await p.evaluate(async (c) => {
+    const el = document.querySelector(`.amenu .ai[data-iid="${c}"]`), t = performance.now();
+    el.click();
+    await new Promise((res) => requestAnimationFrame(() => res()));
+    const row = document.querySelector(`.amenu .ai[data-iid="${c}"]`), dt = performance.now() - t;
+    const busy = !!row.querySelector('.stp.pend') && row.getAttribute('aria-busy') === 'true';
+    row.click(); row.click();
+    return { dt, busy };
+  }, C);
+  const toast = await until(async () => (await p.locator('#toast.bad').count()) && (await p.locator('#toast.bad').textContent()), 4000);
+  check('实例菜单：点“打开”后 100 毫秒内这一行变成“正在打开”（进度条 + aria-busy），连点三下只发一次', r.dt < 100 && r.busy && launches.length === 1, JSON.stringify({ ...r, launches: launches.length }));
+  const still = await p.locator(`.amenu .ai[data-iid="${C}"] .stp.pend`).count();
+  check('实例菜单：核心服务拒绝打开（没有浏览器内核）时弹红色提示，写出它给的原因，这一行不再转', /没能打开：.*内核/.test(toast || '') && still === 0, `${toast} / 还在转 ${still}`);
+  await shot(p, '11-menu');
+  await ctx.close();
+}
+
 await browser.close();
 core.stdin.end(); core.kill();
 console.log(fails ? `失败 ${fails} 项（通过 ${passed} 项）` : `全部通过（${passed} 项）`);
