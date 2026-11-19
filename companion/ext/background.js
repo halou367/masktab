@@ -117,14 +117,28 @@ async function mailNotify(st) {
     chrome.notifications.create(`mail|${me.id}|${n.key}`, { type: 'basic', iconUrl: chrome.runtime.getURL('assets/icon128.png'), title: n.title, message: n.message, priority: 1 });
   }
   if (notes.length) globalThis.lastMailNotes = notes; // 测试从调试端口看“最近一次弹了什么”（没弹的那几轮不盖掉它：有代理内核时状态一秒变好几次）
+  // 已经读过（在哪儿读的都算：信箱页、别的窗口、全部标为已读）、本地删了的信：通知中心里的那条收掉，和角标、未读数保持一致
+  const unread = new Set(me.mail.keys || []), all = await chrome.notifications.getAll().catch(() => ({}));
+  for (const nid of Object.keys(all || {})) {
+    if (nid.startsWith(`mail|${me.id}|`) && !unread.has(nid.slice(`mail|${me.id}|`.length))) chrome.notifications.clear(nid);
+  }
 }
 chrome.notifications?.onClicked.addListener(async (nid) => {
   if (!nid.startsWith('mail|')) return;
   const rest = nid.slice(5), i = rest.indexOf('|'), inst = rest.slice(0, i), key = rest.slice(i + 1);
   chrome.notifications.clear(nid);
-  const url = chrome.runtime.getURL(`app.html#mail/${inst}/${encodeURIComponent(key)}`);
-  const tab = await chrome.tabs.create({ url }).catch(() => null);
+  const box = chrome.runtime.getURL(`app.html#mail/${inst}`), url = `${box}/${encodeURIComponent(key)}`;
+  // 已经开着这个实例的信箱页：复用它（切过去、打开这一封），不每点一次就多一个标签页
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  const old = tabs.find((t) => t.url === box || t.url?.startsWith(box + '/'));
+  let tab;
+  if (old) {
+    if (old.url === url) await chrome.tabs.update(old.id, { url: box }).catch(() => {}); // 地址一样不会触发 hashchange：先回到列表再打开这一封
+    tab = await chrome.tabs.update(old.id, { url, active: true }).catch(() => null);
+  }
+  if (!tab) tab = await chrome.tabs.create({ url }).catch(() => null);
   if (tab?.windowId != null) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  globalThis.lastMailClick = { reused: !!old, tabId: tab?.id }; // 测试看“点通知是不是复用了标签页”
 });
 
 async function handle(e, c) {

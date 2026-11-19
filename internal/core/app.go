@@ -467,6 +467,9 @@ func (a *App) bumpLocked(typ, inst string) {
 		close(ch)
 		delete(a.waiters, ch)
 	}
+	if typ == "state" { // 实例开了、线路通了：叫醒收信循环，线路一通马上收（decisions MB-1）
+		a.mailPoke()
+	}
 }
 
 // wait 长轮询：返回 since 之后的事件，最多等 d。

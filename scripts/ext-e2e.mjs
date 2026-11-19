@@ -159,7 +159,13 @@ const ids = await sw.evaluate(() => new Promise((r) => chrome.notifications.getA
 check('信箱：通知真的发出去了（chrome.notifications 里有它）', ids.some((x) => x.startsWith(`mail|${me.id}|INBOX:e2e-1`)), JSON.stringify(ids));
 await ap.goto(`chrome-extension://${new URL(sw.url()).host}/app.html#mail/${me.id}/${encodeURIComponent('INBOX:e2e-1')}`);
 const fr = await until(async () => ap.evaluate(() => { const f = document.querySelector('.mframe'); return f ? { sb: f.getAttribute('sandbox'), code: document.querySelector('.mcodebox b')?.textContent } : null; }), 6000);
-check('信箱：点通知进来的地址直接打开那一封（正文在 sandbox 里，验证码显示出来），看过就不算未读', fr?.sb === '' && fr?.code === '135790' && await until(async () => (await api('GET', `/api/mail/${me.id}`)).unread === 0, 4000), JSON.stringify(fr));
+check('信箱：点通知进来的地址直接打开那一封（正文在 sandbox 里，只许弹出新标签页；验证码显示出来），看过就不算未读', fr?.sb === 'allow-popups allow-popups-to-escape-sandbox' && fr?.code === '135790' && await until(async () => (await api('GET', `/api/mail/${me.id}`)).unread === 0, 4000), JSON.stringify(fr));
+// 看过了：通知中心里那一条收掉、角标不再写未读数（各处的未读数一致）
+const gone = await until(async () => { const x = await sw.evaluate(() => new Promise((r) => chrome.notifications.getAll((n) => r(Object.keys(n || {}))))); const t = await sw.evaluate(() => chrome.action.getTitle({})); return !x.some((k) => k.startsWith(`mail|`)) && !/信箱：\d+ 封未读/.test(t) ? true : null; }, 8000);
+check('信箱：看过以后通知中心里的那条自动收掉，悬停提示不再写未读', !!gone, '');
+// 标回未读：状态里的未读数回到 1（角标、实例卡片跟着变）
+await api('POST', `/api/mail/${me.id}/read`, { keys: ['INBOX:e2e-1'], unread: true });
+check('信箱：标为未读后未读数回到 1', (await api('GET', `/api/mail/${me.id}`)).unread === 1 && await until(async () => /信箱：1 封未读/.test(await sw.evaluate(() => chrome.action.getTitle({}))) || null, 6000), '');
 if (shots) await ap.screenshot({ path: path.join(shots, 'e2e-6-mail.png') });
 check('网页和扩展页面没有脚本错误', perr.length === 0, perr.join(' | '));
 check('后台没有报错', swErr.length === 0, swErr.join(' | '));

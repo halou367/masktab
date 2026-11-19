@@ -284,6 +284,7 @@ html.pc .ddm { min-width: 180px; } html.pc .ddm .opt { min-height: 38px; font-si
 html.pc .scrim { padding: 24px 0; } html.pc .sheet { margin: auto; border-radius: 28px; width: 520px; animation: dlgIn var(--d-m) var(--e-dec); } html.pc .handle { display: none; }
 #toast { position: fixed; left: calc(12px + env(safe-area-inset-left, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 90; background: var(--inv); color: var(--oninv); border-radius: 6px; min-height: 48px; padding: 12px 16px; font-size: 14px; display: flex; align-items: center; opacity: 0; transform: translateY(20px); transition: opacity var(--d-s) var(--e-std), transform var(--d-m) var(--e-std); pointer-events: none; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); }
 #toast.show { opacity: 1; transform: none; } #toast.bad { background: #b3261e; color: #fff; }
+#toast .tx { flex: 1; min-width: 0; } #toast.act.show { pointer-events: auto; } #toast .lk { flex: none; margin-left: 12px; color: inherit; font-weight: 600; text-decoration: underline; padding: 6px 8px; }
 html.pc #toast { left: 24px; right: auto; max-width: 420px; }
 
 /* 旧组件（还在 instances.js 等里用）：画成新样子 */
@@ -754,6 +755,29 @@ html.wzwin body.bye #main { opacity: 0; transition: opacity var(--d-s) var(--e-a
 .mset .mhint { margin-top: -6px; font-size: 12.5px; } .mset .mhint.bad { color: var(--bad); }
 .mset .acts .grow { flex: 1; }
 .mchip { color: inherit; padding: 0 2px; min-height: 0; } .mchip.on { color: var(--acc); font-weight: 600; }
+/* 信箱 v2（2026-11-19）：一种状态一句提示、多选、行内操作、搜索、正文加载提示 */
+.ib:disabled { opacity: .38; cursor: default; }
+.mhead .mprog { display: inline-flex; align-items: center; gap: 6px; }
+.mstat.off { margin: 4px 16px 8px; padding: 8px 8px 8px 14px; border-radius: 16px; background: var(--st2); color: var(--on2); display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.mstat.off .tx { flex: 1; min-width: 0; } .mstat.off .btn { margin: 0; flex: none; }
+.msearch { display: flex; align-items: center; gap: 8px; margin: 0 16px 8px; padding: 0 4px 0 12px; border-radius: 24px; background: var(--st2); color: var(--on2); }
+.msearch input.field { flex: 1; min-width: 0; border: 0; background: transparent; height: 40px; padding: 0; outline: none; color: var(--on); }
+.pcnt { display: inline-block; margin-left: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--acc); color: var(--onacc); font-size: 11px; line-height: 18px; font-weight: 600; text-align: center; vertical-align: 1px; }
+.mrow { cursor: pointer; position: relative; }
+.mrow:focus-visible { outline: 2px solid var(--acc); outline-offset: -2px; }
+.mrow.sel { background: var(--tonal); }
+.mrow .msel { flex: none; width: 20px; height: 20px; border-radius: 6px; border: 1.6px solid var(--on3); color: transparent; display: none; align-items: center; justify-content: center; padding: 0; }
+.mrow:hover .msel, .mlist.picking .msel { display: inline-flex; }
+.mrow:hover .mdot, .mlist.picking .mdot { display: none; }
+.mrow.sel .msel { background: var(--acc); border-color: var(--acc); color: var(--onacc); }
+.mrow .macts { flex: none; display: none; gap: 0; }
+.mrow:hover .macts { display: inline-flex; } .mlist.picking .macts { display: none !important; }
+.mrow .macts .ib { width: 36px; height: 36px; color: var(--on2); }
+.mrow .l1 .tag { flex: none; }
+.mbody { position: relative; }
+.mbody .mload { display: none; position: absolute; inset: 0; align-items: flex-start; justify-content: center; padding-top: 48px; color: var(--on3); font-size: 13px; background: var(--bg); gap: 6px; }
+.mbody.loading .mload { display: flex; }
+@media (hover: none) { .mrow .msel { display: none; } .mlist.picking .msel { display: inline-flex; } }
 @media (prefers-reduced-motion: reduce) {
   :root { --d-xs: 0ms; --d-s: 0ms; --d-m: 0ms; --d-l: 0ms; }
   *, *::before, *::after { animation-duration: 0ms !important; animation-delay: 0ms !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }

@@ -269,6 +269,8 @@ type Settings struct {
 	FPOff []string `json:"fpOff,omitempty"`
 	// 信箱（decisions MB-1）：后台收信的间隔（分钟）；0 = 默认 2 分钟
 	MailPollMin int `json:"mailPollMin,omitempty"`
+	// 信箱：邮件里的远程图片。"" = 总是加载（默认，需求方 2026-11-19：“就像真的邮件一样”）；"ask" = 先不加载，点了才加载
+	MailImages string `json:"mailImages,omitempty"`
 }
 
 // Bookmark 是新标签页上的一个书签。

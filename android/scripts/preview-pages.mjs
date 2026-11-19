@@ -1640,7 +1640,7 @@ const mailFixture = () => {
   s.__mailbox = { p2: { set: true, kind: 'outlook', email: 'carol.demo@outlook.com', card: { kind: 'outlook', email: 'carol.demo@outlook.com', password: '••••••', clientId: '0000…4444', refresh: 'M.C5…wxyz（312 字符）' }, base: 'https://email.nloop.cc/', every: 2, unread: 2, lastAt: now - 40e3, via: '这个实例自己的线路', mails } };
   s.__mailMsgs = {
     'INBOX:m1': { id: 'm1', subject: '你的登录验证码', from: 'Acme 账号中心 <no-reply@acme.example>', to: 'carol.demo@outlook.com', receivedAt: iso(2), folder: 'INBOX', verificationCode: '482913',
-      htmlBody: '<h2 onclick="parent.__pwned=1">Acme</h2><p>你的验证码是 <b>482913</b>，10 分钟内有效。</p><img src="https://tracker.example/open.gif" onerror="parent.__pwned=2"><script>parent.__pwned=3</script><a href="javascript:parent.__pwned=4">链接</a><form action="https://evil.example"><input></form>' },
+      htmlBody: '<h2 onclick="parent.__pwned=1">Acme</h2><p>你的验证码是 <b>482913</b>，10 分钟内有效。</p><img src="https://tracker.example/open.gif" onerror="parent.__pwned=2"><script>parent.__pwned=3</script><a href="javascript:parent.__pwned=4">链接</a><a href="https://acme.example/about">About Us</a><form action="https://evil.example"><input></form>' },
     'INBOX:m2': { id: 'm2', subject: '[GitHub] Please verify your device', from: 'GitHub <noreply@github.example>', receivedAt: iso(30), folder: 'INBOX', body: 'Verification code: none\n纯文字正文，第二行。' } };
   return s;
 };
@@ -1656,7 +1656,7 @@ if (want('mail')) {
   check('信箱列表：收件箱三封，按时间新的在前，前两封未读（有未读点）、第一封带验证码', r.map((x) => x.key).join() === 'INBOX:m1,INBOX:m2,INBOX:m3' && r[0].unread && r[1].unread && !r[2].unread && r[0].code === '482913' && /Acme/.test(r[0].from), r);
   check('信箱列表：长主题省略成一行，每行不超过 90 高', r[2].cut && r.every((x) => x.h <= 90), r.map((x) => [x.h, x.cut]));
   const head = await pg.evaluate(() => ({ t: document.querySelector('.appbar h1')?.textContent, tabs: [...document.querySelectorAll('.mtabs .pill button')].map((b) => b.textContent), mh: document.querySelector('.mhead')?.textContent }));
-  check('信箱顶栏：标题带编号和未读数；收件箱 / 垃圾箱两个标签（收件箱写着 2 封未读）；邮箱和上次收信时间', /^信箱 · #2\s*2$/.test(head.t.replace(/\s+/g, ' ').trim()) && head.tabs.join() === '收件箱 2,垃圾箱' && /carol\.demo@outlook\.com.*Outlook.*上次收信 刚刚/.test(head.mh), head);
+  check('信箱顶栏：标题带编号和未读数；收件箱 / 垃圾箱两个标签（收件箱写着 2 封未读）；邮箱和上次收信时间', /^信箱 · #2\s*2$/.test(head.t.replace(/\s+/g, ' ').trim()) && head.tabs.join() === '收件箱2,垃圾箱' && /carol\.demo@outlook\.com.*Outlook.*上次收信 \d\d:\d\d/.test(head.mh), head);
   await pg.screenshot({ path: path.join(out, 'mail-list.png') });
   await pg.click('.mcode'); await pg.waitForTimeout(200);
   const clip = await pg.evaluate(() => navigator.clipboard.readText().catch(() => 'ERR'));
@@ -1665,21 +1665,21 @@ if (want('mail')) {
   r = await rows();
   check('点“垃圾箱”：只列垃圾箱那一封', r.length === 1 && r[0].key === 'Junk:j1', r);
   await pg.click('.mtabs .pill button:nth-child(1)'); await pg.waitForTimeout(150);
-  // 详情：HTML 正文进 sandbox iframe，脚本不跑、远程图片默认不加载
+  // 详情：HTML 正文进 sandbox iframe，脚本不跑；远程图片默认加载（“就像真的邮件一样”）；链接新标签页打开
   await pg.click('.mrow[data-key="INBOX:m1"]'); await pg.waitForSelector('.mframe');
   await pg.waitForTimeout(400);
   const d = await pg.evaluate(() => { const f = document.querySelector('.mframe'), doc = f.srcdoc;
-    return { sandbox: f.getAttribute('sandbox'), csp: /img-src data:;/.test(doc) && !/tracker\.example/.test(doc), noScript: !/<script/i.test(doc) && !/onerror|onclick/i.test(doc) && !/javascript:/i.test(doc) && !/<form/i.test(doc), pwned: window.__pwned || 0,
+    return { sandbox: f.getAttribute('sandbox'), csp: /img-src data: http: https:;/.test(doc) && /tracker\.example/.test(doc), link: /<a href="https:\/\/acme\.example\/about" target="_blank" rel="noopener noreferrer">About Us<\/a>/.test(doc), noScript: !/<script/i.test(doc) && !/onerror|onclick/i.test(doc) && !/javascript:/i.test(doc) && !/<form/i.test(doc), pwned: window.__pwned || 0,
       subj: document.querySelector('.msubj')?.textContent, code: document.querySelector('.mcodebox b')?.textContent, imgWarn: !!document.querySelector('.mdetail .warn'), hasB: /482913/.test(doc),
       asked: window.__calls.filter((x) => /^\/api\/mail\/p2\/msg/.test(x.p)).map((x) => x.p) }; });
-  check('邮件详情：正文放进 sandbox（空值 = 不许脚本）的 iframe，去掉脚本 / 事件属性 / javascript: 链接 / 表单，页面没被改动', d.sandbox === '' && d.noScript && d.pwned === 0 && d.hasB, d);
-  check('邮件详情：远程图片默认不加载（CSP 只放 data:），有“加载图片”的提示；主题、验证码显示出来；按 key 取全文', d.csp && d.imgWarn && d.subj === '你的登录验证码' && d.code === '482913' && d.asked.length === 1 && /key=INBOX%3Am1/.test(d.asked[0]), d);
+  check('邮件详情：正文放进 sandbox 的 iframe（不许脚本，只许弹出新标签页），去掉脚本 / 事件属性 / javascript: 链接 / 表单，页面没被改动', d.sandbox === 'allow-popups allow-popups-to-escape-sandbox' && d.noScript && d.pwned === 0 && d.hasB, d);
+  check('邮件详情：远程图片默认直接加载（CSP 放开 http/https，没有黄条）；链接一律 target=_blank rel=noopener；主题、验证码显示出来；按 key 取全文', d.csp && !d.imgWarn && d.link && d.subj === '你的登录验证码' && d.code === '482913' && d.asked.length === 1 && /key=INBOX%3Am1/.test(d.asked[0]), d);
   await pg.screenshot({ path: path.join(out, 'mail-detail.png') });
   await pg.evaluate(() => navigator.clipboard.writeText(''));
   await pg.click('.mcodebox .btn'); await pg.waitForTimeout(150);
   check('详情里“复制”验证码', await pg.evaluate(() => navigator.clipboard.readText()) === '482913', {});
-  await pg.click('.mdetail .warn .lk'); await pg.waitForTimeout(150);
-  check('点“加载图片”：CSP 放开 http/https 图片、图片地址放回去，仍然是 sandbox', await pg.evaluate(() => { const f = document.querySelector('.mframe'); return /img-src data: http: https:/.test(f.srcdoc) && /tracker\.example/.test(f.srcdoc) && f.getAttribute('sandbox') === ''; }), {});
+  await pg.waitForFunction(() => !document.querySelector('.mbody.loading'), null, { timeout: 3000 }).catch(() => {});
+  check('正文 iframe 画出来以后“正文加载中”的提示收起', await pg.evaluate(() => !!document.querySelector('.mbody') && !document.querySelector('.mbody.loading')), {});
   await pg.click('.appbar .ib[aria-label="回到列表"]'); await pg.waitForTimeout(150);
   check('详情顶栏的返回 = 回到列表', await pg.locator('.mrow').count() === 3, {});
   // 纯文字正文
@@ -1688,9 +1688,56 @@ if (want('mail')) {
   // 系统返回键：先回列表
   await pg.evaluate(() => { location.hash = '#__back'; }); await pg.waitForTimeout(200);
   check('系统返回键：开着一封信时先回到列表', await pg.locator('.mrow').count() === 3, await pg.evaluate(() => location.hash));
-  // 立即收信
+  // 立即收信（顺便把“远程图片”设成“询问”：收信的回答里带着这个设置）
+  await pg.evaluate(() => { window.__mtState.__mailbox.p2.images = 'ask'; });
   await pg.click('.appbar .ib[aria-label="立即收信"]'); await pg.waitForTimeout(300);
   check('“立即收信”调 POST /api/mail/p2/fetch，提示收到几封', await pg.evaluate(() => window.__calls.some((x) => x.m === 'POST' && x.p === '/api/mail/p2/fetch') && /收到 1 封新邮件/.test(document.getElementById('toast')?.textContent || '')), {});
+  await pg.click('.mrow[data-key="INBOX:m1"]'); await pg.waitForSelector('.mframe'); await pg.waitForTimeout(200);
+  const ask = await pg.evaluate(() => { const f = document.querySelector('.mframe'); return { csp: /img-src data:;/.test(f.srcdoc) && !/tracker\.example/.test(f.srcdoc), warn: !!document.querySelector('.mdetail .warn .lk') }; });
+  check('设置成“远程图片：询问”：图片先不加载、有“加载图片”的提示', ask.csp && ask.warn, ask);
+  await pg.click('.mdetail .warn .lk'); await pg.waitForTimeout(150);
+  check('点“加载图片”：CSP 放开 http/https 图片、图片地址放回去，仍然是同一个 sandbox', await pg.evaluate(() => { const f = document.querySelector('.mframe'); return /img-src data: http: https:/.test(f.srcdoc) && /tracker\.example/.test(f.srcdoc) && f.getAttribute('sandbox') === 'allow-popups allow-popups-to-escape-sandbox'; }), {});
+  // 详情里“标为未读”：回到列表，告诉核心服务
+  await pg.click('.appbar .ib[aria-label="标为未读"]'); await pg.waitForTimeout(250);
+  const unr = await pg.evaluate(() => window.__calls.filter((x) => x.m === 'POST' && x.p === '/api/mail/p2/read').map((x) => x.b));
+  check('详情里“标为未读”：回到列表，发 POST /api/mail/p2/read {keys, unread:true}', await pg.locator('.mdetail').count() === 0 && unr.some((b) => b.unread === true && b.keys?.join() === 'INBOX:m1'), unr);
+  // 列表行上的“标为已读 / 未读”（悬停才显示的按钮）
+  await pg.evaluate(() => document.querySelector('.mrow[data-key="INBOX:m3"] .macts .ib[aria-label="标为未读"]').click()); await pg.waitForTimeout(250);
+  check('列表行上的按钮：已读的那封“标为未读”', await pg.evaluate(() => window.__calls.some((x) => x.p === '/api/mail/p2/read' && x.b.unread === true && x.b.keys?.join() === 'INBOX:m3')), {});
+  // 多选：选两封 → 顶栏变成“已选 2 封”，批量标已读、删除（可撤销）
+  await pg.evaluate(() => { for (const k of ['INBOX:m1', 'INBOX:m2']) document.querySelector(`.mrow[data-key="${k}"] .msel`).click(); }); await pg.waitForTimeout(150);
+  const selT = await pg.evaluate(() => document.querySelector('.appbar h1')?.textContent);
+  check('多选：顶栏写“已选 2 封”，有批量标已读 / 删除', selT === '已选 2 封' && await pg.locator('.appbar .ib[aria-label="标为已读"]').count() === 1, selT);
+  await pg.screenshot({ path: path.join(out, 'mail-select.png') });
+  await pg.click('.appbar .ib[aria-label="删除（只在本机不显示）"]'); await pg.waitForTimeout(250);
+  const hid = await pg.evaluate(() => ({ calls: window.__calls.filter((x) => x.p === '/api/mail/p2/hide').map((x) => x.b), toast: document.getElementById('toast')?.textContent }));
+  check('批量删除：发 POST /api/mail/p2/hide（两封），提示里能撤销', hid.calls.length === 1 && hid.calls[0].keys.join() === 'INBOX:m1,INBOX:m2' && !hid.calls[0].undo && /已删除 2 封.*撤销/.test(hid.toast), hid);
+  await pg.click('#toast .lk'); await pg.waitForTimeout(250);
+  check('点“撤销”：发 hide {undo:true}', await pg.evaluate(() => window.__calls.some((x) => x.p === '/api/mail/p2/hide' && x.b.undo === true && x.b.keys.length === 2)), {});
+  // 搜索：跨收件箱 / 垃圾箱
+  await pg.click('.appbar .ib[aria-label="搜索"]'); await pg.fill('.msearch input', 'prize'); await pg.waitForTimeout(150);
+  r = await rows();
+  check('搜索：按发件人 / 主题 / 摘要找，跨文件夹（垃圾箱那封也找得到）', r.length === 1 && r[0].key === 'Junk:j1', r);
+  await pg.click('.msearch .ib[aria-label="关闭搜索"]'); await pg.waitForTimeout(100);
+  // 线路状态：一次只显示一种提示（换个实例再回来，重新读一次信箱）
+  const reMail = async (patch) => { await pg.evaluate((pt) => { Object.assign(window.__mtState.__mailbox.p2, pt); location.hash = '#mail/p3'; }, patch); await pg.waitForSelector('.mempty'); await pg.evaluate(() => { location.hash = '#mail/p2'; }); await pg.waitForSelector('.mhead'); await pg.waitForTimeout(150); };
+  const look = () => pg.evaluate(() => ({ off: document.querySelector('.mstat.off')?.textContent || '', bad: document.querySelector('.warn.bad')?.textContent || '', sub: document.querySelector('.mhead .sub')?.textContent || '', fetchOff: !!document.querySelector('.appbar .ib[aria-label="立即收信"]')?.disabled, n: document.querySelectorAll('.mstat, .mhead .sub').length }));
+  await reMail({ line: 'off' });
+  let lk = await look();
+  check('实例没开：灰条“实例没开”+“打开实例”按钮，“立即收信”置灰，只有这一句；收到过的信照样列出来', /实例没开/.test(lk.off) && /打开实例/.test(lk.off) && lk.fetchOff && lk.n === 1 && !lk.bad && await pg.locator('.mrow').count() === 3, lk);
+  await pg.screenshot({ path: path.join(out, 'mail-off.png') });
+  await pg.click('.mstat.off .btn'); await pg.waitForTimeout(200);
+  check('点“打开实例”：发 POST /api/instances/p2/launch', await pg.evaluate(() => window.__calls.some((x) => x.m === 'POST' && x.p === '/api/instances/p2/launch')), {});
+  await reMail({ line: 'starting' }); lk = await look();
+  check('正在启动：只写“实例启动中”，“立即收信”置灰', lk.sub.includes('实例启动中') && lk.fetchOff && lk.n === 1 && !lk.off, lk);
+  await reMail({ line: 'connecting' }); lk = await look();
+  check('开着、线路没通：只写“线路连接中”', lk.sub.includes('线路连接中') && lk.fetchOff && lk.n === 1, lk);
+  await reMail({ line: 'ok', busy: true, step: '收件箱 1/2', since: Date.now() - 5000 }); lk = await look();
+  check('正在收信：写进度（哪个文件夹、几秒）', /正在收信 · 收件箱 1\/2 · \d+ 秒/.test(lk.sub) && lk.n === 1, lk);
+  await reMail({ busy: false, step: '', fails: 3, err: '连接取件地址超时' }); lk = await look();
+  check('连续失败 3 次：红条写原因，有“重试”；不再另写“上次收信”', /连接取件地址超时.*重试/.test(lk.bad) && lk.n === 1 && !lk.fetchOff, lk);
+  await reMail({ fails: 0, err: '' }); lk = await look();
+  check('收信正常：只写“上次收信 hh:mm”', /^上次收信 \d\d:\d\d$/.test(lk.sub) && lk.n === 1, lk);
   // 实例详情里的“信箱”一栏、卡片上的未读数
   await pg.evaluate(() => { location.hash = '#instances'; }); await pg.waitForSelector('.cardi');
   const chip = await pg.evaluate(() => [...document.querySelectorAll('.cardi')].map((c) => ({ id: c.dataset.id, chip: c.querySelector('.mchip')?.textContent ?? null })));
@@ -1733,7 +1780,7 @@ if (want('mail')) {
     const d = mailNotes(me2, c.seen);
     return { a: a.notes.length, aSeen: a.seen.length, b: b.notes.map((n) => [n.title, n.message]), c: c.notes.length, d: d.notes.map((n) => n.key) };
   }, ms);
-  check('通知：后台刚起来（没记录）只记下不弹；之后每封新邮件弹一次，标题写实例编号和发件人，内容带验证码；同一封不重复弹', nt.a === 0 && nt.aSeen === 2 && nt.b.length === 2 && nt.b[0][0] === '#2 新邮件：Acme 账号中心 <no-reply@acme.example>' && nt.b[0][1] === '验证码 482913 · 你的登录验证码' && nt.c === 0 && nt.d.join() === 'INBOX:m9', nt);
+  check('通知：后台刚起来（没记录）只记下不弹；之后每封新邮件弹一次，标题写实例编号和发件人显示名，内容带验证码；同一封不重复弹', nt.a === 0 && nt.aSeen === 2 && nt.b.length === 2 && nt.b[0][0] === '#2 新邮件：Acme 账号中心' && nt.b[0][1] === '验证码 482913 · 你的登录验证码' && nt.c === 0 && nt.d.join() === 'INBOX:m9', nt);
   // 新标签页：有新邮件的一行提示（手机上没有系统通知，靠它）
   await p2.goto(base + 'newtab.html#inst=p2'); await p2.waitForSelector('.mailnew');
   const nb = await p2.evaluate(() => document.querySelector('.mailnew').textContent);
@@ -1758,11 +1805,12 @@ if (want('mail')) {
     }).listen(0);
     const dc = await br.newContext({ viewport: { width: 1180, height: 760 }, deviceScaleFactor: 1, locale: 'zh-CN' });
     await dc.addInitScript(() => { window.chrome = { runtime: { getURL: (x) => new URL(x, location.origin + '/').href, sendMessage: () => Promise.resolve() }, tabs: { create: () => {} } }; });
+    await dc.route('https://tracker.example/**', (rt) => rt.fulfill({ status: 200, contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAAAAACw=', 'base64') })); // 远程图片默认加载
     const dp = await dc.newPage(); watch(dp, 'mail-desk');
     await dp.goto(`http://127.0.0.1:${dsrv2.address().port}/app.html#mail/p2/${encodeURIComponent('INBOX:m1')}`); await dp.waitForSelector('.mframe', { timeout: 8000 }).catch(() => {});
     await dp.waitForTimeout(500);
     const dd = await dp.evaluate(() => ({ frame: document.querySelector('.mframe')?.getAttribute('sandbox'), nav: document.querySelector('.pnav button.on')?.textContent, title: document.title }));
-    check('电脑设置页：#mail/<实例>/<key> 直接打开那一封（点通知进来的样子），左边导航停在“实例”', dd.frame === '' && dd.nav === '实例' && dd.title === 'MaskTab · 信箱', dd);
+    check('电脑设置页：#mail/<实例>/<key> 直接打开那一封（点通知进来的样子），左边导航停在“实例”', dd.frame === 'allow-popups allow-popups-to-escape-sandbox' && dd.nav === '实例' && dd.title === 'MaskTab · 信箱', dd);
     await dp.screenshot({ path: path.join(out, 'mail-desk.png') });
     await dc.close(); dsrv2.close();
   }

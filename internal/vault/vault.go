@@ -119,6 +119,29 @@ func (v *Vault) saveLocked() error {
 	return os.Rename(tmp, v.path)
 }
 
+// Seal 用密码库同一把钥匙（Windows 是 DPAPI，其他系统是本机密钥文件）加密一段数据，给别的模块落盘用（信箱的邮件缓存，decisions MB-1）。
+// 密码库本身打不开（换了电脑 / 系统用户）时报错，不落明文。
+func (v *Vault) Seal(plain []byte) ([]byte, error) {
+	v.mu.Lock()
+	p := v.path
+	v.mu.Unlock()
+	if p == "" {
+		return nil, errors.New("密码库不可用")
+	}
+	return seal(filepath.Dir(p), plain)
+}
+
+// Unseal 解开 Seal 的结果。
+func (v *Vault) Unseal(enc []byte) ([]byte, error) {
+	v.mu.Lock()
+	p := v.path
+	v.mu.Unlock()
+	if p == "" {
+		return nil, errors.New("密码库不可用")
+	}
+	return unseal(filepath.Dir(p), enc)
+}
+
 // NormSite 把网址或主机名规范成 scheme://host[:port]（小写，去掉默认端口）。"*" 原样返回。
 func NormSite(s string) string {
 	s = strings.TrimSpace(s)

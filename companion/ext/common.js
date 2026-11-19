@@ -104,13 +104,15 @@ export const TYPE_NAME = { res: '住宅', dc: '机房', mobile: '移动' };
 // 信箱（decisions MB-1）
 /** 这个实例有哪些还没通知过的新邮件。seen = 通知过的 key；返回 { notes: [{ key, title, message }], seen: 新的 key 集合 }。
  *  第一次（seen 为 null）只记下现在的，不弹——后台刚起来时不把以前的未读再弹一遍。 */
+/** 发件人只留显示名：“Arena <team@arena.example>” → “Arena”；没有显示名的留地址。 */
+export const fromName = (f) => { const s = String(f || '').trim(), m = s.match(/^"?([^"<]*?)"?\s*<[^>]*>$/); return (m && m[1].trim()) || s.replace(/^<|>$/g, ''); };
 export function mailNotes(inst, seen) {
   const list = inst?.mail?.newest || [], keys = list.map((m) => m.key);
   if (!seen) return { notes: [], seen: keys };
   const old = new Set(seen), notes = [];
   for (const m of list) {
     if (old.has(m.key)) continue;
-    notes.push({ key: m.key, title: `#${inst.no} 新邮件：${m.from || '（未知发件人）'}`, message: (m.code ? `验证码 ${m.code} · ` : '') + (m.subject || '（无主题）') });
+    notes.push({ key: m.key, title: `#${inst.no} 新邮件：${fromName(m.from) || '（未知发件人）'}`, message: (m.code ? `验证码 ${m.code} · ` : '') + (m.subject || '（无主题）') });
   }
   return { notes, seen: [...new Set([...keys, ...seen])].slice(0, 50) };
 }

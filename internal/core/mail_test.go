@@ -248,7 +248,7 @@ func TestMailFetchViaInstance(t *testing.T) {
 	if a.mailSums()["i1"].Unread != 0 {
 		t.Fatal("全部已读")
 	}
-	// 重启以后（信的内容不落盘，见过哪些落盘）：同样的信不再算新的
+	// 重启以后（见过哪些落盘）：同样的信不再算新的
 	b2 := &App{Dir: a.Dir, vault: a.vault, rt: a.rt, Instances: a.Instances}
 	if n, err := b2.mailFetch("i1", true); err != nil || n != 0 {
 		t.Fatalf("重启后再收：%d %v", n, err)
@@ -261,5 +261,139 @@ func TestMailFetchViaInstance(t *testing.T) {
 	a.rt["i1"].Error = "线路不通"
 	if code, out = do("POST", "/api/mail/i1/fetch", ""); code == 200 || !strings.Contains(out, "断网") {
 		t.Fatalf("断网时：%d %s", code, out)
+	}
+}
+
+// 线路状态每次现算：没开 / 启动中 / 线路连接中 / 通了 / 直连；以前记进 LastErr 落盘，实例关了还挂着“还在启动”。
+func TestMailLineStates(t *testing.T) {
+	a, do := mailApp(t)
+	card := "a@outlook.com----pw----00000000-1111-2222-3333-444444444444----" + testRT
+	b, _ := json.Marshal(map[string]string{"card": card})
+	if code, out := do("PUT", "/api/mail/i1", string(b)); code != 200 {
+		t.Fatal(out)
+	}
+	line := func() string { l, _ := a.mailLine("i1"); return l }
+	if line() != lineOff {
+		t.Fatal("没开：", line())
+	}
+	a.rt["i1"] = &Runtime{Starting: true}
+	if line() != lineStarting {
+		t.Fatal("启动中：", line())
+	}
+	a.rt["i1"] = &Runtime{Running: true}
+	if line() != lineConnecting {
+		t.Fatal("开着、线路没通：", line())
+	}
+	a.rt["i1"] = &Runtime{Running: true, active: true, probePort: 1, Cut: "x"}
+	if line() != lineConnecting {
+		t.Fatal("断网：", line())
+	}
+	a.rt["i1"] = &Runtime{Running: true, active: true, probePort: 1}
+	if line() != lineOK {
+		t.Fatal("通了：", line())
+	}
+	a.rt["i1"] = &Runtime{Running: true, active: true, probePort: 1, Stopping: true}
+	if line() != lineOff {
+		t.Fatal("正在关：", line())
+	}
+	if l, _ := a.mailLine("i2"); l != lineDirect {
+		t.Fatal("没开代理的实例：", l)
+	}
+	// 摘要和信箱页都带现算的线路；线路没通时的“收不了”不算收信失败，不进 err
+	a.rt["i1"] = &Runtime{Starting: true}
+	_, _ = a.mailFetch("i1", false)
+	delete(a.rt, "i1")
+	s := a.mailSums()["i1"]
+	_, out := do("GET", "/api/mail/i1", "")
+	if s.Line != lineOff || s.Err != "" || !strings.Contains(out, `"line":"off"`) || strings.Contains(out, "还在启动") || strings.Contains(out, `"err"`) {
+		t.Fatalf("关着的实例：%+v %s", s, out)
+	}
+}
+
+// 偶发失败：连续 3 次才在界面上报（err）；收成功清零。收到的信加密缓存：重启、实例关着也能看列表和正文；
+// 预览里的 &nbsp; 解开；标未读 / 已读、本地删除和撤销；摘要里的未读数、keys 处处一致。
+func TestMailFailsCacheReadHide(t *testing.T) {
+	a, do := mailApp(t)
+	var mu sync.Mutex
+	broken := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		mu.Lock()
+		defer mu.Unlock()
+		if broken {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "上游忙"})
+			return
+		}
+		out := []map[string]any{}
+		if b["mailbox"] == "INBOX" {
+			now := time.Now().UTC()
+			out = []map[string]any{
+				{"id": "m1", "subject": "A&amp;B", "from": "x@x.test", "receivedAt": now.Format(time.RFC3339), "preview": "Hi&nbsp;there&nbsp;&lt;3", "htmlBody": "<p>正文一</p>"},
+				{"id": "m2", "subject": "第二封", "from": "y@x.test", "receivedAt": now.Add(-time.Minute).Format(time.RFC3339), "htmlBody": "<div>只有&nbsp;HTML<style>p{}</style></div>"},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mails": out})
+	}))
+	defer srv.Close()
+	b, _ := json.Marshal(map[string]string{"card": "a@outlook.com----pw----00000000-1111-2222-3333-444444444444----" + testRT, "base": srv.URL})
+	do("PUT", "/api/mail/i2", string(b)) // i2 没开代理：直连收
+	for i := 1; i <= 3; i++ {
+		_, _ = a.mailFetch("i2", false)
+		if s := a.mailSums()["i2"]; (i < 3) != (s.Err == "") {
+			t.Fatalf("第 %d 次失败：%+v", i, s)
+		}
+	}
+	mu.Lock()
+	broken = false
+	mu.Unlock()
+	if _, err := a.mailFetch("i2", false); err != nil {
+		t.Fatal(err)
+	}
+	s := a.mailSums()["i2"]
+	if s.Err != "" || s.Unread != 2 || len(s.Keys) != 2 {
+		t.Fatalf("收成功后：%+v", s)
+	}
+	_, out := do("GET", "/api/mail/i2", "")
+	if !strings.Contains(out, `"preview":"Hi there \u003c3"`) || !strings.Contains(out, `"subject":"A\u0026B"`) || !strings.Contains(out, `"preview":"只有 HTML"`) {
+		t.Fatalf("预览要解开实体、去掉标签：%s", out)
+	}
+	// 标未读 / 已读
+	do("POST", "/api/mail/i2/read", `{"keys":["INBOX:m1"]}`)
+	if s := a.mailSums()["i2"]; s.Unread != 1 || hasStr(s.Keys, "INBOX:m1") {
+		t.Fatalf("标已读：%+v", s)
+	}
+	do("POST", "/api/mail/i2/read", `{"keys":["INBOX:m1","INBOX:nope"],"unread":true}`)
+	if s := a.mailSums()["i2"]; s.Unread != 2 || !hasStr(s.Keys, "INBOX:m1") {
+		t.Fatalf("标未读：%+v", s)
+	}
+	// 本地删除：不显示、不算未读；撤销照旧
+	do("POST", "/api/mail/i2/hide", `{"keys":["INBOX:m2"]}`)
+	_, out = do("GET", "/api/mail/i2", "")
+	if s := a.mailSums()["i2"]; s.Unread != 1 || strings.Contains(out, "INBOX:m2") || !strings.Contains(out, `"unread":1`) {
+		t.Fatalf("删除：%+v %s", s, out)
+	}
+	do("POST", "/api/mail/i2/hide", `{"keys":["INBOX:m2"],"undo":true}`)
+	if s := a.mailSums()["i2"]; s.Unread != 2 {
+		t.Fatalf("撤销删除：%+v", s)
+	}
+	// 重启以后（新的 App，同一个目录）：不收信也能看列表和正文；缓存文件里没有明文
+	b2 := &App{Dir: a.Dir, vault: a.vault, rt: map[string]*Runtime{}, Instances: a.Instances}
+	mux := http.NewServeMux()
+	b2.mailRoutes(mux)
+	r := httptest.NewRequest("GET", "/api/mail/i2/msg?key=INBOX:m1", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "正文一") {
+		t.Fatalf("重启后看缓存里的信：%d %s", w.Code, w.Body.String())
+	}
+	raw, _ := os.ReadFile(a.mailCachePath("i2"))
+	if len(raw) == 0 || strings.Contains(string(raw), "正文一") || strings.Contains(string(raw), "x@x.test") {
+		t.Fatalf("缓存要加密落盘：%d 字节", len(raw))
+	}
+	// 删卡密：缓存一起删
+	do("DELETE", "/api/mail/i2", "")
+	if _, err := os.Stat(a.mailCachePath("i2")); err == nil {
+		t.Fatal("删卡密后缓存还在")
 	}
 }

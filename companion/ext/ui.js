@@ -184,11 +184,13 @@ export function pill(options, value, onchange, disabled) {
   return h('span', { class: 'pill' + (disabled ? ' dis' : '') }, options.map(([v, label, title]) =>
     h('button', { class: v === value ? 'on' : '', title, disabled, onclick: () => v !== value && onchange(v) }, label)));
 }
-export function toast(msg, bad) {
+// act = [按钮文字, 点了做什么]（例如“撤销”）：带按钮的提示多留几秒，点了就收起
+export function toast(msg, bad, act) {
   let t = document.getElementById('toast');
   if (!t) { t = h('div', { id: 'toast' }); document.body.append(t); }
-  t.textContent = msg; t.className = bad ? 'bad show' : 'show';
-  clearTimeout(t._t); t._t = setTimeout(() => (t.className = ''), bad ? 6000 : 2500);
+  t.replaceChildren(h('span', { class: 'tx' }, msg), act ? h('button', { class: 'lk', onclick: () => { t.className = ''; act[1](); } }, act[0]) : '');
+  t.className = (bad ? 'bad show' : 'show') + (act ? ' act' : '');
+  clearTimeout(t._t); t._t = setTimeout(() => (t.className = ''), bad ? 6000 : act ? 6000 : 2500);
 }
 export async function run(fn, okMsg) {
   try { await fn(); if (okMsg) toast(okMsg); } catch (e) { toast(e.message || String(e), true); }
