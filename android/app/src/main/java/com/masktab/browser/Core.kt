@@ -326,7 +326,8 @@ object Core {
     fun launch(id: String) = bg {
         try { CoreProc.json("POST", "/api/instances/$id/launch"); Host.refresh() } catch (e: Exception) {
             logw("启动实例失败：${e.message}")
-            ui { if (pendingOpen == id) { pendingOpen = null; ui?.toast("打不开：${e.message}") } }
+            // 向导自己会把原因写在页面上（决策 UI-31），不用再弹一条
+            ui { if (pendingOpen == id) { pendingOpen = null; if (!pendingClose) ui?.toast("打不开：${e.message}"); pendingClose = false } }
         }
     }
     private fun closeAll(id: String) {
@@ -454,6 +455,12 @@ object Core {
     fun openWhenReady(id: String, closePage: Boolean = false) {
         pendingOpen = id; pendingAt = System.currentTimeMillis(); pendingClose = closePage
         Host.get(id)?.let { if (it.running) { pendingOpen = null; switchTo(id); pageAfterOpen() } }
+    }
+    /** 新建向导里的“重试”：再启动一次，页面留着显示进度，开好以后切过去、收起页面（决策 UI-31）。 */
+    fun reopen(id: String) {
+        val i = Host.get(id) ?: return
+        openWhenReady(id, closePage = true)
+        if (!i.running) launch(id)
     }
     /** 等的那个实例开好以后要不要把内置页面收起（新建向导：它留着显示进度，决策 UI-31）。 */
     private var pendingClose = false

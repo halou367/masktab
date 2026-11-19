@@ -90,7 +90,9 @@ object Bridge {
                 // 打开 / 切换到一个实例：已经在运行就直接切过去；没在运行的先请核心服务启动（选线、探出口），就绪后再切
                 Host.get(seg[2]) ?: return true.also { fail("实例不存在") }
                 ok(null)
-                mainHandler.post { Core.ui?.closeSheet(); Core.switchTo(seg[2]) }
+                // stay：新建向导里点的“重试”——页面留着显示进度，开好以后再切过去、收起（决策 UI-31）；别的入口照旧先收起页面
+                if (b.optBoolean("stay")) mainHandler.post { Core.reopen(seg[2]) }
+                else mainHandler.post { Core.ui?.closeSheet(); Core.switchTo(seg[2]) }
             }
             seg.size == 4 && seg[1] == "instances" && m == "POST" && seg[3] == "stop" -> { Core.stopInst(seg[2]); ok(null) }
             else -> return false

@@ -146,7 +146,7 @@ function wizard({ st, onDone, onCancel, onHide, sheet: asSheet }) {
       S.stage = 'open'; el.dataset.stage = 'open'; sub.textContent = '马上就好 · 正在打开'; O.goal = 3; setBar(0); O.runAt = 0;
       clearInterval(O.timer); O.timer = setInterval(tick, 80);
       acts.replaceChildren(h('span', { class: 'sp' }), h('button', { class: 'btn', onclick: hide }, '在后台继续'));
-      try { await api('POST', `/api/instances/${S.made.id}/launch`); } catch (e) { failStage(e.message || String(e)); return; }
+      try { await api('POST', `/api/instances/${S.made.id}/launch`, { stay: true /* 手机上别收起这一页；电脑不看 */ }); } catch (e) { failStage(e.message || String(e)); return; }
       await sleep(250); // 让核心服务把“启动中”标上，免得读到上一次留下的原因
       watch(true);
     };
