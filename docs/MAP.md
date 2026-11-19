@@ -69,6 +69,9 @@
 | 录入登录、自动填写、站点图标 | `autofill.js`、`vaultmsg.js`、`sites.js` |
 | 外壳（只管路由和把页面放进去，**不写功能**） | 电脑：`app.js`（设置页）、`popup.js`（工具栏弹窗）、`newtab.js`、`background.js`（工具栏图标、Cookie 上报）；手机：`android/ext/main.js`、`newtab.js`、`background.js` |
 | 手机上的页面指纹（内核做不了的那部分） | `android/ext/fp.js` |
+| 新建向导（UI-25、UI-31：点“创建”后原地显示进度） | `wizard.js`（两端共用，进度看 `GET /api/instances/{id}/progress`，`internal/core/newinst.go`）；电脑的小窗口 `wizard.html` + `wizwin.js` + `theme0.js`（`background.js` 的 `wizardWindow`）；手机 `android/ext/main.js` 的 `new` 路由、`Core.kt` 的 `openWhenReady` / `pageAfterOpen` |
+| 新实例的窗口一出来就在位（UI-31） | `internal/tabbar` 的 `Home`、`DIPBounds`、`InPlace`；`internal/core/launch.go` 给 `kernel.Launch.Bounds` |
+| 手机：替网页代发请求（翻译、网站图标；决策 A-15，内容脚本不许自己发） | `android/ext/background.js` 的“替网页代发请求”一节（`relayFetch`、`trFetch`、`relayIcon`）和 `proxy.onRequest` |
 
 手机内置扩展用到 `companion/ext` 里的哪些文件，清单有两处：`scripts/check.sh` 的 `SHARED_EXT`、`android/app/build.gradle.kts` 的 `BuildExt`。
 

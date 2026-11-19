@@ -42,7 +42,7 @@ android/
     fetch-mihomo.sh       下载 mihomo v1.19.34 安卓 arm64 / amd64 并校验 SHA-256
     build-core.sh         用 NDK 把核心服务（cmd/masktab）编成 jniLibs/<abi>/libmasktab.so
     emulator-smoke.sh     CI 模拟器冒烟：装、启动、截图、查崩溃；第二轮放进旧版数据，验证迁移、经测试节点的代理分流与坏节点断流；在线更新；下载 / 长按保存 / 选择文件 / 日期
-    dl-server.py          冒烟用的测试网站（下载链接、要 Cookie 的图片、慢的下载、上传按钮、日期输入框）；记下每个请求带的 Cookie / 来源页 / UA
+    dl-server.py          冒烟用的测试网站（下载链接、要 Cookie 的图片、慢的下载、上传按钮、日期输入框；翻译测试页 /tr/page.html、登录页 /tr/login.html）；记下每个请求带的 Cookie / 来源页 / UA
     typecheck.sh          不用安卓 SDK 和 Gradle，只对 Kotlin 做类型检查（`scripts/check.sh kt`，约 25 秒；工具第一次用时下载到 ~/.cache/mt-android）
     preview-pages.mjs     用 Playwright 预览扩展页面并检查 fp.js；同一份状态再画电脑版弹窗，比对两端面板内容（`scripts/check.sh pages`，CI 里每次都跑）
     fixture-state.json    上面用的状态：从真的核心服务（宿主模式）抓的，只改了数值
@@ -140,6 +140,15 @@ android/
   - 耗时的事（拉订阅、全部测速、重启 mihomo）一律进 `Core.syncProxy` 的后台队列，接口立刻返回；页面轮询 `job`（阶段、进度、错误）显示进度条，期间列表照常可点。
   - 扩展页面崩溃或被系统回收时自动重开，最多两次。
   - 设置页“诊断信息”（页面版，内容少于原生窗口那份）：一键复制 app 版本、系统版本、mihomo 状态和日志尾部、最近的页面报错，反馈问题时贴这段。
+
+### 不是网页自己发的请求（翻译、登录页的网站图标）
+
+- 分流（`android/ext/background.js` 的 `proxy.onRequest`）靠“请求属于哪个标签页”认实例。**网页里的内容脚本自己发的请求没有标签页、没有容器、没有来源**
+  （模拟器实测：`tab=-1 cs=firefox-default`），会被当成 app 内部的请求直连出去。所以我们的内容脚本**一律不许自己发请求**（决策 A-15）。
+- 要发就交给后台代发（`relayFetch`）：后台按消息是哪个标签页发来的认出实例，拿一把锁（同一时刻只替一个实例发），这段时间后台发出去的请求都走那个实例的线路，带那个网页的浏览器标识。
+  现在走这条路的：`translate.js`（消息 `tr:fetch`，只认两家翻译接口）、`autofill.js` 取网站图标（消息 `relay:icon`）。
+- 新写内容脚本时：先 `grep -n "fetch(\|XMLHttpRequest" android/ext companion/ext`，手机上会用到的共用文件里不能有直接发请求的地方。
+- 冒烟的 `translate_phase` 每遍核对：翻译请求经测试节点出去、扩展日志里没有“翻译请求 直连”、取图标的请求走实例 #1 的线路。
 
 ## 取舍与限制（如实告知用户）
 
