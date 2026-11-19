@@ -45,10 +45,17 @@ const items = async () => (await api('GET', `/api/vault?inst=${me.id}`)).items;
 // 网站：一个本地服务，按 Host 头分站点（浏览器里把 *.test 都解析到本机）
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJ0lEQVR42mP8z8BQz0AEYBxVSF+FjP///ydOIeOoQvoqHA0e+isEAGbbH/EqsmRNAAAAAElFTkSuQmCC', 'base64');
 const html = (b) => '<!doctype html><meta charset="utf-8">' + b;
+const mailHits = [];
 const site = http.createServer((q, r) => {
   const host = (q.headers.host || '').split(':')[0], p = new URL(q.url, 'http://x').pathname, sp = site.address().port;
   const send = (b, t = 'text/html; charset=utf-8') => { r.writeHead(200, { 'Content-Type': t }); r.end(b); };
   if (p === '/i.png' || p === '/favicon.ico') return send(PNG, 'image/png');
+  if (p.startsWith('/mailapi/api/')) { // 假的取件接口（信箱，decisions MB-1）
+    let b = ''; q.on('data', (c) => { b += c; });
+    q.on('end', () => { const j = JSON.parse(b || '{}'); mailHits.push(j);
+      send(JSON.stringify({ ok: true, mails: j.mailbox === 'Junk' ? [] : [{ id: 'e2e-1', subject: '你的验证码', from: 'no-reply@shop.test', receivedAt: new Date().toISOString(), htmlBody: '<p>验证码 <b>135790</b></p>', verificationCode: '135790' }] }), 'application/json'); });
+    return;
+  }
   if (host === 'login.shop.test' && p === '/') return send(html('<title>登录 - Shop</title><link rel="icon" sizes="32x32" href="/i.png"><form action="/pw"><input type="email" name="identifier" placeholder="邮箱"><button>下一步</button></form>'));
   if (host === 'login.shop.test' && p === '/pw') return send(html('<title>登录 - Shop</title><form action="/done"><input type="password" name="pw"><button>登录</button></form>'));
   if (host === 'login.shop.test' && p === '/done') { r.writeHead(302, { Location: `http://www.shop.test:${sp}/home` }); return r.end(); }
@@ -135,6 +142,25 @@ if (shots) {
 await ap.goto('chrome://prefs-internals/');
 const pf = JSON.parse(await ap.evaluate(() => document.body.innerText)).credentials_enable_service || {};
 check('内核自带的“保存密码”被扩展关掉', pf.value === false && (pf.metadata || []).includes('extension_controlled'), JSON.stringify(pf));
+// 信箱（decisions MB-1）：真核心服务 + 真扩展后台。假的取件接口（上面那个本地服务的 /mailapi/），编出来的卡密。
+// 实例改成不走代理（这里没有代理内核、实例开不了；不走代理的实例收信直连），立即收信 → 状态里有未读 → 后台弹通知、角标写未读数。
+await api('PATCH', `/api/instances/${me.id}`, { proxy: { state: 'off' } });
+await api('PUT', `/api/mail/${me.id}`, { card: 'e2e.demo@outlook.com----fake-pw----00000000-1111-2222-3333-444444444444----M.C5_FAKE-E2E-TOKEN', base: `http://127.0.0.1:${sp}/mailapi/` });
+const mv = await api('GET', `/api/mail/${me.id}`);
+check('信箱：设了卡密，读回来是脱敏的（没有 token、密码原文）', mv.set && mv.email === 'e2e.demo@outlook.com' && !JSON.stringify(mv).includes('M.C5_FAKE-E2E-TOKEN') && !JSON.stringify(mv).includes('fake-pw'), JSON.stringify(mv).slice(0, 300));
+const got = await api('POST', `/api/mail/${me.id}/fetch`).catch((e) => ({ error: e.message }));
+check('信箱：立即收信经假取件接口收到 1 封（收件箱、垃圾箱各问一次，请求体带着卡密）', got.added === 1 && got.unread === 1 && mailHits.length === 2 && mailHits[0].refresh_token === 'M.C5_FAKE-E2E-TOKEN', JSON.stringify(got).slice(0, 300) + ' hits=' + mailHits.length);
+const nt = await until(async () => { const n = await sw.evaluate(() => globalThis.lastMailNotes || null); return n?.length ? n : null; }, 8000);
+check('信箱：扩展后台弹了系统通知（标题写编号和发件人，内容带验证码）', nt?.length === 1 && nt[0].title === `#${me.no} 新邮件：no-reply@shop.test` && /135790/.test(nt[0].message), JSON.stringify(nt));
+// 角标只在没有更要紧的事（断网、要重启）时写未读数；悬停提示里总有一行
+const mb = await until(async () => { const b = await sw.evaluate(() => chrome.action.getBadgeText({})), t = await sw.evaluate(() => chrome.action.getTitle({})); return /信箱：1 封未读/.test(t) ? { b, t } : null; }, 6000);
+check('信箱：工具栏悬停提示写“信箱：1 封未读”，角标写 1（没有别的事要说时）', !!mb && (mb.b === '1' || ['!', '✕', '↻', '×'].includes(mb.b)), JSON.stringify(mb));
+const ids = await sw.evaluate(() => new Promise((r) => chrome.notifications.getAll((x) => r(Object.keys(x || {})))));
+check('信箱：通知真的发出去了（chrome.notifications 里有它）', ids.some((x) => x.startsWith(`mail|${me.id}|INBOX:e2e-1`)), JSON.stringify(ids));
+await ap.goto(`chrome-extension://${new URL(sw.url()).host}/app.html#mail/${me.id}/${encodeURIComponent('INBOX:e2e-1')}`);
+const fr = await until(async () => ap.evaluate(() => { const f = document.querySelector('.mframe'); return f ? { sb: f.getAttribute('sandbox'), code: document.querySelector('.mcodebox b')?.textContent } : null; }), 6000);
+check('信箱：点通知进来的地址直接打开那一封（正文在 sandbox 里，验证码显示出来），看过就不算未读', fr?.sb === '' && fr?.code === '135790' && await until(async () => (await api('GET', `/api/mail/${me.id}`)).unread === 0, 4000), JSON.stringify(fr));
+if (shots) await ap.screenshot({ path: path.join(shots, 'e2e-6-mail.png') });
 check('网页和扩展页面没有脚本错误', perr.length === 0, perr.join(' | '));
 check('后台没有报错', swErr.length === 0, swErr.join(' | '));
 

@@ -14,7 +14,7 @@ const [dir, out, desk] = process.argv.slice(2).filter((a) => !a.startsWith('--')
 // 分段跑（--only=段名,段名）：整套要两分多钟，改哪一块就只跑哪一段；scripts/check.sh pages 会把各段分给几个进程同时跑。
 // 段名见下面每一段开头的 want('…')；不带 --only 就全跑。新加的检查放进合适的段，或者新开一段（记得写进 scripts/check.sh 的 PAGE_SECTIONS）。
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean);
-const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads'];
+const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads', 'mail'];
 for (const s of ONLY) if (!SECTIONS.includes(s)) { console.error(`没有这一段：${s}（有：${SECTIONS.join(' ')}）`); process.exit(2); }
 const took = []; let cur = null;
 const want = (name) => { const t = Date.now(); if (cur) took.push(`${cur.name} ${((t - cur.t) / 1000).toFixed(0)}s`); cur = null; const ok = !ONLY.length || ONLY.includes(name); if (ok) cur = { name, t }; return ok; };
@@ -105,6 +105,10 @@ const mock = (state) => {
       if (n <= 8) return { key: 's' + n, no: 9, step: n, total: 8, label: L[n - 1], starting: true, running: false, shown: false };
       return { key: 'r' + (n > 9), no: 9, step: 0, total: 8, label: '', starting: false, running: true, shown: n > 9 };
     }
+    // 信箱（decisions MB-1）：state.__mailbox 是 GET /api/mail/<id> 的回答（没设就是“未设置”），state.__mailMsgs 是各封信的全文
+    if (m === 'GET' && /^\/api\/mail\/[^/]+$/.test(k.slice(4))) { const id = k.slice(14); return (state.__mailbox && state.__mailbox[id]) || { set: false, base: 'https://email.nloop.cc/', every: 2, mails: [] }; }
+    if (k === 'GET /api/mail/p2/msg') { const key = new URLSearchParams(p.split('?')[1] || '').get('key'); return { key, mail: (state.__mailMsgs || {})[key] }; }
+    if (m === 'POST' && /^\/api\/mail\/[^/]+\/fetch$/.test(p)) return { ...(state.__mailbox || {}).p2, added: 1 };
     if (k === 'GET /api/state') return state;
     if (k === 'GET /api/vault') return vault;
     if (k === 'GET /api/vault/icons') return { icons: state.__icons };
@@ -1621,6 +1625,149 @@ if (want('downloads')) for (const w of [412, 320]) {
   await c.close();
 }
 if (flow.length > dl0) console.log(flow.slice(dl0).join('\n'));
+// ---------- 信箱（decisions MB-1）：假卡密、假邮件（不是真的账号）。列表、详情（sandbox、远程图片、验证码）、设卡密、导入识别、通知、新标签页提示 ----------
+const ml0 = flow.length;
+const mailFixture = () => {
+  const s = JSON.parse(JSON.stringify(fixture)), now = Date.now(), iso = (min) => new Date(now - min * 60e3).toISOString();
+  const sum = { kind: 'outlook', email: 'carol.demo@outlook.com', unread: 2, lastAt: now - 40e3, newest: [{ key: 'INBOX:m1', from: 'Acme 账号中心 <no-reply@acme.example>', subject: '你的登录验证码', code: '482913' }, { key: 'INBOX:m2', from: 'GitHub <noreply@github.example>', subject: '[GitHub] Please verify your device' }] };
+  for (const i of s.instances) if (i.id === 'p2') i.mail = sum;
+  s.me.mail = sum;
+  const mails = [
+    { key: 'INBOX:m1', folder: 'INBOX', from: 'Acme 账号中心 <no-reply@acme.example>', subject: '你的登录验证码', at: iso(2), preview: '你的验证码是 482913，10 分钟内有效。如果不是你本人操作，请忽略这封邮件。', code: '482913', unread: true },
+    { key: 'INBOX:m2', folder: 'INBOX', from: 'GitHub <noreply@github.example>', subject: '[GitHub] Please verify your device', at: iso(30), preview: 'A sign in attempt requires further verification because we did not recognize your device.', unread: true },
+    { key: 'INBOX:m3', folder: 'INBOX', from: 'Microsoft 帐户团队', subject: '欢迎使用你的新 Outlook.com 帐户——一个特别特别长的主题，用来看窄屏上会不会省略成一行', at: iso(60 * 30), preview: '开始使用 Outlook。', unread: false },
+    { key: 'Junk:j1', folder: 'Junk', from: 'Lucky Prize <win@spam.example>', subject: '恭喜中奖', at: iso(60 * 5), preview: '点这里领奖', unread: false }];
+  s.__mailbox = { p2: { set: true, kind: 'outlook', email: 'carol.demo@outlook.com', card: { kind: 'outlook', email: 'carol.demo@outlook.com', password: '••••••', clientId: '0000…4444', refresh: 'M.C5…wxyz（312 字符）' }, base: 'https://email.nloop.cc/', every: 2, unread: 2, lastAt: now - 40e3, via: '这个实例自己的线路', mails } };
+  s.__mailMsgs = {
+    'INBOX:m1': { id: 'm1', subject: '你的登录验证码', from: 'Acme 账号中心 <no-reply@acme.example>', to: 'carol.demo@outlook.com', receivedAt: iso(2), folder: 'INBOX', verificationCode: '482913',
+      htmlBody: '<h2 onclick="parent.__pwned=1">Acme</h2><p>你的验证码是 <b>482913</b>，10 分钟内有效。</p><img src="https://tracker.example/open.gif" onerror="parent.__pwned=2"><script>parent.__pwned=3</script><a href="javascript:parent.__pwned=4">链接</a><form action="https://evil.example"><input></form>' },
+    'INBOX:m2': { id: 'm2', subject: '[GitHub] Please verify your device', from: 'GitHub <noreply@github.example>', receivedAt: iso(30), folder: 'INBOX', body: 'Verification code: none\n纯文字正文，第二行。' } };
+  return s;
+};
+if (want('mail')) {
+  const ms = mailFixture();
+  const c = await br.newContext({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, ms);
+  await c.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+  await c.route('https://tracker.example/**', (rt) => rt.fulfill({ status: 200, contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAAAAACw=', 'base64') }));
+  const pg = await c.newPage(); watch(pg, 'mail');
+  await pg.goto(base + 'app.html#mail/p2'); await pg.waitForSelector('.mrow');
+  const rows = () => pg.evaluate(() => [...document.querySelectorAll('.mrow')].map((r) => ({ key: r.dataset.key, unread: r.classList.contains('unread'), from: r.querySelector('.from').textContent, subj: r.querySelector('.subj').textContent, code: r.querySelector('.mcode')?.textContent || '', h: Math.round(r.getBoundingClientRect().height), cut: r.querySelector('.subj').scrollWidth > r.querySelector('.subj').clientWidth })));
+  let r = await rows();
+  check('信箱列表：收件箱三封，按时间新的在前，前两封未读（有未读点）、第一封带验证码', r.map((x) => x.key).join() === 'INBOX:m1,INBOX:m2,INBOX:m3' && r[0].unread && r[1].unread && !r[2].unread && r[0].code === '482913' && /Acme/.test(r[0].from), r);
+  check('信箱列表：长主题省略成一行，每行不超过 90 高', r[2].cut && r.every((x) => x.h <= 90), r.map((x) => [x.h, x.cut]));
+  const head = await pg.evaluate(() => ({ t: document.querySelector('.appbar h1')?.textContent, tabs: [...document.querySelectorAll('.mtabs .pill button')].map((b) => b.textContent), mh: document.querySelector('.mhead')?.textContent }));
+  check('信箱顶栏：标题带编号和未读数；收件箱 / 垃圾箱两个标签（收件箱写着 2 封未读）；邮箱和上次收信时间', /^信箱 · #2\s*2$/.test(head.t.replace(/\s+/g, ' ').trim()) && head.tabs.join() === '收件箱 2,垃圾箱' && /carol\.demo@outlook\.com.*Outlook.*上次收信 刚刚/.test(head.mh), head);
+  await pg.screenshot({ path: path.join(out, 'mail-list.png') });
+  await pg.click('.mcode'); await pg.waitForTimeout(200);
+  const clip = await pg.evaluate(() => navigator.clipboard.readText().catch(() => 'ERR'));
+  check('列表里点验证码一键复制（不会打开这封信）', clip === '482913' && await pg.locator('.mdetail').count() === 0, clip);
+  await pg.click('.mtabs .pill button:nth-child(2)'); await pg.waitForTimeout(150);
+  r = await rows();
+  check('点“垃圾箱”：只列垃圾箱那一封', r.length === 1 && r[0].key === 'Junk:j1', r);
+  await pg.click('.mtabs .pill button:nth-child(1)'); await pg.waitForTimeout(150);
+  // 详情：HTML 正文进 sandbox iframe，脚本不跑、远程图片默认不加载
+  await pg.click('.mrow[data-key="INBOX:m1"]'); await pg.waitForSelector('.mframe');
+  await pg.waitForTimeout(400);
+  const d = await pg.evaluate(() => { const f = document.querySelector('.mframe'), doc = f.srcdoc;
+    return { sandbox: f.getAttribute('sandbox'), csp: /img-src data:;/.test(doc) && !/tracker\.example/.test(doc), noScript: !/<script/i.test(doc) && !/onerror|onclick/i.test(doc) && !/javascript:/i.test(doc) && !/<form/i.test(doc), pwned: window.__pwned || 0,
+      subj: document.querySelector('.msubj')?.textContent, code: document.querySelector('.mcodebox b')?.textContent, imgWarn: !!document.querySelector('.mdetail .warn'), hasB: /482913/.test(doc),
+      asked: window.__calls.filter((x) => /^\/api\/mail\/p2\/msg/.test(x.p)).map((x) => x.p) }; });
+  check('邮件详情：正文放进 sandbox（空值 = 不许脚本）的 iframe，去掉脚本 / 事件属性 / javascript: 链接 / 表单，页面没被改动', d.sandbox === '' && d.noScript && d.pwned === 0 && d.hasB, d);
+  check('邮件详情：远程图片默认不加载（CSP 只放 data:），有“加载图片”的提示；主题、验证码显示出来；按 key 取全文', d.csp && d.imgWarn && d.subj === '你的登录验证码' && d.code === '482913' && d.asked.length === 1 && /key=INBOX%3Am1/.test(d.asked[0]), d);
+  await pg.screenshot({ path: path.join(out, 'mail-detail.png') });
+  await pg.evaluate(() => navigator.clipboard.writeText(''));
+  await pg.click('.mcodebox .btn'); await pg.waitForTimeout(150);
+  check('详情里“复制”验证码', await pg.evaluate(() => navigator.clipboard.readText()) === '482913', {});
+  await pg.click('.mdetail .warn .lk'); await pg.waitForTimeout(150);
+  check('点“加载图片”：CSP 放开 http/https 图片、图片地址放回去，仍然是 sandbox', await pg.evaluate(() => { const f = document.querySelector('.mframe'); return /img-src data: http: https:/.test(f.srcdoc) && /tracker\.example/.test(f.srcdoc) && f.getAttribute('sandbox') === ''; }), {});
+  await pg.click('.appbar .ib[aria-label="回到列表"]'); await pg.waitForTimeout(150);
+  check('详情顶栏的返回 = 回到列表', await pg.locator('.mrow').count() === 3, {});
+  // 纯文字正文
+  await pg.click('.mrow[data-key="INBOX:m2"]'); await pg.waitForSelector('.mtext');
+  check('没有 HTML 的信：纯文字显示（textContent）', await pg.evaluate(() => document.querySelector('.mtext').textContent.includes('纯文字正文') && !document.querySelector('.mframe')), {});
+  // 系统返回键：先回列表
+  await pg.evaluate(() => { location.hash = '#__back'; }); await pg.waitForTimeout(200);
+  check('系统返回键：开着一封信时先回到列表', await pg.locator('.mrow').count() === 3, await pg.evaluate(() => location.hash));
+  // 立即收信
+  await pg.click('.appbar .ib[aria-label="立即收信"]'); await pg.waitForTimeout(300);
+  check('“立即收信”调 POST /api/mail/p2/fetch，提示收到几封', await pg.evaluate(() => window.__calls.some((x) => x.m === 'POST' && x.p === '/api/mail/p2/fetch') && /收到 1 封新邮件/.test(document.getElementById('toast')?.textContent || '')), {});
+  // 实例详情里的“信箱”一栏、卡片上的未读数
+  await pg.evaluate(() => { location.hash = '#instances'; }); await pg.waitForSelector('.cardi');
+  const chip = await pg.evaluate(() => [...document.querySelectorAll('.cardi')].map((c) => ({ id: c.dataset.id, chip: c.querySelector('.mchip')?.textContent ?? null })));
+  check('实例卡片：设了卡密的实例有信箱图标和未读数，没设的没有', chip.find((x) => x.id === 'p2')?.chip === '2' && chip.filter((x) => x.id !== 'p2').every((x) => x.chip === null), chip);
+  await pg.click('.cardi[data-id="p2"] .mchip'); await pg.waitForTimeout(200);
+  check('点卡片上的未读数 = 打开这个实例的信箱', await pg.evaluate(() => location.hash) === '#mail/p2', await pg.evaluate(() => location.hash));
+  await pg.evaluate(() => { location.hash = '#instances/p2'; }); await pg.waitForSelector('.drawer');
+  await pg.waitForTimeout(400);
+  const dr = await pg.evaluate(() => { const h3 = [...document.querySelectorAll('.drawer h3')].find((x) => x.textContent.startsWith('信箱')); const rw = h3?.nextElementSibling; return { h3: h3?.textContent, row: rw?.textContent || '' }; });
+  check('实例详情（抽屉）里有“信箱”一栏：邮箱、未读数、上次收信', /^信箱2/.test(dr.h3 || '') && /carol\.demo@outlook\.com/.test(dr.row) && /2 封未读/.test(dr.row), dr);
+  // 设卡密：没设过的实例（p3）
+  await pg.evaluate(() => { location.hash = '#mail/p3'; }); await pg.waitForSelector('.mempty');
+  await pg.click('.mempty .btn'); await pg.waitForSelector('.dlg.mset');
+  await pg.fill('.mset textarea', 'new.demo@outlook.com----假密码----00000000-1111-2222-3333-444444444444----M.C5_FAKE-TOKEN-FOR-PAGE-CHECK');
+  const hint = await pg.textContent('.mset .mhint');
+  await pg.fill('.mset input.field', 'https://mail.example.test'); await pg.waitForTimeout(400);
+  await pg.screenshot({ path: path.join(out, 'mail-setup.png') });
+  await pg.click('.mset .btn.fill'); await pg.waitForTimeout(300);
+  const put = await pg.evaluate(() => window.__calls.filter((x) => x.m === 'PUT' && x.p === '/api/mail/p3').map((x) => x.b));
+  check('设卡密：认出邮箱和类型，保存发 PUT /api/mail/p3（卡密原样交给核心服务、取件地址可改）', /认出来了：new\.demo@outlook\.com · Outlook/.test(hint) && put.length === 1 && /----M\.C5_FAKE-TOKEN-FOR-PAGE-CHECK$/.test(put[0].card) && put[0].base === 'https://mail.example.test', { hint, put });
+  await c.close();
+  // 导入识别：卡密行单算
+  const c2 = await br.newContext({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 1, userAgent: UA, locale: 'zh-CN' }); await c2.addInitScript(mock, ms);
+  const p2 = await c2.newPage(); watch(p2, 'mail-import');
+  await p2.goto(base + 'app.html#instances/import'); await p2.waitForSelector('.modal textarea');
+  await p2.fill('.modal textarea', ['a.demo@outlook.com----pw1----00000000-1111-2222-3333-444444444444----M.C5_FAKE-1', '"b.demo@hotmail.com"----pw2----cid----M.C5_FAKE-2----TAIL', 'c.demo@icloud.com', 'plain@gmail.com----自己的密码', 'x@icloud.com----这不是卡密'].join('\n'));
+  await p2.waitForTimeout(150);
+  const sumTx = await p2.evaluate(() => [...document.querySelectorAll('.modal .frow .sub')].map((x) => x.textContent).join('|'));
+  check('导入邮箱：认出 3 行卡密（Outlook 两行、iCloud 一行），5 行一共建 5 个实例', /将创建 5 个实例，其中 3 个是卡密（带信箱），2 个带自己的密码/.test(sumTx), sumTx);
+  await p2.screenshot({ path: path.join(out, 'mail-import.png') });
+  await p2.click('.modal .btn.pri'); await p2.waitForTimeout(300);
+  const imp = await p2.evaluate(() => window.__calls.filter((x) => x.p === '/api/import/emails').map((x) => x.b.text));
+  check('导入邮箱：整段原样交给核心服务（卡密由核心服务识别、存进密码库）', imp.length === 1 && /M\.C5_FAKE-2----TAIL/.test(imp[0]), imp);
+  // 通知：该弹哪些（电脑后台用的就是这个函数）
+  const nt = await p2.evaluate(async (st) => {
+    const { mailNotes } = await import('./common.js');
+    const me = st.instances.find((x) => x.id === 'p2');
+    const a = mailNotes(me, null), b = mailNotes(me, []), c = mailNotes(me, b.seen);
+    const me2 = { ...me, mail: { ...me.mail, newest: [{ key: 'INBOX:m9', from: 'New <n@x.example>', subject: '又一封' }, ...me.mail.newest] } };
+    const d = mailNotes(me2, c.seen);
+    return { a: a.notes.length, aSeen: a.seen.length, b: b.notes.map((n) => [n.title, n.message]), c: c.notes.length, d: d.notes.map((n) => n.key) };
+  }, ms);
+  check('通知：后台刚起来（没记录）只记下不弹；之后每封新邮件弹一次，标题写实例编号和发件人，内容带验证码；同一封不重复弹', nt.a === 0 && nt.aSeen === 2 && nt.b.length === 2 && nt.b[0][0] === '#2 新邮件：Acme 账号中心 <no-reply@acme.example>' && nt.b[0][1] === '验证码 482913 · 你的登录验证码' && nt.c === 0 && nt.d.join() === 'INBOX:m9', nt);
+  // 新标签页：有新邮件的一行提示（手机上没有系统通知，靠它）
+  await p2.goto(base + 'newtab.html#inst=p2'); await p2.waitForSelector('.mailnew');
+  const nb = await p2.evaluate(() => document.querySelector('.mailnew').textContent);
+  await p2.click('.mailnew'); await p2.waitForTimeout(200);
+  const opened = await p2.evaluate(() => window.__calls.filter((x) => x.p === '/ui/open').map((x) => x.b.route));
+  check('新标签页：有新邮件时一行提示（未读数 + 验证码 + 主题），点了打开这个实例的信箱', /2 封新邮件：验证码 482913 · 你的登录验证码/.test(nb) && opened.includes('mail/p2'), { nb, opened });
+  await c2.close();
+  // 电脑版：同一份页面在设置页右栏里（截图）
+  if (desk) {
+    const dsrv2 = http.createServer((q, rr) => {
+      const u = new URL(q.url, 'http://x'), j = (v) => { rr.writeHead(200, { 'Content-Type': 'application/json' }); rr.end(JSON.stringify(v)); };
+      if (u.pathname === '/config.json') return j({ port: dsrv2.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' });
+      if (u.pathname === '/api/state') return j(ms);
+      if (u.pathname === '/api/events') return setTimeout(() => j({ seq: ms.seq }), 20000);
+      if (u.pathname === '/api/mail/p2') return j(ms.__mailbox.p2);
+      if (u.pathname === '/api/mail/p2/msg') return j({ key: u.searchParams.get('key'), mail: ms.__mailMsgs[u.searchParams.get('key')] });
+      if (u.pathname === '/api/vault/icons') return j({ icons: ms.__icons });
+      if (u.pathname.startsWith('/api/')) return j({ ok: true });
+      const f = path.join(desk, decodeURIComponent(u.pathname));
+      if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { rr.writeHead(404); rr.end(); return; }
+      rr.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream' }); rr.end(fs.readFileSync(f));
+    }).listen(0);
+    const dc = await br.newContext({ viewport: { width: 1180, height: 760 }, deviceScaleFactor: 1, locale: 'zh-CN' });
+    await dc.addInitScript(() => { window.chrome = { runtime: { getURL: (x) => new URL(x, location.origin + '/').href, sendMessage: () => Promise.resolve() }, tabs: { create: () => {} } }; });
+    const dp = await dc.newPage(); watch(dp, 'mail-desk');
+    await dp.goto(`http://127.0.0.1:${dsrv2.address().port}/app.html#mail/p2/${encodeURIComponent('INBOX:m1')}`); await dp.waitForSelector('.mframe', { timeout: 8000 }).catch(() => {});
+    await dp.waitForTimeout(500);
+    const dd = await dp.evaluate(() => ({ frame: document.querySelector('.mframe')?.getAttribute('sandbox'), nav: document.querySelector('.pnav button.on')?.textContent, title: document.title }));
+    check('电脑设置页：#mail/<实例>/<key> 直接打开那一封（点通知进来的样子），左边导航停在“实例”', dd.frame === '' && dd.nav === '实例' && dd.title === 'MaskTab · 信箱', dd);
+    await dp.screenshot({ path: path.join(out, 'mail-desk.png') });
+    await dc.close(); dsrv2.close();
+  }
+}
+if (flow.length > ml0) console.log(flow.slice(ml0).join('\n'));
 want('');
 if (took.length) console.log('用时：' + took.join('，'));
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');
