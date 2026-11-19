@@ -96,8 +96,10 @@ function routeFor(id) {
 }
 // 翻译接口（companion/ext/translate.js 用的两家）。到它们的请求走了哪条线路记进日志（最多 12 条），模拟器冒烟靠它核对（docs/android.md）。
 const TR_HOSTS = new Set(['translate.googleapis.com', 'edge.microsoft.com']);
+const SELF = browser.runtime.getURL('');
+const isLoop = (url) => { try { return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(url).hostname); } catch { return false; } };
 const isTr = (url) => { try { return TR_HOSTS.has(new URL(url).hostname); } catch { return false; } };
-let trNoted = 0;
+let trNoted = 0, relayNoted = 0;
 function trNote(d, how) {
   if (!isTr(d.url) || trNoted++ >= 12) return;
   let f = d.documentUrl || d.originUrl || ''; try { f = new URL(f).protocol + '//' + new URL(f).host; } catch { /* 原样 */ }
@@ -111,14 +113,18 @@ browser.proxy.onRequest.addListener(async (d) => {
   let id = await instOfTab(d.tabId);
   if (!id) id = idOfCs(d.cookieStoreId) || (isContainer(d.cookieStoreId) && csInst.get(d.cookieStoreId)) || null;
   if (id) { if (d.tabId >= 0) lastInst = id; trNote(d, `走实例 #${insts[id]?.no ?? '?'} 的线路`); return routeFor(id); }
-  // 翻译接口：只有后台替网页代发这一种来路（下面“网页翻译的请求”），线路跟着要翻译的那个实例；别的来路一律拒绝，绝不直连。
-  if (isTr(d.url)) {
-    const w = trWho && insts[trWho] ? trWho : '';
-    trNote(d, w ? `走实例 #${insts[w].no} 的线路（后台代发）` : '已拒绝');
-    return w ? routeFor(w) : BLOCK;
-  }
-  // 不属于任何网页标签：扩展自己、app 内部的请求（来源是 moz-extension 或没有来源）直连；其余认不出实例的一律拒绝
   const from = d.documentUrl || d.originUrl || '';
+  // 后台替某个实例的网页代发的请求（下面“替网页代发”一节）：这段时间里后台自己发出去的都算在那个实例头上，走它的线路（跳转以后也是）。
+  if (d.tabId < 0 && from.startsWith(SELF) && relayWho && insts[relayWho] && !isLoop(d.url)) {
+    trNote(d, `走实例 #${insts[relayWho].no} 的线路（后台代发）`);
+    if (!isTr(d.url) && relayNoted++ < 12) { try { console.info(`MaskTab 代发请求 ${new URL(d.url).host} 走实例 #${insts[relayWho].no} 的线路`); } catch { /* 忽略 */ } }
+    return routeFor(relayWho);
+  }
+  // 翻译接口只有“后台代发”这一种来路；别的来路一律拒绝，绝不直连。
+  if (isTr(d.url)) { trNote(d, '已拒绝'); return BLOCK; }
+  // 不属于任何网页标签：扩展自己、app 内部的请求（来源是 moz-extension 或没有来源）直连；其余认不出实例的一律拒绝。
+  // 注意：网页里的内容脚本自己发的请求也是“没有标签页、没有来源”（模拟器实测 run 44439679859：tab=-1 cs=firefox-default），
+  // 会落到这里直连出去——所以我们自己的内容脚本一律不许自己发请求，要发就交给后台代发（translate.js、autofill.js 都是）。
   if (d.tabId < 0 && (!from || from.startsWith('moz-extension:') || from.startsWith('resource:') || from.startsWith('chrome:'))) { trNote(d, '直连'); return { type: 'direct' }; }
   // 记下来（设置 → 人机验证诊断里能看到，也进诊断信息）：网页的后台线程发的请求如果认不出实例，验证组件就会卡死，这是要排查的可疑点之一
   const pass = off.has('block') && insts[lastInst] ? lastInst : '';
@@ -223,6 +229,10 @@ browser.runtime.onMessage.addListener((m, sender) => {
     if (!sender.tab) return;
     return trFetch(m, sender.tab).catch((e) => ({ error: e.name === 'AbortError' ? '翻译接口超时' : (e.message || String(e)) }));
   }
+  if (t === 'relay:icon') {
+    if (!sender.tab) return;
+    return relayIcon(m, sender.tab).catch(() => ({ icon: null }));
+  }
   // 新标签页 / 引导页（扩展自己的页面）登记：这个标签页属于 m.inst
   if (t === 'bind' && sender.tab) {
     if (m.dl && String(sender.url || '').startsWith(browser.runtime.getURL('newtab.html'))) dlBind(sender.tab.id, m.dl, m.ref);
@@ -248,35 +258,62 @@ browser.runtime.onMessage.addListener((m, sender) => {
   // 实例菜单里的“录入登录”（扩展自己的页面发来）：转给这个实例正显示着的网页；没有就记下来，等下一个网页接手。
   if (t === 'rec-start' && !sender.tab?.url?.startsWith('http')) return recStart(String(m.inst || ''));
 });
-// ---------- 网页翻译的请求 ----------
-// 网页里的内容脚本（translate.js）要翻译时，请求由后台代发，线路用“要翻译的那个标签页所属实例”的（决策 A-14 的同一条规矩：
-// 绝不直连，也不串到别的实例的线路上）。后台自己发的请求身上没有标签页，分流那里（proxy.onRequest）认不出是替谁发的，
-// 所以用一把锁：同一时刻只替一个实例发（同一个实例的几条可以一起发），分流时翻译接口的请求就都算在它头上；别的实例排队等。
-// 一条请求最多十几秒，排队的那个实例只是翻译慢一点。
-let trWho = '', trBusy = 0;
-const trWait = [];
-async function trEnter(inst) {
-  while (trWho && (trWho !== inst || trWait.length)) await new Promise((r) => trWait.push(r));
-  trWho = inst; trBusy++;
+// ---------- 替网页代发请求（翻译、登录页的网站图标） ----------
+// 网页里的内容脚本自己发的请求不带标签页的身份，分流那里（proxy.onRequest）认不出它是哪个实例的，会当成“app 内部的请求”直连出去
+// ——用的是手机自己的网络，不是实例的线路（2026-11-19 模拟器实测；之前的版本翻译、取网站图标都是这么出去的，见 decisions UI-27 补充）。
+// 所以内容脚本不自己发，交给后台代发：后台知道消息是哪个标签页发来的，也就知道是哪个实例。
+// 后台自己发的请求身上同样没有标签页，于是用一把锁：同一时刻只替一个实例发（同一个实例的几条可以一起发），
+// 这段时间里后台发出去的请求都走它的线路；别的实例排队等（一条最多十几秒，只是慢一点）。绝不直连，也不串到别的实例的线路上。
+let relayWho = '', relayBusy = 0;
+const relayWait = [];
+async function relayEnter(inst) {
+  while (relayWho && (relayWho !== inst || relayWait.length)) await new Promise((r) => relayWait.push(r));
+  relayWho = inst; relayBusy++;
 }
-function trLeave() {
-  if (--trBusy > 0) return;
-  trBusy = 0; trWho = '';
-  trWait.splice(0).forEach((r) => r());
+function relayLeave() {
+  if (--relayBusy > 0) return;
+  relayBusy = 0; relayWho = '';
+  relayWait.splice(0).forEach((r) => r());
 }
+async function relayInst(tab) {
+  await ready;
+  const inst = (await instOfTab(tab.id)) || idOfCs(tab.cookieStoreId) || '';
+  if (!inst || !insts[inst]) throw new Error('认不出这个标签页是哪个实例的');
+  return inst;
+}
+// 代发的请求带上那个网页的浏览器标识（每个实例的不一样；后台自己的是内核默认的那个，对不上）
+const uaHead = (ua) => (typeof ua === 'string' && /^Mozilla\/5\.0 [\x20-\x7e]{10,300}$/.test(ua) ? { 'User-Agent': ua } : {});
+async function relayFetch(inst, url, init, ms) {
+  await relayEnter(inst);
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...init, credentials: 'omit', referrerPolicy: 'no-referrer', signal: ctl.signal });
+    return { ok: r.ok, status: r.status, type: r.headers.get('content-type') || '', blob: await r.blob() };
+  } finally { clearTimeout(t); relayLeave(); }
+}
+// 网页翻译（translate.js）：只认两家翻译接口的地址，内容脚本不能拿它当万能代理
 async function trFetch(m, tab) {
   let u;
   try { u = new URL(m.url); } catch { throw new Error('地址不对'); }
   if (u.protocol !== 'https:' || !TR_HOSTS.has(u.hostname)) throw new Error('不是翻译接口');
-  await ready;
-  const inst = (await instOfTab(tab.id)) || idOfCs(tab.cookieStoreId) || '';
-  if (!inst || !insts[inst]) throw new Error('认不出这个标签页是哪个实例的');
-  await trEnter(inst);
-  const i = m.init || {}, ctl = new AbortController(), t = setTimeout(() => ctl.abort(), Math.min(15000, Math.max(2000, Number(m.ms) || 15000)));
-  try {
-    const r = await fetch(u, { method: i.method === 'POST' ? 'POST' : 'GET', headers: i.headers || {}, body: i.method === 'POST' ? i.body : undefined, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal: ctl.signal });
-    return { ok: r.ok, status: r.status, body: await r.text() };
-  } finally { clearTimeout(t); trLeave(); }
+  const inst = await relayInst(tab), i = m.init || {};
+  const r = await relayFetch(inst, u.href, { method: i.method === 'POST' ? 'POST' : 'GET', headers: { ...(i.headers || {}), ...uaHead(m.ua) }, body: i.method === 'POST' ? i.body : undefined, cache: 'no-store' }, Math.min(15000, Math.max(2000, Number(m.ms) || 15000)));
+  return { ok: r.ok, status: r.status, body: await r.blob.text() };
+}
+// 登录页的网站图标（autofill.js 的 grabIcon）：按内容脚本挑好的几个地址挨个试，取到一个大小、类型合适的就交回去
+async function relayIcon(m, tab) {
+  const inst = await relayInst(tab);
+  const urls = (Array.isArray(m.urls) ? m.urls : []).filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, 4);
+  for (const u of urls) {
+    const r = await relayFetch(inst, u, { headers: uaHead(m.ua), cache: 'force-cache' }, 8000).catch(() => null);
+    if (!r?.ok) continue;
+    const b = r.blob;
+    const type = (b.type || r.type || '').split(';')[0].trim().toLowerCase() || (/\.ico(\?|$)/i.test(u) ? 'image/x-icon' : /\.svg(\?|$)/i.test(u) ? 'image/svg+xml' : /\.png(\?|$)/i.test(u) ? 'image/png' : '');
+    if (!/^image\//.test(type) || b.size < 30 || b.size > 48 * 1024) continue;
+    const data = await new Promise((res) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(',')[1] || ''); f.onerror = () => res(''); f.readAsDataURL(b); });
+    if (data) return { icon: { type, data } };
+  }
+  return { icon: null };
 }
 // 翻译此页：转给这个实例正显示着的网页（translate.js）。网页刚点开、还没有内容脚本时每半秒再试，最多 20 秒
 // （内容脚本在网页一开始加载时就装上，它自己再等网页加载完）；内部页一直没有，试完就算了。

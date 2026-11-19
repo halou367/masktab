@@ -59,12 +59,12 @@
 
   // ---------- 请求 ----------
   // 两端都交给扩展后台发。电脑：实例的浏览器整个在它的代理上。手机：后台按“是哪个标签页要的”把请求指到那个实例的线路上
-  // （android/ext/background.js 的 trFetch）。手机上以前是内容脚本自己发，以为请求会带着标签页的身份——模拟器实测带不上
-  // （内容脚本发的请求认不出标签页），所以改掉了（docs/decisions.md UI-27 补充）。
+  // （android/ext/background.js “替网页代发请求”）。手机上以前是内容脚本自己发，以为请求会带着标签页的身份走实例的线路——
+  // 模拟器实测带不上，是直连出去的（run 44439679859），所以改掉了（docs/decisions.md UI-27 补充）。
   // ms = 最多等多久（默认 15 秒）。谷歌那一路给得短：直连又被墙的网络上它要干等十秒才失败，这期间页面上只有“正在翻译…”。
   async function get(url, init, ms = 15000) {
     const opt = { ...init };
-    const r = await new Promise((res) => { try { chrome.runtime.sendMessage({ t: 'tr:fetch', url, ms, init: { method: opt.method || 'GET', headers: opt.headers || {}, body: opt.body || null } }, (x) => res(chrome.runtime.lastError ? null : x)); } catch { res(null); } });
+    const r = await new Promise((res) => { try { chrome.runtime.sendMessage({ t: 'tr:fetch', url, ms, ua: navigator.userAgent, init: { method: opt.method || 'GET', headers: opt.headers || {}, body: opt.body || null } }, (x) => res(chrome.runtime.lastError ? null : x)); } catch { res(null); } });
     if (!r) throw new Error('扩展后台没有回应');
     if (r.error) throw new Error(r.error);
     return r;

@@ -776,6 +776,40 @@ translate_phase() {
     else echo "失败：翻译：第二次打开三点菜单没找到“翻译此页”"; fail=1; A shell input keyevent KEYCODE_BACK; fi
   else echo "失败：翻译：第二次没找到三点菜单按钮"; fail=1; fi
   grep "MTTR \|MaskTab 翻译" "$L" | sed 's/.*GeckoConsole: //' | cut -c1-200 | tail -12
+  # 登录页的网站图标：自动填写脚本见到密码框会去取这个网站的图标，这条请求也得从实例 #1 的线路出去、带实例自己的浏览器标识
+  # （以前是网页里的脚本自己发，实测是直连——run 44439679859）
+  local R=$W/dl/requests.log
+  n0=$(count "MTLOGIN ready"); h0=$(count "MaskTab 代发请求 $HOSTIP:18081 走实例 #1 的线路")
+  A shell am start -a android.intent.action.VIEW -d "$B/tr/login.html" -n $ACT > /dev/null
+  for k in $(seq 1 20); do [ "$(count "MTLOGIN ready")" -gt "$n0" ] && break; sleep 1; done
+  for k in $(seq 1 15); do grep -q '"/tr/icon.png"' $R 2>/dev/null && break; sleep 1; done
+  sleep 2; shot 55-login-icon
+  if [ "$(count "MTLOGIN ready")" -le "$n0" ]; then echo "失败：网站图标：登录测试页没打开"; fail=1
+  elif ! grep -q '"/tr/icon.png"' $R 2>/dev/null; then echo "失败：网站图标：登录页开了 17 秒，app 没有去取网站图标"; fail=1
+  else
+    if [ "$(count "MaskTab 代发请求 $HOSTIP:18081 走实例 #1 的线路")" -gt "$h0" ]; then echo "通过：网站图标：取图标的请求由后台代发，走的是实例 #1 的线路"
+    else echo "失败：网站图标：取图标的请求没有记成“走实例 #1 的线路”"; fail=1; grep -o "MaskTab 代发请求.*\|MaskTab 认不出实例.*" "$L" | tr -d '\r' | cut -c1-160 | tail -4; fi
+    python3 - "$R" <<'P' || fail=1
+import json, sys
+rows = [json.loads(x) for x in open(sys.argv[1]) if x.strip()]
+page = [r for r in rows if r['p'].startswith('/tr/login.html')]
+icon = [r for r in rows if r['p'].startswith('/tr/icon.png')]
+ok = True
+if not page or not icon:
+    print('失败：网站图标：请求记录里没找到登录页或图标'); sys.exit(1)
+if any(r['ua'] != page[-1]['ua'] for r in icon):
+    print('失败：网站图标：取图标的请求浏览器标识和网页的不一样（%s / %s）' % (icon[-1]['ua'], page[-1]['ua'])); ok = False
+else:
+    print('通过：网站图标：取图标的请求带的浏览器标识和这个实例的网页一样')
+if any(r['cookie'] or r['ref'] for r in icon):
+    print('失败：网站图标：取图标的请求带了 Cookie 或来源页（%s / %s）' % (icon[-1]['cookie'], icon[-1]['ref'])); ok = False
+else:
+    print('通过：网站图标：取图标的请求不带 Cookie、不带来源页')
+sys.exit(0 if ok else 1)
+P
+  fi
+  if grep -q "MaskTab 认不出实例的请求.*$HOSTIP" "$L"; then echo "说明：有认不出实例而被拒绝的请求："; grep -o "MaskTab 认不出实例的请求.*" "$L" | tr -d '\r' | cut -c1-160 | sort | uniq -c | head -4; fi
+  cp $R "$OUT/dl-requests.log" 2>/dev/null
   cp $W/server.log "$OUT/node-server-final.log" 2>/dev/null || true
   return 0
 }

@@ -6,6 +6,7 @@
   <目录>/requests.log        每个请求一行 JSON：路径、状态、Cookie、来源页、UA、Accept-Encoding
 
 网址：
+  /tr/login.html  登录页（密码框 + 网站图标 /tr/icon.png）：看 app 取网站图标走的哪条线路
   /dl/page.html   测试页：一张要 Cookie 才给的图片、一个下载链接、上传按钮、日期输入框；响应里种下 Cookie mt=1
   /dl/pic.png     没带 Cookie mt=1 就回 403（长按“保存图片”是 app 自己去取的，要验证它带上了这个实例的 Cookie）
   /dl/file        3 MB，文件名在 Content-Disposition 里（中文、带空格，filename*= 写法）
@@ -50,6 +51,15 @@ PAGE = '''<!doctype html><meta charset="utf-8"><meta name="viewport" content="wi
 # 网页翻译的测试页（决策 UI-27）：几句英文、一段代码（不该翻）、一句标了 translate="no" 的（不该翻）。
 # 页面自己盯着文字变没变，变了就往控制台写一行“MTTR 标题 | 第一段 | 第二段 | 代码 | 不翻的 | 后加的”（进 logcat），冒烟脚本看这一行。
 # 文字头一次变（= 开始翻了）两秒后再加一段英文：翻译开着时后加出来的文字也要翻。
+# 登录页：有密码框和网站图标。app 的自动填写脚本见到密码框会去取这个网站的图标（companion/ext/autofill.js 的 grabIcon），
+# 冒烟看这条请求是不是从实例的线路出去的（手机上以前是直连，decisions UI-27 补充）。
+LOGIN_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in test</title>
+<link rel="icon" sizes="48x48" href="/tr/icon.png">
+<body style="font:16px sans-serif;margin:24px"><h1>Sign in</h1>
+<form onsubmit="return false"><p><input type="text" name="username" autocomplete="username" placeholder="Email"></p>
+<p><input type="password" name="password" autocomplete="current-password" placeholder="Password"></p><p><button type="button">Sign in</button></p></form>
+<script>console.log('MTLOGIN ready ' + navigator.userAgent)</script></body></html>'''.encode()
+
 TR_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Translate test</title>
 <style>body{margin:16px;font:18px/1.6 sans-serif}pre{background:#eee;padding:8px}</style>
 <h1 id="h">Welcome to our online bookstore</h1>
@@ -97,6 +107,10 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.reply(200, PAGE, [('Content-Type', 'text/html; charset=utf-8'), ('Set-Cookie', 'mt=1; Path=/')])
         if p == '/tr/page.html':
             return self.reply(200, TR_PAGE, [('Content-Type', 'text/html; charset=utf-8')])
+        if p == '/tr/login.html':
+            return self.reply(200, LOGIN_PAGE, [('Content-Type', 'text/html; charset=utf-8'), ('Set-Cookie', 'mt=1; Path=/')])
+        if p == '/tr/icon.png':
+            return self.reply(200, PNG, [('Content-Type', 'image/png'), ('Cache-Control', 'no-store')])
         if p == '/dl/pic.png':
             if 'mt=1' not in self.headers.get('Cookie', ''):
                 return self.reply(403, b'no cookie', [('Content-Type', 'text/plain')])

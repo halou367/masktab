@@ -446,6 +446,13 @@
       const size = (l) => { const m = /(\d+)x\d+/.exec(l.getAttribute('sizes') || ''); return m ? +m[1] : /apple/i.test(l.rel) ? 180 : 0; };
       const rank = (l) => { const z = size(l); return z >= 32 && z <= 96 ? 0 : !z ? 1 : z < 32 ? 2 : 3; };
       const urls = [...new Set([...links.sort((a, b) => rank(a) - rank(b) || size(a) - size(b)).map((l) => l.href), location.origin + '/favicon.ico'])].slice(0, 4);
+      // 手机（GeckoView）：内容脚本自己发的请求不带标签页的身份，会绕开实例的线路直连出去（模拟器实测，decisions UI-27 补充），
+      // 所以交给后台按本实例的线路去取。电脑上实例的浏览器整个在它的代理上，照旧自己取。
+      if (typeof browser !== 'undefined' && String(chrome.runtime.getURL('')).startsWith('moz-extension:')) {
+        const r = await send({ t: 'relay:icon', urls, ua: navigator.userAgent });
+        if (r?.icon) send({ t: 'vault:icon', icon: r.icon });
+        return;
+      }
       for (const u of urls) {
         const r = await fetch(u, { credentials: 'omit', cache: 'force-cache' }).catch(() => null);
         if (!r?.ok) continue;
