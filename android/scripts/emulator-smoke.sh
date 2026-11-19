@@ -28,10 +28,13 @@ shot() {
 # （2026-11-18 run 44333694642：com.android.settings 在“安装未知应用”那一页崩了一次，整轮被记成失败）。
 # SIG=1 时原生层的崩溃（Fatal signal）也算：那一行里进程名被截短了认不出是谁的，所以不分是谁（第一轮一直是这么查的）。
 ourcrash() {
-  awk -v pkg="$PKG" -v sig="${SIG:-0}" '
+  awk -v pkg="$PKG" -v tag="${PKG#com.}" -v sig="${SIG:-0}" '
     /FATAL EXCEPTION/ { head = $0; next }
     head != "" { if (index($0, "Process: " pkg)) { print head; print; found = 1 } head = "" ; next }
     sig && /Fatal signal/ { print; found = 1 }
+    # 运行时自己中止的（JNI 报错之类）：不是 Java 异常，没有 FATAL EXCEPTION 那一行；标签是进程名的后半截
+    # （2026-11-19 run 44445901005：app 启动时这样闪退了一次，这里没认出来，报的是“没有崩溃”）
+    index($0, " F " tag ": ") && (/JNI DETECTED ERROR IN APPLICATION/ || /Runtime aborting\.\.\./) { print; found = 1 }
     END { exit found ? 0 : 1 }'
 }
 # 别的应用的崩溃只说明一下，不算失败
@@ -532,7 +535,8 @@ update_phase() {
   if [ -n "$t1" ] && [ "$t1" != "$t0" ]; then echo "通过：在线更新：系统装好了（$t0 → $t1）"; else echo "失败：在线更新：等了 2 分钟系统也没装好"; grep "在线更新" "$OUT/logcat-live.txt" | tail -5 | cut -c1-300; return 1; fi
   # 5. 重新打开：数据还在（四个实例），页面能开
   sleep 3; A shell am start -n $ACT > /dev/null; sleep 25
-  n0=$(ready instances); A shell am start -n $ACT --es mt_open instances > /dev/null; sleep 8; shot 25-update-reopened
+  n0=$(ready instances); A shell am start -n $ACT --es mt_open instances > /dev/null
+  for k in $(seq 1 20); do sleep 1; [ "$(ready instances)" -gt "$n0" ] && break; done; sleep 2; shot 25-update-reopened
   if [ "$(ready instances)" -gt "$n0" ]; then echo "通过：在线更新：装完重新打开，页面正常"; else echo "失败：在线更新：装完重新打开后页面没有就绪"; return 1; fi
   closepanel
   return 0

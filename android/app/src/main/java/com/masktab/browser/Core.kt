@@ -151,6 +151,7 @@ object Core {
 
     fun ensureRuntime(): GeckoRuntime {
         runtime?.let { return it }
+        CoreProc.prepare() // 起核心服务要用的环境变量得在内核启动前取好（原因见 CoreProc.prepare）
         val s = GeckoRuntimeSettings.Builder()
             .configFilePath(writeGeckoConfig())
             .consoleOutput(true)

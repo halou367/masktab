@@ -94,6 +94,19 @@ object CoreProc {
     val mihomoInstalled get() = mihomoBin.exists()
     val running get() = proc?.isAlive == true && port > 0
 
+    /**
+     * 起核心服务用的进程描述，里面带着一份环境变量。**必须在内核（GeckoView）启动之前准备好**（Core.ensureRuntime 一开头就调）：
+     * 取环境变量（ProcessBuilder.environment）是把进程的整张环境变量表数一遍再抄一遍，内核启动时它的线程正在往这张表里加东西，
+     * 两边撞上——数的时候 19 条、抄的时候 20 条——系统直接把 app 杀掉（JNI 报错，不是能接住的异常）。
+     * 核心服务和内核是一起开始启动的（决策 A-13），所以正好撞得上；2026-11-19 发版那遍模拟器冒烟里撞上了一次（run 44445901005，
+     * 在线更新装完头一次打开就闪退，再开正常）。现在只在内核启动前取这一次，以后每次起核心服务都用这一份，不再去数。
+     */
+    private var pb0: ProcessBuilder? = null
+    @Synchronized
+    fun prepare() {
+        if (pb0 == null) pb0 = try { ProcessBuilder("true").also { it.environment() } } catch (e: Throwable) { null }
+    }
+
     /** 启动核心服务并等它的本地接口就绪。已在运行就直接返回。在后台线程调用。 */
     @Synchronized
     fun start(): Boolean {
@@ -106,8 +119,9 @@ object CoreProc {
         lock.delete()
         return try {
             val gecko = GeckoSession.getDefaultUserAgent().substringAfter("rv:").substringBefore(")")
-            val pb = ProcessBuilder(bin.path, "-data", dir.path, "-host", "android", "-mihomo", mihomoBin.path, "-kernel-name", "GeckoView", "-kernel-version", gecko)
-            val env = pb.environment()
+            val pb = (pb0 ?: ProcessBuilder("true").also { pb0 = it }) // 正常情况下 prepare() 早就备好了；见上面的说明
+            pb.command(bin.path, "-data", dir.path, "-host", "android", "-mihomo", mihomoBin.path, "-kernel-name", "GeckoView", "-kernel-version", gecko)
+            val env = pb.environment() // 备好的那一份（已经取过，不会再去数环境变量表）
             env["TMPDIR"] = ctx.cacheDir.path // 不设的话 Go 在安卓上用 /data/local/tmp，app 写不了
             env["HOME"] = ctx.filesDir.path
             VaultKey.get(ctx, dir)?.let { env["MASKTAB_VAULT_KEY"] = it }
