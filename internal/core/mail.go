@@ -109,8 +109,14 @@ func (a *App) mailClient(id string) (*http.Client, string, error) {
 		return nil, "", errors.New("实例不存在")
 	}
 	if in.Kind == "normal" || in.Proxy.State != "on" {
-		d := netx.BindDialer(net.Dialer{Timeout: 10 * time.Second})
-		return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil, DialContext: d.DialContext}}, "直连（这个实例没开代理）", nil
+		bd, plain := netx.BindDialer(net.Dialer{Timeout: 10 * time.Second}), &net.Dialer{Timeout: 10 * time.Second}
+		dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if h, _, _ := net.SplitHostPort(addr); h == "localhost" || net.ParseIP(h).IsLoopback() { // 取件地址在本机（自己搭的）：绑了物理网卡就连不上回环地址
+				return plain.DialContext(ctx, network, addr)
+			}
+			return bd.DialContext(ctx, network, addr)
+		}
+		return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil, DialContext: dial}}, "直连（这个实例没开代理）", nil
 	}
 	r := a.rt[id]
 	switch {
