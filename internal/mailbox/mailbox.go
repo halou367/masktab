@@ -266,7 +266,10 @@ func Query(ctx context.Context, hc *http.Client, base string, c Card, folder str
 		return nil, errors.New(c.Redact(shortNetErr(err)))
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil { // 线路在传正文时断了：别当成“不是 JSON”
+		return nil, errors.New(c.Redact(shortNetErr(err)))
+	}
 	var out struct {
 		OK     bool            `json:"ok"`
 		Error  string          `json:"error"`
@@ -311,6 +314,8 @@ func shortNetErr(err error) string {
 		return "连接取件地址超时"
 	case strings.Contains(s, "REJECT") || strings.Contains(s, "socks"):
 		return "这个实例的线路不通：" + s
+	case errors.Is(err, io.EOF) || strings.HasSuffix(s, "EOF"):
+		return "取件接口没回完就断开了（第一次查这个邮箱时常见，下一轮会自动再收）"
 	}
 	return "连不上取件地址：" + s
 }

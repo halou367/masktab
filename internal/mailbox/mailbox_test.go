@@ -186,3 +186,27 @@ func TestQuery(t *testing.T) {
 		t.Fatalf("连不上的报错：%v", err)
 	}
 }
+
+// 线路在传正文时断开（Content-Length 说 1000 字节，只给了一半就关连接）：按网络错误报，不误报“不是 JSON”
+func TestQueryCutBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"ok":true,"mails":[`))
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		c, _, _ := hj.Hijack()
+		c.Close()
+	}))
+	defer srv.Close()
+	c := Card{Kind: "outlook", Email: "a@outlook.com", Password: "p", ClientID: "c", Refresh: "tok"}
+	_, err := Query(context.Background(), srv.Client(), srv.URL, c, "INBOX", 5)
+	if err == nil || strings.Contains(err.Error(), "JSON") {
+		t.Fatalf("半截回复应按网络错误报：%v", err)
+	}
+	if !strings.Contains(err.Error(), "断开") {
+		t.Fatalf("EOF 的说法不对：%v", err)
+	}
+}

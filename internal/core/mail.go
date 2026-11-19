@@ -27,7 +27,9 @@ const (
 	mailTick     = 15 * time.Second // 轮询循环多久看一次“谁到点了”
 	mailRecent   = 10 * time.Minute // 第一次收信时，多近的信算未读
 	mailTop      = 20               // 每个文件夹取最新的多少封
-	mailKeep     = 1000             // 每个实例最多记多少个“见过的信”
+	// 取件接口第一次查一个邮箱要先换令牌、连 Graph，实测 40 多秒（之后两三秒）：30 秒的超时让第一次收信必定失败（超时 / EOF）
+	mailHTTPTimeout = 90 * time.Second
+	mailKeep        = 1000 // 每个实例最多记多少个“见过的信”
 )
 
 // mailBox 是一个实例的信箱状态。带 json 标签的落盘（state/mail.json），其余只在内存里。
@@ -116,7 +118,7 @@ func (a *App) mailClient(id string) (*http.Client, string, error) {
 			}
 			return bd.DialContext(ctx, network, addr)
 		}
-		return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil, DialContext: dial}}, "直连（这个实例没开代理）", nil
+		return &http.Client{Timeout: mailHTTPTimeout, Transport: &http.Transport{Proxy: nil, DialContext: dial}}, "直连（这个实例没开代理）", nil
 	}
 	r := a.rt[id]
 	switch {
@@ -127,7 +129,7 @@ func (a *App) mailClient(id string) (*http.Client, string, error) {
 	case r.Error != "" || r.Cut != "":
 		return nil, "", errors.New("这个实例现在断网，线路通了再收")
 	}
-	return probe.Client(r.probePort, 30*time.Second), "这个实例自己的线路", nil
+	return probe.Client(r.probePort, mailHTTPTimeout), "这个实例自己的线路", nil
 }
 
 // mailFetch 给一个实例收一次信。manual = 用户点了“立即收信”（报错要回给界面）；后台轮询的报错只记下来。
@@ -165,12 +167,16 @@ func (a *App) mailFetch(id string, manual bool) (int, error) {
 	if card.Kind == "icloud" {
 		folders = []string{"INBOX"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*mailHTTPTimeout+10*time.Second)
 	defer cancel()
 	got := map[string][]mailbox.Mail{}
 	var errs []string
 	for _, f := range folders {
 		ms, err := mailbox.Query(ctx, hc, cred.Base, card, f, mailTop)
+		if err != nil && ctx.Err() == nil && !strings.HasPrefix(err.Error(), "取件失败") { // 线路偶尔握手失败 / 传一半断开：隔两秒再试一次
+			time.Sleep(2 * time.Second)
+			ms, err = mailbox.Query(ctx, hc, cred.Base, card, f, mailTop)
+		}
 		if err != nil {
 			errs = append(errs, card.Redact(err.Error()))
 			continue
@@ -492,7 +498,7 @@ func (a *App) mailRoutes(mux *http.ServeMux) {
 		a.bump("state", id)
 		reply(w, nil, err)
 	})
-	// 立即收信：等收完再回（最多一分钟），回的是收完以后的列表；added = 这次新来几封
+	// 立即收信：等收完再回（最多约三分钟：取件站第一次查一个邮箱要四十多秒），回的是收完以后的列表；added = 这次新来几封
 	mux.HandleFunc("POST /api/mail/{id}/fetch", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !ok(w, id) {
