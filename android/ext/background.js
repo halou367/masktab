@@ -94,6 +94,15 @@ function routeFor(id) {
   if (x.direct) return { type: 'direct' };
   return { type: 'socks', host: '127.0.0.1', port: x.port, proxyDNS: true, failoverTimeout: 1 };
 }
+// 翻译接口（companion/ext/translate.js 用的两家）。到它们的请求走了哪条线路记进日志（最多 12 条），模拟器冒烟靠它核对（docs/android.md）。
+const TR_HOSTS = new Set(['translate.googleapis.com', 'edge.microsoft.com']);
+let trNoted = 0;
+function trNote(d, how) {
+  let h = ''; try { h = new URL(d.url).hostname; } catch { /* 忽略 */ }
+  if (!TR_HOSTS.has(h) || trNoted++ >= 12) return;
+  let f = d.documentUrl || d.originUrl || ''; try { f = new URL(f).protocol + '//' + new URL(f).host; } catch { /* 原样 */ }
+  console.info(`MaskTab 翻译请求 ${how} tab=${d.tabId} cs=${d.cookieStoreId || '—'} 来自=${f || '—'}`);
+}
 browser.proxy.onRequest.addListener(async (d) => {
   // 取指纹参数的同步请求（见下面“指纹参数”一节）：发出前就被跳转到扩展内部，不出网；这里指到一个没人听的本机端口，
   // 这样内核不会替它查 DNS（不让“fp.masktab.invalid”出现在本地网络的 DNS 记录里），万一没被跳转也是立刻失败。
@@ -101,13 +110,14 @@ browser.proxy.onRequest.addListener(async (d) => {
   await ready;
   let id = await instOfTab(d.tabId);
   if (!id) id = idOfCs(d.cookieStoreId) || (isContainer(d.cookieStoreId) && csInst.get(d.cookieStoreId)) || null;
-  if (id) { if (d.tabId >= 0) lastInst = id; return routeFor(id); }
+  if (id) { if (d.tabId >= 0) lastInst = id; trNote(d, `走实例 #${insts[id]?.no ?? '?'} 的线路`); return routeFor(id); }
   // 不属于任何网页标签：扩展自己、app 内部的请求（来源是 moz-extension 或没有来源）直连；其余认不出实例的一律拒绝
   const from = d.documentUrl || d.originUrl || '';
-  if (d.tabId < 0 && (!from || from.startsWith('moz-extension:') || from.startsWith('resource:') || from.startsWith('chrome:'))) return { type: 'direct' };
+  if (d.tabId < 0 && (!from || from.startsWith('moz-extension:') || from.startsWith('resource:') || from.startsWith('chrome:'))) { trNote(d, '直连'); return { type: 'direct' }; }
   // 记下来（设置 → 人机验证诊断里能看到，也进诊断信息）：网页的后台线程发的请求如果认不出实例，验证组件就会卡死，这是要排查的可疑点之一
   const pass = off.has('block') && insts[lastInst] ? lastInst : '';
   noteBlocked(d, from, pass);
+  trNote(d, pass ? '诊断放行' : '已拒绝');
   return pass ? routeFor(pass) : BLOCK; // 诊断时放行也只走实例的线路，绝不直连
 }, { urls: ['<all_urls>'] });
 function noteBlocked(d, from, pass) {

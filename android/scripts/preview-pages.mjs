@@ -855,7 +855,7 @@ if (desk && want('desk')) {
     check('电脑向导：正在打开时按 Esc = 在后台继续（弹框收起）', await ip.locator('.scrim').count() === 0, {});
     deskProgHold = 0;
     // 小窗口（Ctrl+M、合并窗口“＋ → 新建实例”）：自己的一页 wizard.html，整个窗口就是向导
-    await ip.setViewportSize({ width: 444, height: 462 });
+    await ip.setViewportSize({ width: 444, height: 404 });
     await ip.goto('about:blank'); await ip.goto(dbase + 'wizard.html'); await ip.waitForTimeout(600);
     const ww = await ip.evaluate(() => { const w = document.querySelector('.wzpage > .wz'), a = w?.querySelector('.acts')?.getBoundingClientRect();
       return { win: document.documentElement.classList.contains('wzwin'), wz: !!w, over: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, full: w ? Math.round(w.getBoundingClientRect().width) === innerWidth : false, foot: a ? Math.round(innerHeight - a.bottom) : -1, focus: document.activeElement?.matches?.('.wz input.field'), mods: performance.getEntriesByType('resource').filter((r) => /\.js$/.test(r.name)).map((r) => r.name.split('/').pop()) }; });
