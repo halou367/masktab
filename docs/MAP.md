@@ -45,6 +45,7 @@
 | mihomo 配置和进程 | `internal/proxy` |
 | 出口探测、IP 成色、伪装度 | `internal/probe`、`internal/core/ipq.go`、`checks.go` |
 | 密码库 | `internal/vault` |
+| 信箱（卡密、取件、后台收信、未读，decisions MB-1） | 纯逻辑 `internal/mailbox`；接口和轮询 `internal/core/mail.go`；卡密存在 `internal/vault` 的 `Mail` |
 | 扩展库 | `internal/extlib`（入库、原地换文件）；添加 / 重载在 `internal/core/api.go` 的 `AddExtension`、`ReloadExtension`；开着的实例里把扩展关一下再开在 `companion/ext/background.js` 的 `hotReload`；实测 `scripts/ext-reload-e2e.mjs` |
 | 地址库的组：列表网址一条、独立 IP 一组（决策 N-8） | 数据和接口 `internal/core/lists.go`（`ImportExits`、`resolveList`、`absorbLocked`、`SetListURL`、`SetLoose`）；列表内容的解析 `internal/exits/list.go`（`ParseList`：txt / CSV / JSON）；页面 `companion/ext/pages.js` 的 `exitsView`（子页 `exits/g-<id>`、`exits/loose`）；测试 `lists_test.go`、页面检查 `groups` 段 |
 | 纯净度 / CF 风险（决策 N-7） | `internal/core/ippure.go`、`ipq.go`（`POST /api/ipq/cf`）；内容脚本 `companion/ext/ippure.js`（两端共用）；说法和分档 `common.js` 的 `pureInfo`、`cfRisk` |
@@ -67,6 +68,7 @@
 | 新标签页 | `ntp.js` |
 | 头像菜单（切换实例） | `menu.js` |
 | 录入登录、自动填写、站点图标 | `autofill.js`、`vaultmsg.js`、`sites.js` |
+| 信箱页、实例详情里的“信箱”一栏、卡密识别（MB-1） | `mail.js`；电脑的新邮件通知在 `background.js` 的 `mailNotify`（该弹哪些在 `common.js` 的 `mailNotes`） |
 | 外壳（只管路由和把页面放进去，**不写功能**） | 电脑：`app.js`（设置页）、`popup.js`（工具栏弹窗）、`newtab.js`、`background.js`（工具栏图标、Cookie 上报）；手机：`android/ext/main.js`、`newtab.js`、`background.js` |
 | 手机上的页面指纹（内核做不了的那部分） | `android/ext/fp.js` |
 | 新建向导（UI-25、UI-31：点“创建”后原地显示进度） | `wizard.js`（两端共用，进度看 `GET /api/instances/{id}/progress`，`internal/core/newinst.go`）；电脑的小窗口 `wizard.html` + `wizwin.js` + `theme0.js`（`background.js` 的 `wizardWindow`）；手机 `android/ext/main.js` 的 `new` 路由、`Core.kt` 的 `openWhenReady` / `pageAfterOpen` |
