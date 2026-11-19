@@ -1,0 +1,265 @@
+package core
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/halou367/masktab/internal/model"
+)
+
+// 编出来的卡密（不是真的账号）。
+const testRT = "M.C5_FAKE-REFRESH-TOKEN-ONLY-FOR-TESTS-abcdefghijklmnopqrstuvwxyz"
+
+func mailApp(t *testing.T) (*App, func(method, path, body string) (int, string)) {
+	t.Helper()
+	a := &App{Dir: t.TempDir(), rt: map[string]*Runtime{}}
+	_ = os.MkdirAll(a.p("config"), 0o700)
+	_ = os.MkdirAll(a.p("state"), 0o700)
+	a.openVault()
+	if a.vaultErr != "" {
+		t.Skip("这台机器上密码库打不开：" + a.vaultErr)
+	}
+	a.Instances = []*model.Instance{{ID: "i1", No: 1, Kind: "persistent", Proxy: model.InstProxy{State: "on"}}, {ID: "i2", No: 2, Kind: "persistent", Proxy: model.InstProxy{State: "off"}}}
+	mux := http.NewServeMux()
+	a.accountRoutes(mux)
+	a.mailRoutes(mux)
+	return a, func(method, path, body string) (int, string) {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w.Code, w.Body.String()
+	}
+}
+
+// 设卡密 → 读出来是脱敏的；只改取件地址不动卡密；清除；认不出的卡密报错里不带卡密。
+func TestMailRoutesMask(t *testing.T) {
+	a, do := mailApp(t)
+	card := "a@outlook.com----pass-word-1----00000000-1111-2222-3333-444444444444----" + testRT
+	b, _ := json.Marshal(map[string]string{"card": card, "base": "mail.example.test"})
+	code, out := do("PUT", "/api/mail/i1", string(b))
+	if code != 200 || strings.Contains(out, testRT) || strings.Contains(out, "pass-word-1") || strings.Contains(out, "444444444444") {
+		t.Fatalf("设卡密：%d %s", code, out)
+	}
+	if !strings.Contains(out, `"email":"a@outlook.com"`) || !strings.Contains(out, `"base":"https://mail.example.test/"`) || !strings.Contains(out, `"kind":"outlook"`) {
+		t.Fatalf("设卡密的回答：%s", out)
+	}
+	if m, ok := a.vault.MailOf("i1"); !ok || m.Refresh != testRT || m.Password != "pass-word-1" {
+		t.Fatalf("卡密要原样进密码库：%+v", m)
+	}
+	// 只改取件地址
+	code, out = do("PUT", "/api/mail/i1", `{"base":""}`)
+	if m, _ := a.vault.MailOf("i1"); code != 200 || m.Refresh != testRT || m.Base != "" || !strings.Contains(out, "email.nloop.cc") {
+		t.Fatalf("只改取件地址：%d %s %+v", code, out, m)
+	}
+	// /api/state 里每个实例只带摘要（State 用的就是 mailSums）
+	st, _ := json.Marshal(a.mailSums())
+	if strings.Contains(string(st), testRT) || strings.Contains(string(st), "pass-word-1") || !strings.Contains(string(st), `"i1":{"kind":"outlook","email":"a@outlook.com","unread":0`) {
+		t.Fatalf("状态里的信箱摘要：%s", st)
+	}
+	// 认不出的卡密：报错里不回显
+	code, out = do("PUT", "/api/mail/i2", `{"card":"x@outlook.com----SECRET-ONLY-TWO"}`)
+	if code == 200 || strings.Contains(out, "SECRET-ONLY-TWO") {
+		t.Fatalf("认不出的卡密：%d %s", code, out)
+	}
+	// 实例没开、开着代理：立即收信不走直连，直接说原因
+	code, out = do("POST", "/api/mail/i1/fetch", "")
+	if code == 200 || !strings.Contains(out, "实例没开") {
+		t.Fatalf("没开的代理实例收信：%d %s", code, out)
+	}
+	code, _ = do("DELETE", "/api/mail/i1", "")
+	if _, ok := a.vault.MailOf("i1"); code != 200 || ok {
+		t.Fatal("清除卡密")
+	}
+	if code, _ = do("GET", "/api/mail/nope", ""); code == 200 {
+		t.Fatal("不存在的实例")
+	}
+}
+
+// 导入邮箱：卡密行每行建一个实例、卡密进密码库；已有同一个邮箱的实例就把卡密补给它；普通邮箱照老规则；卡密不会被当成密码。
+func TestImportCards(t *testing.T) {
+	a, do := mailApp(t)
+	a.Instances = append(a.Instances, &model.Instance{ID: "i3", No: 3, Kind: "persistent", Name: "old@hotmail.com"})
+	text := strings.Join([]string{
+		"new1@outlook.com----pw-new1----00000000-1111-2222-3333-444444444444----" + testRT,
+		"x@icloud.com",
+		"old@hotmail.com----pw-old----cid-old----" + testRT + "-old",
+		"plain@gmail.com----普通密码",
+	}, "\n")
+	b, _ := json.Marshal(map[string]any{"text": text, "password": "Def-123"})
+	code, out := do("POST", "/api/import/emails", string(b))
+	if code != 200 || !strings.Contains(out, `"created":3`) || !strings.Contains(out, `"cards":3`) || !strings.Contains(out, `"attached":1`) || strings.Contains(out, testRT) {
+		t.Fatalf("导入：%d %s", code, out)
+	}
+	byName := map[string]string{}
+	for _, in := range a.Instances {
+		byName[in.Name] = in.ID
+	}
+	n1, ic, pl := byName["new1@outlook.com"], byName["x@icloud.com"], byName["plain@gmail.com"]
+	if n1 == "" || ic == "" || pl == "" || len(a.Instances) != 6 {
+		t.Fatalf("实例：%v", byName)
+	}
+	if m, ok := a.vault.MailOf(n1); !ok || m.Refresh != testRT || m.Kind != "outlook" {
+		t.Fatalf("new1 的卡密：%+v", m)
+	}
+	if m, ok := a.vault.MailOf(ic); !ok || m.Kind != "icloud" {
+		t.Fatalf("iCloud：%+v", m)
+	}
+	if m, ok := a.vault.MailOf("i3"); !ok || m.Password != "pw-old" {
+		t.Fatalf("已有的实例补上卡密：%+v", m)
+	}
+	if _, ok := a.vault.MailOf(pl); ok {
+		t.Fatal("普通邮箱没有卡密")
+	}
+	// 登录时自动填的账号：卡密实例记 邮箱 + 邮箱自己的密码；iCloud 没有密码，用这批的默认密码
+	for id, want := range map[string]string{n1: "pw-new1", ic: "Def-123", pl: "普通密码"} {
+		items := a.vault.List(id)
+		if len(items) != 1 || items[0].Site != "*" || items[0].Pass != want {
+			t.Fatalf("%s 的账号：%+v", id, items)
+		}
+	}
+	for _, it := range a.vault.List("") {
+		if strings.Contains(it.Pass, testRT) || strings.Contains(it.Pass, "----") {
+			t.Fatalf("卡密被当成了密码：%+v", it)
+		}
+	}
+	// 导入的实例以邮箱命名：自动填写的“本实例邮箱”就是它（优先于默认邮箱，decisions M-6）
+	a.mu.Lock()
+	e := emailOf(a.instLocked(n1))
+	a.mu.Unlock()
+	if e != "new1@outlook.com" {
+		t.Fatalf("emailOf = %q", e)
+	}
+}
+
+// 假的 socks5（当这个实例的探测通道）：记下经它连了几次。
+func fakeSocks(t *testing.T) (port int, hits *atomic.Int32) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	hits = &atomic.Int32{}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 262)
+				if _, err := io.ReadFull(c, buf[:3]); err != nil {
+					return
+				}
+				_, _ = c.Write([]byte{5, 0})
+				if _, err := io.ReadFull(c, buf[:5]); err != nil {
+					return
+				}
+				host := make([]byte, buf[4])
+				_, _ = io.ReadFull(c, host)
+				pb := make([]byte, 2)
+				_, _ = io.ReadFull(c, pb)
+				up, err := net.Dial("tcp", net.JoinHostPort(string(host), strconv.Itoa(int(pb[0])<<8|int(pb[1]))))
+				if err != nil {
+					_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+					return
+				}
+				defer up.Close()
+				hits.Add(1)
+				_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+				go func() { _, _ = io.Copy(up, c) }()
+				_, _ = io.Copy(c, up)
+			}(c)
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port, hits
+}
+
+// 收信：开了代理的实例经它自己的通道（假 socks5）去取件；第一次收信老信不算未读；再收按 id 去重，新信进未读；看过就不算未读。
+func TestMailFetchViaInstance(t *testing.T) {
+	a, do := mailApp(t)
+	var mu sync.Mutex
+	mails := []map[string]any{
+		{"id": "old1", "subject": "很早的信", "from": "a@x.test", "receivedAt": "2020-01-01T00:00:00Z", "body": "早"},
+		{"id": "new1", "subject": "验证码", "from": "no-reply@x.test", "receivedAt": time.Now().UTC().Format(time.RFC3339), "htmlBody": "<b>654321</b>", "verificationCode": "654321"},
+	}
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		mu.Lock()
+		defer mu.Unlock()
+		asked = append(asked, r.URL.Path+" "+fmt.Sprint(b["mailbox"]))
+		out := []map[string]any{}
+		if b["mailbox"] == "INBOX" {
+			out = mails
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mails": out})
+	}))
+	defer srv.Close()
+	card := "a@outlook.com----pw----00000000-1111-2222-3333-444444444444----" + testRT
+	b, _ := json.Marshal(map[string]string{"card": card, "base": srv.URL})
+	if code, out := do("PUT", "/api/mail/i1", string(b)); code != 200 {
+		t.Fatal(out)
+	}
+	// 实例开着、线路通：走它的探测通道
+	port, hits := fakeSocks(t)
+	a.rt["i1"] = &Runtime{Running: true, active: true, probePort: port}
+	code, out := do("POST", "/api/mail/i1/fetch", "")
+	if code != 200 || hits.Load() == 0 {
+		t.Fatalf("收信：%d %s；经通道 %d 次", code, out, hits.Load())
+	}
+	if !strings.Contains(out, `"added":2`) || !strings.Contains(out, `"unread":1`) || !strings.Contains(out, `"via":"这个实例自己的线路"`) {
+		t.Fatalf("第一次收信：%s", out)
+	}
+	if strings.Join(asked, ",") != "/api/outlook/query INBOX,/api/outlook/query Junk" {
+		t.Fatalf("收件箱和垃圾箱各问一次：%v", asked)
+	}
+	s := a.mailSums()["i1"]
+	if s.Unread != 1 || len(s.Newest) != 1 || s.Newest[0].Code != "654321" {
+		t.Fatalf("摘要：%+v", s)
+	}
+	// 再收一次：一样的信不算新的；来了一封新的
+	mu.Lock()
+	mails = append([]map[string]any{{"id": "new2", "subject": "第二封", "from": "b@x.test", "receivedAt": time.Now().UTC().Format(time.RFC3339)}}, mails...)
+	mu.Unlock()
+	_, out = do("POST", "/api/mail/i1/fetch", "")
+	if !strings.Contains(out, `"added":1`) || !strings.Contains(out, `"unread":2`) {
+		t.Fatalf("第二次收信：%s", out)
+	}
+	// 看一封：拿到正文，未读少一封
+	code, out = do("GET", "/api/mail/i1/msg?key=INBOX:new1", "")
+	if code != 200 || !strings.Contains(out, "654321") || a.mailSums()["i1"].Unread != 1 {
+		t.Fatalf("看信：%d %s", code, out)
+	}
+	do("POST", "/api/mail/i1/read", `{"all":true}`)
+	if a.mailSums()["i1"].Unread != 0 {
+		t.Fatal("全部已读")
+	}
+	// 重启以后（信的内容不落盘，见过哪些落盘）：同样的信不再算新的
+	b2 := &App{Dir: a.Dir, vault: a.vault, rt: a.rt, Instances: a.Instances}
+	if n, err := b2.mailFetch("i1", true); err != nil || n != 0 {
+		t.Fatalf("重启后再收：%d %v", n, err)
+	}
+	raw, _ := os.ReadFile(a.p("state", "mail.json"))
+	if strings.Contains(string(raw), "654321") || strings.Contains(string(raw), testRT) || strings.Contains(string(raw), "验证码") {
+		t.Fatalf("落盘的只能是 id：%s", raw)
+	}
+	// 断网时不收（不回落直连）
+	a.rt["i1"].Error = "线路不通"
+	if code, out = do("POST", "/api/mail/i1/fetch", ""); code == 200 || !strings.Contains(out, "断网") {
+		t.Fatalf("断网时：%d %s", code, out)
+	}
+}

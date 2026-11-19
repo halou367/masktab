@@ -100,6 +100,7 @@ func (a *App) Serve() error {
 		mux.ServeHTTP(w, r)
 	})
 	go func() { log.Println(http.Serve(ln, h)) }()
+	go a.mailLoop() // 信箱：后台收信（decisions MB-1）
 	return nil
 }
 
@@ -127,6 +128,7 @@ type instView struct {
 	Acct   *acctView `json:"acct"`
 	Checks *checkSum `json:"checks,omitempty"` // 伪装一致性检查（checks.go）
 	Tune   *tuneBest `json:"tune,omitempty"`   // 入口优选：它这个出口国家里当前时段最好的入口和理由（decisions N-6）
+	Mail   *mailSum  `json:"mail,omitempty"`   // 信箱（设了卡密才有）：未读数、最新几封未读（decisions MB-1）
 }
 
 // fpInfo 是界面上"指纹信息"展示的内容：按当前设置，下次启动时这个实例会呈现的样子。
@@ -225,6 +227,7 @@ type extView struct {
 
 // State 汇总下发给伴随扩展的全部状态。
 func (a *App) State(me string) map[string]any {
+	mails := a.mailSums() // 在拿 a.mu 之前取（mail.go 的锁次序）
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	insts := []instView{}
@@ -232,7 +235,7 @@ func (a *App) State(me string) map[string]any {
 	accts := a.acctViewsLocked()
 	for _, in := range a.Instances {
 		r := *a.rtLocked(in.ID)
-		v := instView{Instance: in, RT: &r, Acct: accts[in.ID]}
+		v := instView{Instance: in, RT: &r, Acct: accts[in.ID], Mail: mails[in.ID]}
 		if v.Acct == nil {
 			v.Acct = &acctView{Sites: []string{}}
 		}
@@ -554,6 +557,7 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 func (a *App) routes(mux *http.ServeMux) {
 	me := func(r *http.Request) string { return r.Header.Get("X-MaskTab-Inst") }
 	a.accountRoutes(mux)
+	a.mailRoutes(mux)
 	a.usageRoutes(mux)
 	a.hostRoutes(mux)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { reply(w, a.State(me(r)), nil) })

@@ -194,3 +194,38 @@ func TestDefaultEmail(t *testing.T) {
 		t.Fatal("空 = 清除")
 	}
 }
+
+// 信箱卡密（decisions MB-1）：加密落盘、读回、随实例删除。
+func TestMailCard(t *testing.T) {
+	dir := t.TempDir()
+	v, _ := Open(dir)
+	tok := "M.C5_FAKE-REFRESH-TOKEN-FOR-TESTS-ONLY-0123456789"
+	if err := v.SetMail("a", Mail{Kind: "outlook", Email: "a@outlook.com", Password: "pw", ClientID: "cid-fake", Refresh: tok, Base: "https://mail.example.test/"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = v.SetMail("b", Mail{Kind: "icloud", Email: "b@icloud.com"})
+	b, _ := os.ReadFile(filepath.Join(dir, "vault.bin"))
+	if containsStr(b, tok) || containsStr(b, "a@outlook.com") {
+		t.Fatal("卡密落盘要加密")
+	}
+	v2, _ := Open(dir)
+	m, ok := v2.MailOf("a")
+	if !ok || m.Refresh != tok || m.Base != "https://mail.example.test/" || m.At == 0 {
+		t.Fatalf("读回 %+v %v", m, ok)
+	}
+	if got := strings.Join(v2.MailInsts(), ","); got != "a,b" {
+		t.Fatalf("MailInsts = %s", got)
+	}
+	v2.DeleteInst("a")
+	if _, ok := v2.MailOf("a"); ok {
+		t.Fatal("删实例要连信箱一起删")
+	}
+	_ = v2.DelMail("b")
+	v3, _ := Open(dir)
+	if len(v3.MailInsts()) != 0 {
+		t.Fatal("清除后落盘也没有了")
+	}
+	if err := v3.SetMail("", Mail{Email: "x@y.z"}); err == nil {
+		t.Fatal("实例为空要报错")
+	}
+}

@@ -52,6 +52,19 @@ type data struct {
 	Items   []*Item `json:"items"`
 	Rules   []*Rule `json:"rules,omitempty"` // 录入规则，全部实例共用
 	Icons   []*Icon `json:"icons,omitempty"` // 记住了账号的站点的网页图标（界面上画在实例卡片下面）
+	// 实例的信箱（decisions MB-1）：实例 id → 卡密 + 取件地址。卡密只在这个加密的库里，不进明文配置、不进日志。
+	Mail map[string]*Mail `json:"mail,omitempty"`
+}
+
+// Mail 是一个实例的信箱设置：卡密（Outlook 四段 / iCloud 只有邮箱）+ 取件地址。
+type Mail struct {
+	Kind     string `json:"kind"` // outlook | icloud
+	Email    string `json:"email"`
+	Password string `json:"password,omitempty"`
+	ClientID string `json:"clientId,omitempty"`
+	Refresh  string `json:"refresh,omitempty"`
+	Base     string `json:"base,omitempty"` // 取件地址；空 = 默认
+	At       int64  `json:"at"`
 }
 
 // Icon 是一个站点的网页图标（favicon）。由网页里的内容脚本在登录页取下来交给核心服务，界面不为它发任何请求。
@@ -224,10 +237,62 @@ func (v *Vault) Delete(id string) error {
 	return errors.New("记录不存在")
 }
 
-// DeleteInst 删除一个实例的全部记录（删除实例时调用）。
+// SetMail 存一个实例的信箱设置（整条覆盖）。
+func (v *Vault) SetMail(inst string, m Mail) error {
+	if inst == "" || m.Email == "" {
+		return errors.New("实例或邮箱为空")
+	}
+	m.At = time.Now().UnixMilli()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.d.Mail == nil {
+		v.d.Mail = map[string]*Mail{}
+	}
+	v.d.Mail[inst] = &m
+	return v.saveLocked()
+}
+
+// MailOf 取一个实例的信箱设置（副本）；没设过返回 false。
+func (v *Vault) MailOf(inst string) (Mail, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if m := v.d.Mail[inst]; m != nil {
+		return *m, true
+	}
+	return Mail{}, false
+}
+
+// DelMail 清除一个实例的信箱设置。
+func (v *Vault) DelMail(inst string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.d.Mail[inst] == nil {
+		return nil
+	}
+	delete(v.d.Mail, inst)
+	return v.saveLocked()
+}
+
+// MailInsts 列出设了信箱的实例 id。
+func (v *Vault) MailInsts() []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]string, 0, len(v.d.Mail))
+	for id := range v.d.Mail {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// DeleteInst 删除一个实例的全部记录（删除实例时调用），连同它的信箱设置。
 func (v *Vault) DeleteInst(inst string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if v.d.Mail[inst] != nil {
+		delete(v.d.Mail, inst)
+		_ = v.saveLocked()
+	}
 	out := v.d.Items[:0]
 	for _, x := range v.d.Items {
 		if x.Inst != inst {

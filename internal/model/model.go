@@ -267,6 +267,8 @@ type Settings struct {
 	// 人机验证诊断（只有手机用，decisions A-9）：这里列出的伪装项暂时关掉，用来定位“验证过不去”是哪一项引起的。
 	// canvas | audio | hw | lang | tz | cfframe | block | ua | tp | fpp | sw；核心服务只存不解释，由 app 和内置扩展执行。
 	FPOff []string `json:"fpOff,omitempty"`
+	// 信箱（decisions MB-1）：后台收信的间隔（分钟）；0 = 默认 2 分钟
+	MailPollMin int `json:"mailPollMin,omitempty"`
 }
 
 // Bookmark 是新标签页上的一个书签。

@@ -123,6 +123,11 @@ type App struct {
 	lastExit  map[string]lastExit // 实例 id → 上次探到的出口（落盘在 state/lastexit.json，手机启动时先用它，decisions A-13）
 	tune      tuneState           // 入口优选：每个入口按小时的表现、当天用量（tune.go，落盘在 state/tune.json，decisions N-6）
 	tuneOnce  sync.Once
+	// 信箱（mail.go，decisions MB-1）：实例 id → 收信状态。锁的次序：a.mu 在外、mailMu 在里
+	mailMu   sync.Mutex
+	mail     map[string]*mailBox
+	mailWake chan struct{}
+	mailOnce sync.Once
 
 	cfgMu     sync.Mutex
 	cfgGen    atomic.Int64 // 每次 mihomo 重载配置加一（重载会重置全部策略组，进行中的测速据此重试）

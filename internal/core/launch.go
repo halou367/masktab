@@ -688,8 +688,9 @@ func (a *App) Delete(id string) error {
 	}
 	_ = os.RemoveAll(a.p("runtime", id))
 	if a.vault != nil {
-		a.vault.DeleteInst(id) // 实例的账号随实例一起删
+		a.vault.DeleteInst(id) // 实例的账号（连同信箱的卡密）随实例一起删
 	}
+	a.mailForget(id)
 	a.mu.Lock()
 	delete(a.cookies, id)
 	_ = writeJSON(a.p("state", "cookies.json"), a.cookies)

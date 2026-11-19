@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/halou367/masktab/internal/mailbox"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/vault"
 )
@@ -324,7 +325,10 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 			reply(w, nil, err)
 			return
 		}
-		pairs, bad := vault.ParseEmails(b.Text)
+		// 卡密行（email----password----client_id----refresh_token / 单独的 iCloud 邮箱）先挑出来，每行建一个带信箱的实例（decisions MB-1）；
+		// 其余的照老规则。卡密行不能交给 ParseEmails：它会把后三段当成“密码”存起来。
+		cards, rest := mailbox.SplitCards(b.Text)
+		pairs, bad := vault.ParseEmails(rest)
 		def := b.Password
 		if def == "" {
 			def = a.vault.Default()
@@ -366,7 +370,8 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 				log.Printf("导入邮箱 %s：%v", n.email, err)
 			}
 		}
-		reply(w, map[string]any{"created": len(news), "skipped": skipped, "bad": bad, "noPass": noPass}, nil)
+		cn, ca := a.importCards(cards, def)
+		reply(w, map[string]any{"created": len(news) + cn, "skipped": skipped, "bad": bad, "noPass": noPass, "cards": cn + ca, "attached": ca}, nil)
 	})
 }
 
