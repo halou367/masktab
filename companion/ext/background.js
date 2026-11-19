@@ -116,7 +116,7 @@ async function mailNotify(st) {
   for (const n of notes.slice(0, 3)) {
     chrome.notifications.create(`mail|${me.id}|${n.key}`, { type: 'basic', iconUrl: chrome.runtime.getURL('assets/icon128.png'), title: n.title, message: n.message, priority: 1 });
   }
-  globalThis.lastMailNotes = notes; // 测试从调试端口看“弹了什么”
+  if (notes.length) globalThis.lastMailNotes = notes; // 测试从调试端口看“最近一次弹了什么”（没弹的那几轮不盖掉它：有代理内核时状态一秒变好几次）
 }
 chrome.notifications?.onClicked.addListener(async (nid) => {
   if (!nid.startsWith('mail|')) return;
