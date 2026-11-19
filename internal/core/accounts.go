@@ -145,7 +145,7 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		}
 		reply(w, map[string]any{"items": a.vault.List(r.URL.Query().Get("inst")), "hasDefault": a.vault.Default() != ""}, nil)
 	})
-	// 填充用：本实例能填进这个站点的记录 + 默认密码 + 本实例的邮箱（导入的实例）。
+	// 填充用：本实例能填进这个站点的记录 + 默认密码 + 本实例“自己的邮箱”候选。只给本实例的东西，别的实例的账号一律不给（decisions M-7）。
 	mux.HandleFunc("GET /api/vault/match", func(w http.ResponseWriter, r *http.Request) {
 		if !vt(w) {
 			return
@@ -157,27 +157,32 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		if in != nil {
 			no = in.No
 		}
-		nos := map[string]int{}
-		for _, x := range a.Instances {
-			nos[x.ID] = x.No
-		}
 		a.mu.Unlock()
 		type m struct {
 			vault.Item
 			No   int    `json:"no"`
-			Mine bool   `json:"mine"`
+			Mine bool   `json:"mine"`           // 总是 true（以前会带别的实例的记录，界面靠它区分；留着这个字段给老页面）
 			Near string `json:"near,omitempty"` // 不是这个站点、而是同一网站别的子域名上记的：这里是那个主机名。只作候选，不自动填
 		}
 		site := r.URL.Query().Get("site")
 		items := []m{}
-		for _, it := range a.vault.Match(id, site) {
-			items = append(items, m{it, nos[it.Inst], it.Inst == id, ""})
+		if in != nil {
+			for _, it := range a.vault.Match(id, site) {
+				items = append(items, m{it, no, true, ""})
+			}
+			for _, it := range a.vault.Near(id, site) {
+				items = append(items, m{it, no, true, vault.Host(it.Site)})
+			}
 		}
-		for _, it := range a.vault.Near(id, site) {
-			items = append(items, m{it, nos[it.Inst], true, vault.Host(it.Site)})
+		mail := ""
+		if mb, ok := a.vault.MailOf(id); ok && in != nil {
+			mail = mb.Email
 		}
-		// email：本实例自己的邮箱（导入的实例以邮箱命名）；defEmail：设置里的默认邮箱。注册 / 登录页都用前者优先（decisions M-6）
-		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "defEmail": a.vault.DefaultEmail(), "no": no, "rule": a.vault.RuleOf(site), "needIcon": !a.vault.HasIcon(site)}, nil)
+		cands := ownEmails(mail, a.vault.Match(id, site), email, a.vault.DefaultEmail())
+		// email：本实例自己的邮箱（导入的实例以邮箱命名）；defEmail：设置里的默认邮箱；mailEmail：实例信箱的邮箱；
+		// cands：按优先级排好、去过重的“本实例自己的邮箱”（信箱 > 本站记住的账号 > 实例自己的邮箱 > 默认邮箱，decisions M-7）
+		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "defEmail": a.vault.DefaultEmail(), "mailEmail": mail,
+			"cands": cands, "no": no, "rule": a.vault.RuleOf(site), "needIcon": !a.vault.HasIcon(site)}, nil)
 	})
 	// 站点的网页图标：内容脚本在登录页取下来交上来（只收已经记住账号的站点的）；界面一次取全部。
 	mux.HandleFunc("PUT /api/vault/icon", func(w http.ResponseWriter, r *http.Request) {
@@ -391,6 +396,42 @@ func reorder(list []*model.Instance, ids []string) []*model.Instance {
 		}
 		return pi < pj
 	})
+	return out
+}
+
+// emailCand 是“本实例自己的邮箱”的一个候选。Src：mail 实例信箱 | site 本实例在这个站点记住的账号 | inst 实例自己的邮箱（导入时以邮箱命名、
+// 或导入的“任意站点”账号）| default 设置里的默认邮箱。
+type emailCand struct {
+	User string `json:"user"`
+	Src  string `json:"src"`
+}
+
+// ownEmails 按优先级排出本实例自己的邮箱（decisions M-7）：信箱 > 本站记住的账号（最近改的在前）> 实例自己的邮箱 > 默认邮箱。
+// 不分大小写去重；本站记住的账号只收像邮箱的用户名（单邮箱框只能填邮箱）。items 必须只有本实例的记录（vault.Match 已保证）。
+func ownEmails(mail string, items []vault.Item, inst, def string) []emailCand {
+	out := []emailCand{}
+	seen := map[string]bool{}
+	add := func(u, src string) {
+		u = strings.TrimSpace(u)
+		if u == "" || !vault.LooksEmail(u) || seen[strings.ToLower(u)] {
+			return
+		}
+		seen[strings.ToLower(u)] = true
+		out = append(out, emailCand{u, src})
+	}
+	add(mail, "mail")
+	for _, it := range items {
+		if it.Site != "*" {
+			add(it.User, "site")
+		}
+	}
+	add(inst, "inst")
+	for _, it := range items {
+		if it.Site == "*" {
+			add(it.User, "inst")
+		}
+	}
+	add(def, "default")
 	return out
 }
 

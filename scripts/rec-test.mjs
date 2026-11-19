@@ -73,6 +73,23 @@ const PAGES = {
   'two.test/password': html('<title>Sign in</title><form action="/in" onsubmit="return false"><input type="password" name="pw"><button>Sign in</button></form>'),
   // 五、登录用的弹出窗口：登上就关
   'pop.test/login': html('<title>Login</title><form onsubmit="return false"><input name="user"><input type="password" name="pass"><button>Log in</button></form>'),
+  // 十、登录弹窗里只有一个邮箱框（照 arena.ai 的“Log In or Create Account”）：打开时焦点在关闭按钮上、焦点困在弹窗里、
+  //     点弹窗外面就关、按 Esc 就关、页面不停重画（decisions M-7）
+  'modal.test/': html(`<title>Arena</title><h1>Leaderboard</h1><button id="open">Sign up for free</button><div id="root"></div><span id="tick"></span>
+    <script>
+      const root = document.getElementById('root'); let dlg = null;
+      const close = () => { root.innerHTML = ''; dlg = null; };
+      document.getElementById('open').onclick = () => {
+        root.innerHTML = '<div role="dialog" aria-modal="true" id="dlg"><button id="x" aria-label="Close">×</button><h2>Log In or Create Account</h2><button>Continue with Google</button><p>OR</p>'
+          + '<input type="email" name="email" autocomplete="email" placeholder="Your email"><button id="go">Continue with email</button><label><input type="checkbox" name="news"> Yes, keep me posted on what’s new</label></div>';
+        dlg = document.getElementById('dlg'); document.getElementById('x').focus();
+        document.getElementById('go').onclick = () => { window.__submitted = true; };
+      };
+      document.addEventListener('focusout', (e) => { if (dlg && !dlg.contains(e.relatedTarget) && e.relatedTarget) setTimeout(() => dlg && dlg.querySelector('#x').focus(), 0); });
+      document.addEventListener('pointerdown', (e) => { if (dlg && !dlg.contains(e.target)) close(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && dlg) close(); });
+      setInterval(() => { document.getElementById('tick').textContent = Date.now(); if (dlg) { const p = dlg.querySelector('p'); p.replaceWith(Object.assign(document.createElement('p'), { textContent: 'OR' })); } }, 150);
+    </script>`),
 };
 const STUB = `
   window.__mtL = [];
@@ -294,6 +311,73 @@ console.log(`[${kind}] 九 默认邮箱 + 默认密码：注册页、登录页�
   got = await v();
   check('不是登录 / 注册页（只有订阅邮件框）：不填默认邮箱', got.email === '', JSON.stringify(got));
   await c.ctx.close();
+}
+
+console.log(`[${kind}] 十 登录弹窗里只有一个邮箱框：聚焦就填本实例自己的邮箱、下拉只有本实例的候选、下拉不闪（decisions M-7）`);
+{
+  // 默认邮箱沿用第九段设的 reg.me@example.com。O = 别的实例（在这个网站存了账号）；D = 普通实例（自己在这个网站存了账号）；M = 设了信箱的实例。
+  const O = (await api('POST', '/api/instances', {})).id, D = (await api('POST', '/api/instances', {})).id, M = (await api('POST', '/api/instances', {})).id;
+  await api('POST', '/api/vault', { inst: O, site: 'https://modal.test', user: 'other.inst@example.com', pass: 'o-pass' });
+  await api('POST', '/api/vault', { inst: D, site: 'https://modal.test', user: 'd.site@example.com', pass: 'd-pass' });
+  await api('PUT', `/api/mail/${M}`, { card: 'm.box@icloud.com' });
+  const openModal = async (inst) => {
+    const x = await newInst(inst), p = await x.open();
+    await p.goto('https://modal.test/');
+    await sleep(600);
+    await p.click('#open');
+    await sleep(500);
+    return { x, p, v: () => p.inputValue('input[name=email]'), pop: p.locator('masktab-ui .pop'), toast: p.locator('masktab-ui .toast') };
+  };
+  const popText = async (pop) => (await pop.count()) ? pop.innerText() : '';
+  // 普通实例 D
+  let t = await openModal(D);
+  check('弹窗刚打开、用户还没点邮箱框：不填', await t.v() === '', await t.v());
+  await t.p.click('input[name=email]');
+  check('点进只有邮箱框的弹窗：自动填上本实例在这个网站的账号', await until(async () => (await t.v()) === 'd.site@example.com', 3000), await t.v());
+  check('只填不提交', !(await t.p.evaluate(() => window.__submitted)), '');
+  await until(async () => (await t.pop.count()) > 0, 2000);
+  let txt = await popText(t.pop);
+  check('下拉只有本实例的候选（本站账号、默认邮箱），没有别的实例的邮箱', /d\.site@example\.com/.test(txt) && /reg\.me@example\.com/.test(txt) && !/other\.inst/.test(txt), txt);
+  await sleep(2200);
+  check('下拉在页面不停重画、焦点困在弹窗里时保持显示超过 2 秒', (await t.pop.count()) === 1 && await t.pop.isVisible(), String(await t.pop.count()));
+  await shot(t.p, '10-modal-dropdown');
+  await t.pop.locator('button', { hasText: 'reg.me@example.com' }).click();
+  check('在下拉里点默认邮箱：换成它，弹窗还开着（点下拉不算点到弹窗外面）', (await t.v()) === 'reg.me@example.com' && (await t.p.locator('#dlg').count()) === 1, await t.v());
+  await t.p.click('input[name=email]');
+  await until(async () => (await t.pop.count()) > 0, 2000);
+  await t.p.keyboard.press('Escape');
+  await sleep(300);
+  check('按 Esc：下拉收起，弹窗不跟着关', (await t.pop.count()) === 0 && (await t.p.locator('#dlg').count()) === 1, String(await t.pop.count()));
+  await t.p.click('input[name=email]');
+  await until(async () => (await t.pop.count()) > 0, 2000);
+  await t.p.click('h2');
+  await sleep(300);
+  check('点下拉以外的地方：下拉收起', (await t.pop.count()) === 0, String(await t.pop.count()));
+  await t.p.fill('input[name=email]', '');
+  await t.p.locator('input[name=email]').pressSequentially('typed.by.me@example.com');
+  await t.p.evaluate(() => document.querySelector('input[name=email]').blur());
+  await t.p.click('input[name=email]');
+  await sleep(800);
+  check('用户自己输入过的：再点进来也不覆盖', (await t.v()) === 'typed.by.me@example.com', await t.v());
+  await t.x.ctx.close();
+  // 设了信箱的实例 M
+  t = await openModal(M);
+  await t.p.click('input[name=email]');
+  check('设了信箱的实例：填信箱的邮箱（信箱 > 默认邮箱）', await until(async () => (await t.v()) === 'm.box@icloud.com', 3000), await t.v());
+  check('提示说填的是信箱的邮箱、没有提交', /本实例信箱的邮箱（没有提交）/.test(await t.toast.innerText().catch(() => '')), await t.toast.innerText().catch(() => ''));
+  await until(async () => (await t.pop.count()) > 0, 2000);
+  txt = await popText(t.pop);
+  check('信箱实例的下拉：信箱邮箱 + 默认邮箱，没有别的实例的', /m\.box@icloud\.com/.test(txt) && /reg\.me@example\.com/.test(txt) && !/other\.inst|d\.site/.test(txt), txt);
+  await sleep(2200);
+  check('信箱实例：下拉保持显示超过 2 秒', (await t.pop.count()) === 1, String(await t.pop.count()));
+  await shot(t.p, '10-modal-mailbox');
+  await t.toast.locator('button').click();
+  check('点“撤销”清空', (await t.v()) === '', await t.v());
+  await t.p.evaluate(() => document.querySelector('input[name=email]').blur());
+  await t.p.click('input[name=email]');
+  await sleep(800);
+  check('撤销过的框：再点进来不再自动填', (await t.v()) === '', await t.v());
+  await t.x.ctx.close();
 }
 
 console.log(`[${kind}] 八 不是登录页`);

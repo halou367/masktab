@@ -342,23 +342,28 @@ func (v *Vault) List(inst string) []Item {
 	return out
 }
 
-// Match 找能填进 site 的记录：站点完全匹配（F-PWD-5；只差一个 www. 也算），当前实例的排前；"*" 记录（导入的邮箱账号）只给本实例用、排在最后。
+// Match 找本实例能填进 site 的记录：站点完全匹配（F-PWD-5；只差一个 www. 也算），最近改过的排前；"*" 记录（导入的邮箱账号）排在最后。
+// 只返回 inst 自己的记录：别的实例的账号一律不给（2026-11-19 需求方：“下拉栏是所有实例的邮箱，应该只是当前实例的”；
+// 把别的实例的邮箱给到网页里的内容脚本，既是隐私问题，也会让几个实例在同一个网站上被关联起来）。
 func (v *Vault) Match(inst, site string) []Item {
 	site = NormSite(site)
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	var mine, star, other []Item
+	var mine, star []Item
+	if inst == "" {
+		return nil
+	}
 	for _, x := range v.d.Items {
 		switch {
-		case sameSite(x.Site, site) && x.Inst == inst:
-			mine = append(mine, *x)
+		case x.Inst != inst:
 		case sameSite(x.Site, site):
-			other = append(other, *x)
-		case x.Site == "*" && x.Inst == inst:
+			mine = append(mine, *x)
+		case x.Site == "*":
 			star = append(star, *x)
 		}
 	}
-	return append(append(mine, other...), star...)
+	sort.SliceStable(mine, func(i, j int) bool { return mine[i].At > mine[j].At })
+	return append(mine, star...)
 }
 
 // 很多人各用一个子域名的公共后缀：这些后缀下面的子域名互不相干，不算“同一个网站”。

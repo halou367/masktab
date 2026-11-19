@@ -32,8 +32,14 @@ func TestRoundTripAndMatch(t *testing.T) {
 		t.Fatal("默认密码丢失")
 	}
 	m := v2.Match("a", "https://github.com/session")
-	if len(m) != 3 || m[0].User != "alice" || m[0].Pass != "p2" || m[1].User != "bob" || m[2].Site != "*" {
-		t.Fatalf("匹配顺序不对：%+v", m)
+	if len(m) != 2 || m[0].User != "alice" || m[0].Pass != "p2" || m[1].Site != "*" {
+		t.Fatalf("只给本实例的记录、站点精确匹配的在前、“*”在后：%+v", m)
+	}
+	if m := v2.Match("b", "https://github.com"); len(m) != 1 || m[0].User != "bob" {
+		t.Fatalf("别的实例的记录不该给：%+v", m)
+	}
+	if m := v2.Match("", "https://github.com"); len(m) != 0 {
+		t.Fatalf("没有实例时什么都不给：%+v", m)
 	}
 	if m := v2.Match("a", "http://github.com"); len(m) != 1 || m[0].Site != "*" {
 		t.Fatalf("http 与 https 不应互相匹配：%+v", m)

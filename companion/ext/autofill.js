@@ -4,7 +4,12 @@
 // - 默认邮箱 + 默认密码（decisions M-6，设置里各填一次）：本实例在这个站点没有记住的账号时，
 //   注册页把邮箱框（含“确认邮箱”）和全部密码框（新密码 + 确认密码）填好；登录页把账号框和密码框填好；
 //   两步登录 / 邮箱和密码分两页的：第一页只有邮箱框就填邮箱，第二页只剩密码框、页面上显示的账号就是这个邮箱（或看不出来）才填密码。
-//   邮箱优先用本实例自己的（导入邮箱建的实例以邮箱命名），没有才用默认邮箱。只填不提交；填了右下角提示一句，可撤销。
+//   “本实例自己的邮箱”（decisions M-7）：实例信箱的邮箱 > 本实例在这个站点记住的账号 > 实例自己的邮箱（导入时以邮箱命名）> 默认邮箱，
+//   由核心服务排好放在 cands 里。只填不提交；填了右下角提示一句，可撤销。
+// - 只有一个邮箱框、没有密码框的（两步登录 / 注册的第一步、登录弹窗，如 arena.ai 的“Your email”）：聚焦时直接填本实例自己的邮箱；
+//   框里已经有字（用户输入的、或用户撤销过）就不动。看起来明显是登录页的，框一出现就填（M-6 原来的做法）。
+// - 下拉（decisions M-7）：只列本实例的候选——本实例在这个站点存的账号、信箱邮箱、实例邮箱、默认邮箱，去重；绝不列别的实例的。
+//   一直显示到点下拉以外的地方、按 Esc、焦点换到别的框；网页重画、焦点进出（弹窗的焦点陷阱）、我们自己的观察器都不会把它关掉。
 // - 注册：没自动填上的（默认密码没设、用户清掉了），聚焦新密码框时在旁边提示“用默认密码”，点了才填。
 // - 记住：提交表单、点登录按钮或回车时，密码框里有值就交给核心服务保存（同站点同用户名则更新），右下角提示，可撤销。
 // - 两步登录（先邮箱、下一步才是密码，如 arena.ai）：第一步提交时把用户名暂存到后台，第二步只剩密码框时取回来配对保存；
@@ -25,6 +30,10 @@
   const byDefault = new WeakMap(); // 默认密码自动填进去的框 → 填的值（用户改过就不算，见 capture）
   // 本实例在这个站点记住的账号（不含导入的邮箱账号，也不含同一网站别的子域名上记的——那些只作候选）。
   const own = (inf) => (inf?.items || []).filter((x) => x.mine && !x.near && x.site !== '*');
+  // 本实例自己的邮箱（核心服务按 信箱 > 本站账号 > 实例邮箱 > 默认邮箱 排好、去过重）；老核心服务没有 cands 时退回 email / defEmail。
+  const cands = (inf) => (inf?.cands?.length ? inf.cands : [inf?.email && { user: inf.email, src: 'inst' }, inf?.defEmail && { user: inf.defEmail, src: 'default' }]).filter((c) => c?.user);
+  const SRCNAME = { mail: '本实例信箱的邮箱', site: '本实例在这个网站的账号', inst: '本实例的邮箱', default: '默认邮箱' };
+  const typed = new WeakSet(); // 用户亲手输入过（或撤销过我们填的）的框：自动填写不再碰它
   const filled = new WeakSet(); // 每个输入框只自动填一次（两步登录的两页各填各的）
 
   // 查询时也进入开放的影子 DOM（有的登录框是网页组件）。
@@ -69,11 +78,12 @@
   const signupPage = () => { const p = pwFields(); return p.length >= 2 || p.some(isNew) || (/sign.?up|register|join|create/i.test(location.pathname + document.title) && p.length >= 1); };
 
   // 按网页框架的要求“像人一样”写值：React / Vue 等监听 input 事件。
+  let selfFocus = false; // 我们自己让框获得焦点（填值时）：focusin 不当成用户点进来
   function setVal(el, v) {
     if (!el || v == null) return;
     const proto = Object.getPrototypeOf(el);
     const desc = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-    el.focus();
+    if (document.activeElement !== el) { selfFocus = true; try { el.focus(); } finally { selfFocus = false; } }
     desc.set.call(el, v);
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -93,7 +103,7 @@
     :host{all:initial} *{box-sizing:border-box;font:13px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif}
     .pop{position:fixed;z-index:2147483647;background:#fff;color:#1f1f1f;border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,.16),0 12px 32px rgba(0,0,0,.14);padding:6px;min-width:240px;max-width:340px}
     .it{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:7px 8px;border-radius:8px;cursor:pointer;text-align:left;color:inherit}
-    .it:hover{background:#f1f3f4} .no{font-size:11px;font-weight:600;color:#fff;border-radius:6px;padding:1px 6px;flex:none}
+    .it:hover,.it.on{background:#f1f3f4} .no{font-size:11px;font-weight:600;color:#fff;border-radius:6px;padding:1px 6px;flex:none}
     .u{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .s{font-size:11.5px;color:#5f6368}
     .hd{font-size:11.5px;color:#5f6368;padding:2px 8px 4px;display:flex;align-items:center;gap:6px}
     .toast{position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#202124;color:#fff;border-radius:10px;padding:9px 12px;display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
@@ -113,11 +123,28 @@
   </style>`;
   const REC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
   const KEY = '<svg class="key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/></svg>';
-  let pop = null, toastEl = null;
+  let pop = null, popFor = null, popKey = '', toastEl = null;
   let noteShown = ''; // 已经显示过的“已记住 / 已录入”提示（按记录的 id）：同一条不在这一页重复弹
   const mount = () => { if (!host.isConnected) document.documentElement.append(host); };
+  // 在我们界面里的按下 / 点击不往网页里传：网页的弹窗（如 Radix 的 Dialog）会把“点在弹窗外面”当成要关掉它。
+  for (const t of ['pointerdown', 'mousedown', 'touchstart', 'click', 'pointerup', 'mouseup', 'focusin', 'focusout']) root.addEventListener(t, (ev) => ev.stopPropagation());
+  const inUi = (ev) => (ev.composedPath?.() || []).includes(host);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-  function closePop() { pop?.remove(); pop = null; }
+  function closePop() { pop?.remove(); pop = null; popFor = null; popKey = ''; }
+  // 下拉跟着输入框走：网页重画把输入框换成了新的（React 等），挪到现在有焦点的那个框；框没了、藏起来了才关。
+  function keepPop() {
+    if (!pop) return;
+    if (!popFor?.isConnected || !visible(popFor)) {
+      const a = document.activeElement, pwSide = popFor?.type === 'password';
+      const next = a instanceof HTMLInputElement && visible(a) && (a.type === 'password') === pwSide ? a : null;
+      if (!next) return closePop();
+      popFor = next;
+    }
+    place(pop, popFor);
+  }
+  // 关下拉只有这几种：点下拉和输入框以外的地方、按 Esc、焦点换到别的框（见 focusin）。
+  document.addEventListener('pointerdown', (ev) => { if (!pop || inUi(ev)) return; const path = ev.composedPath?.() || []; if (popFor && path.includes(popFor)) return; closePop(); }, true);
+  document.addEventListener('keydown', (ev) => { if (ev.key !== 'Escape' || !pop) return; closePop(); ev.stopImmediatePropagation(); ev.preventDefault(); }, true);
   function place(box, anchor) {
     const r = anchor.getBoundingClientRect();
     box.style.left = Math.max(8, Math.min(innerWidth - 350, r.left)) + 'px';
@@ -130,18 +157,34 @@
     root.append(toastEl);
     const t = toastEl; setTimeout(() => t.remove(), 6000);
   }
-  // 选择账号的下拉：当前实例的排前，每条带 #编号。
-  function chooser(anchor, items) {
+  // 下拉里列什么（decisions M-7）：只有本实例的——本实例在这个站点存的账号（带密码）、同一网站别的子域名上记的、
+  // 再加上“自己的邮箱”候选（信箱、实例邮箱、默认邮箱，只填账号框；记在 cand 上——账号记录自己的 src 是“怎么存进来的”）。按用户名不分大小写去重，账号在前。forPw = 聚焦的是密码框（只列带密码的）。
+  function choices(inf, forPw) {
+    const out = [], seen = new Set();
+    const add = (x) => { const k = (x.user || '').trim().toLowerCase(); if (!k || seen.has(k)) return; seen.add(k); out.push(x); };
+    for (const x of (inf?.items || []).filter((x) => x.mine && x.site !== '*')) add(x);
+    if (!forPw) for (const c of cands(inf)) if (c.src !== 'site') add({ user: c.user, cand: c.src, no: inf.no, mine: true });
+    if (forPw) for (const x of (inf?.items || []).filter((x) => x.mine && x.site === '*' && x.pass)) add(x);
+    return out;
+  }
+  const TAG = { mail: '信箱', inst: '邮箱', default: '默认' };
+  // 选择账号 / 邮箱的下拉。同一个框、同样的内容已经开着就不重画（免得闪），只挪位置。
+  function chooser(anchor, list) {
+    const key = list.map((x) => (x.id || x.cand) + ':' + x.user).join('|') + '|' + anchor.value;
+    if (pop && popFor === anchor && popKey === key) { place(pop, anchor); return; }
     closePop(); mount();
-    pop = el('div', 'pop');
-    const hd = el('div', 'hd'); hd.insertAdjacentHTML('afterbegin', KEY); hd.append(el('span', '', 'MaskTab 记住的账号'));
+    pop = el('div', 'pop'); popFor = anchor; popKey = key;
+    const hd = el('div', 'hd'); hd.insertAdjacentHTML('afterbegin', KEY); hd.append(el('span', '', `#${list[0]?.no ?? ''} 本实例的账号和邮箱`));
     pop.append(hd);
-    for (const it of items) {
-      const b = el('button', 'it');
-      const tag = el('span', 'no', it.site === '*' ? '邮箱' : '#' + it.no); tag.style.background = it.mine ? '#1a73e8' : '#5f6368';
-      const tx = el('span', 'u'); tx.append(el('div', '', it.user || '（无用户名）'), el('div', 's', it.near ? `本实例在 ${it.near} 记的` : it.mine ? (it.site === '*' ? '本实例的邮箱账号' : '本实例') : `#${it.no} 保存的`));
+    const cur = anchor.value.trim().toLowerCase();
+    for (const it of list) {
+      const b = el('button', 'it' + (cur && it.user.toLowerCase() === cur ? ' on' : ''));
+      const tag = el('span', 'no', it.cand ? TAG[it.cand] : it.site === '*' ? '邮箱' : '#' + it.no); tag.style.background = it.cand === 'default' ? '#5f6368' : '#1a73e8';
+      const sub = it.cand ? SRCNAME[it.cand] : it.near ? `本实例在 ${it.near} 记的` : it.site === '*' ? '本实例的邮箱账号' : '本实例在这个网站的账号';
+      const tx = el('span', 'u'); tx.append(el('div', '', it.user || '（无用户名）'), el('div', 's', sub));
       b.append(tag, tx);
-      b.onmousedown = (ev) => { ev.preventDefault(); fill(it); closePop(); };
+      // 按下就选（和以前一样）；preventDefault 让焦点留在输入框里
+      b.onmousedown = (ev) => { ev.preventDefault(); const a = popFor; closePop(); fill(it, false, a); };
       pop.append(b);
     }
     root.append(pop); place(pop, anchor);
@@ -156,19 +199,41 @@
     b.onmousedown = (ev) => {
       ev.preventDefault();
       for (const f of pwFields()) setVal(f, pw);
-      const u = userFieldFor(pwFields()[0]), em = info?.email || info?.defEmail;
+      const u = userFieldFor(pwFields()[0]), em = cands(info)[0]?.user;
       if (u && !u.value && em && idOk(u, true)) setVal(u, em);
       closePop();
     };
     pop.append(b); root.append(pop); place(pop, anchor);
   }
 
-  function fill(it, auto) {
+  // auto = 自动填（只填空着的、每个框一次）；不是自动 = 用户在下拉里点的（覆盖框里现有的）。at = 下拉挂在哪个框上。
+  function fill(it, auto, at) {
     const pw = pwFields()[0] || ruleEl(['pass']);
-    let u = ruleEl(ID) || (pw ? userFieldFor(pw) : loneUserField());
+    let u = at && at.type !== 'password' ? at : ruleEl(ID) || (pw ? userFieldFor(pw) : loneUserField());
     if (u === pw) u = null;
-    if (u && it.user && !u.value && !(auto && filled.has(u))) { setVal(u, it.user); filled.add(u); }
-    if (pw && !(auto && filled.has(pw))) { setVal(pw, it.pass); filled.add(pw); }
+    if (u && it.user && (auto ? !u.value && !filled.has(u) : u.value !== it.user)) { setVal(u, it.user); filled.add(u); }
+    if (pw && it.pass && !(auto && filled.has(pw))) { setVal(pw, it.pass); filled.add(pw); }
+  }
+  // 只有邮箱框（没有密码框）的那一步：填本实例自己的邮箱。focused = 用户点进了这个框（不挪走焦点）；否则是框刚出现、页面明显是登录页。
+  function loneFill(u, inf, focused) {
+    if (!u || u.value || filled.has(u) || typed.has(u) || pwFields().length) return false;
+    if (!idOk(u, false) || /search|captcha|code|otp|newsletter|subscribe|订阅/i.test(hintOf(u))) return false;
+    const c = cands(inf).find((x) => u.type !== 'email' || EMAIL.test(x.user));
+    if (!c) return false;
+    setVal(u, c.user); filled.add(u);
+    if (!focused) u.blur?.();
+    toast(`已填好${SRCNAME[c.src] || '邮箱'}（没有提交）`, () => { setVal(u, ''); typed.add(u); filled.delete(u); });
+    return true;
+  }
+  // 单个邮箱框在不在登录 / 注册的地方：页面地址、标题像登录页，或者框所在的表单 / 弹窗里有“登录、注册、继续”之类的字。
+  // 首页、文章底下的“订阅邮件”框不算（那一块里写着订阅、newsletter）。
+  function authCtx(u) {
+    if (loginPage([], u) || SIGNUPISH.test(location.pathname + ' ' + document.title)) return true;
+    let box = u.form || u.closest?.('[role=dialog],dialog,[aria-modal=true]');
+    if (!box) { box = u; for (let i = 0; i < 5 && box.parentElement && box.parentElement !== document.body; i++) box = box.parentElement; }
+    const txt = (box.innerText || '').slice(0, 2000);
+    if (/subscribe|newsletter|订阅/i.test(txt + ' ' + hintOf(u))) return /log ?in|sign ?in|sign ?up|create.{0,12}account|登录|注册/i.test(txt) && !/newsletter|订阅/i.test(hintOf(u));
+    return /log ?in|sign ?in|sign ?up|create.{0,12}account|continue with e-?mail|register|登录|登入|注册|继续|下一步/i.test(txt);
   }
 
   // 自动填写：页面出现登录框时尝试一次。
@@ -189,6 +254,12 @@
     // 已标记的网站、本实例还没有它的账号：自动进入录入，登录一次就记住。没标记过的登录页：问一句要不要录。
     if (inf.rule && !rec && !recOff && !mine.length) startRec(true);
     else maybeAsk(inf, pws, lone);
+    // 只有邮箱框的一步：框已经有焦点（自动聚焦的）就直接填；明显是登录页的框一出现就填；其余等用户点进来（见 focusin）。
+    if (!pws.length && lone && !rpw) {
+      if (document.activeElement === lone) loneFill(lone, inf, true);
+      else if (loginPage(pws, lone) || SIGNUPISH.test(location.pathname + ' ' + document.title)) loneFill(lone, inf, false);
+      return;
+    }
     if (pws.some((p) => p.value) || lone?.value || rid?.value || rpw?.value) return;
     const target = pws[0] || lone || rpw || rid;
     if (filled.has(target)) return;
@@ -206,7 +277,7 @@
 
   // 默认邮箱 + 默认密码（decisions M-6）。signup = 注册页。只填空着的框、每个框只填一次；不点任何按钮。
   function fillDefault(inf, signup, pws = pwFields(), lone = loneUserField(), who2 = '') {
-    const email = (inf.email || inf.defEmail || '').trim(), pass = inf.default || '';
+    const c0 = cands(inf)[0], email = (c0?.user || '').trim(), pass = inf.default || '';
     if (!email && !pass) return;
     // 只有一个邮箱框的那一页（两步登录 / 两步注册的第一页）：看起来得是登录或注册页，免得把首页的“订阅邮件”框也填上
     if (!pws.length && !(loginPage(pws, lone) || SIGNUPISH.test(location.pathname + ' ' + document.title))) return;
@@ -232,27 +303,41 @@
     }
     if (!done.length) return;
     const nE = done.filter((e) => e.type !== 'password').length, nP = done.length - nE;
-    const what = [nE && (inf.email ? '本实例的邮箱' : '默认邮箱'), nP && '默认密码'].filter(Boolean).join('和');
+    const what = [nE && (SRCNAME[c0?.src] || '邮箱'), nP && '默认密码'].filter(Boolean).join('和');
     done[done.length - 1].blur?.(); // 不把光标留在框里：免得弹出别的提示，也不像是替用户点了什么
+    closePop(); // 填的时候我们自己让框获得过焦点：那时弹的下拉收起
     toast(`已填好${what}（没有提交）`, () => { for (const e of done) setVal(e, ''); done[0]?.blur?.(); });
   }
 
-  document.addEventListener('focusin', async (ev) => {
-    const t = ev.target;
+  document.addEventListener('focusin', (ev) => {
+    if (selfFocus || inUi(ev)) return; // 我们自己填值时的焦点、我们界面里的：不算用户点进来
+    if (pop && popFor !== ev.target) closePop(); // 焦点换到了别的框（Tab 等）：原来的下拉收起
+    offer(ev.target);
+  }, true);
+  // 框本来就有焦点（刚在下拉里选过、按过 Esc）再点一下：像 Chrome 一样再把下拉弹出来。
+  document.addEventListener('pointerdown', (ev) => { const t = ev.target; if (!pop && t instanceof HTMLInputElement && t === document.activeElement && !inUi(ev)) setTimeout(() => offer(t), 0); }, true);
+  // 用户点进（或聚焦）一个输入框：单邮箱框自动填、“录入”按钮、下拉。
+  async function offer(t) {
     if (!(t instanceof HTMLInputElement) || !visible(t)) return;
     const isPw = t.type === 'password' || t === ruleEl(['pass']), isUser = !isPw && (t === userFieldFor(pwFields()[0]) || t === loneUserField() || t === ruleEl(ID));
     if (!isPw && !isUser && !likelyLogin(t)) return;
     const inf = await getInfo();
     if (!inf || document.activeElement !== t && !t.matches(':focus')) return;
     const signup = signupPage();
+    // 只有邮箱框（两步登录 / 注册的第一步、登录弹窗）：聚焦时直接填本实例自己的邮箱，只填不提交，框里有字就不动。
+    if (isUser && !pwFields().length && t === loneUserField() && authCtx(t)) loneFill(t, inf, true);
     // “录入”按钮：这个网站还没有规则、本实例也没有它的账号时，在像登录框的输入框旁边出现。
     if (!rec && !recOff && !askEl && !signup && !inf.rule && !own(inf).length && isField(t)) showBtn(t);
     if (!isPw && !isUser) return;
-    if (filled.has(t) && t.value) return; // 刚自动填好的框：不再弹提示
-    if (isPw && signup && inf.default) { suggestDefault(t, inf.default); return; }
-    if (inf.items.length > 1 || (inf.items.length === 1 && (!inf.items[0].mine || inf.items[0].near))) chooser(t, inf.items);
-  }, true);
-  document.addEventListener('focusout', () => setTimeout(() => { closePop(); hideBtn(); }, 150), true);
+    if (isPw && signup && inf.default) { suggestDefault(t, inf.default); popFor = t; return; }
+    const list = choices(inf, isPw);
+    const cur = (isPw ? userFieldFor(t)?.value || shownUser(t) || pendingUser : t.value).trim().toLowerCase();
+    // 下拉：有可以换的才弹（只有一个候选、而且框里已经是它，就不弹）
+    if (list.some((x) => x.user.toLowerCase() !== cur)) chooser(t, list);
+  }
+  // 失去焦点时只收“录入”小按钮（而且得是焦点真的离开了那个框）；下拉不跟着焦点走，见上面的关闭规则。
+  document.addEventListener('focusout', () => setTimeout(() => { if (btnFor && document.activeElement !== btnFor) hideBtn(); }, 150), true);
+  document.addEventListener('input', (ev) => { if (ev.isTrusted && ev.target instanceof HTMLInputElement) { typed.add(ev.target); if (pop && popFor === ev.target) closePop(); } }, true);
 
   // ---------- 记住 ----------
   // 第一步：只有用户名框、有值 → 暂存。
@@ -291,6 +376,7 @@
   // 只认“提交类”按钮：显式 submit、表单里没写 type 的按钮、或文字像登录 / 继续 / 下一步的按钮（避免点“显示密码”就保存）。
   const ACT = /log ?in|sign ?in|sign ?up|continue|next|submit|verify|register|create|登录|登入|继续|下一步|提交|确定|注册|进入/i;
   const onAct = (ev) => {
+    if (inUi(ev)) return;
     const t = ev.composedPath?.()[0] || ev.target;
     const b = t.closest?.('button,input[type=submit],[role=button]');
     if (!b) {
@@ -465,14 +551,15 @@
     } catch { /* 取不到图标不影响别的 */ }
   }
   let moveT = 0;
-  const moved = () => { placeBtn(); clearTimeout(moveT); moveT = setTimeout(placeBar, 200); };
+  const moved = () => { placeBtn(); keepPop(); clearTimeout(moveT); moveT = setTimeout(placeBar, 200); };
   addEventListener('scroll', moved, true);
   addEventListener('resize', moved);
   function startRec(auto, e) {
     if (rec) return;
     hideAsk(); grabIcon();
     rec = { auto: !!auto, at: Date.now(), submitAt: 0 };
-    closePop(); hideBtn(); paintBar(); syncRec(); watch();
+    if (!auto) closePop(); // 自动进入录入（观察器里触发）不碰用户正看着的下拉
+    hideBtn(); paintBar(); syncRec(); watch();
     if (e) { if (e.value) note(e); e.focus(); }
   }
   function stopRec(dismiss) {
@@ -536,7 +623,7 @@
   // 登录框可能稍后才出现（单页应用）：观察一段时间。
   // 单页应用（登录弹窗、两步登录的第二步、退出后回到登录页）都不刷新页面，所以一直观察，但最多每 400 毫秒检查一次。
   let busy = false;
-  const mo = new MutationObserver(() => { if (busy) return; busy = true; setTimeout(() => { busy = false; tryFill(); }, 400); });
+  const mo = new MutationObserver(() => { keepPop(); if (busy) return; busy = true; setTimeout(() => { busy = false; keepPop(); tryFill(); }, 400); });
   mo.observe(document.documentElement, { childList: true, subtree: true });
   tryFill();
 })();
