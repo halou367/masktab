@@ -280,7 +280,7 @@ export function mailView(c, id, key) {
     ibtn('x', '关闭搜索', () => { S.q = null; c.render(); })),
     !icloud && !q && h('div', { class: 'mtabs' }, pill([tab('INBOX', '收件箱'), tab('Junk', '垃圾箱')], S.folder, (v) => { S.folder = v; S.sel.clear(); c.render(); })),
     shown.length ? h('div', { class: 'mlist' + (S.sel.size ? ' picking' : '') }, shown.map(rowOf))
-      : h('div', { class: 'empty' }, q ? '没有找到' : d.lastAt ? (S.folder === 'Junk' ? '垃圾箱是空的' : '收件箱是空的') : s.k === 'off' ? '还没收过信，打开实例后自动收' : '还没收过信'),
+      : h('div', { class: 'empty' }, q ? '没有找到' : !d.mails.length && s.k === 'off' ? '本机还没存下这个信箱的信，打开实例后自动收' : d.lastAt ? (S.folder === 'Junk' ? '垃圾箱是空的' : '收件箱是空的') : '还没收过信'),
     h('div', { class: 'foot noic' }, `每 ${d.every || 2} 分钟收一次 · `, h('button', { class: 'lk', onclick: async () => { const v = await choose('收信间隔', [['1', '1 分钟'], ['2', '2 分钟（默认）'], ['5', '5 分钟'], ['10', '10 分钟'], ['30', '30 分钟']], String(d.every || 2)); if (v) run(async () => { await api('PATCH', '/api/settings', { mailPollMin: Number(v) }); await loadBox(c, id, true); }, '已修改收信间隔'); } }, '改间隔'),
       ' · 远程图片：', h('button', { class: 'lk', onclick: async () => { const v = await choose('邮件里的远程图片', [['always', '总是加载（默认）'], ['ask', '询问（点了才加载，发件人看不出你打开过）']], d.images || 'always'); if (v && v !== (d.images || 'always')) run(async () => { await api('PATCH', '/api/settings', { mailImages: v === 'ask' ? 'ask' : '' }); await loadBox(c, id, true); }, '已修改'); } }, d.images === 'ask' ? '询问' : '总是加载'),
       h('br'), '只在这个实例开着、线路通的时候收新信，收信走这个实例自己的线路；收到的信加密存在本机，实例关着也能看。取件地址：', d.base)];
@@ -296,17 +296,17 @@ function detail(c, id, d, inst) {
   let body;
   if (html) {
     const fr = h('iframe', { class: 'mframe', sandbox: MAIL_SANDBOX, referrerpolicy: 'no-referrer', title: '邮件正文' });
-    const wrap = h('div', { class: 'mbody loading' }, fr, h('div', { class: 'mload' }, h('i', { class: 'dotspin' }), ' 正文加载中…'));
+    const wrap = h('div', { class: 'mblk mbody loading' }, fr, h('div', { class: 'mload' }, h('i', { class: 'dotspin' }), ' 正文加载中…'));
     fr.addEventListener('load', () => wrap.classList.remove('loading'));
     fr.srcdoc = mailDoc(html, imgs);
     body = wrap;
-  } else body = h('pre', { class: 'mtext' }, m.body || m.preview || '（没有正文）');
+  } else body = h('div', { class: 'mblk mbody' }, h('pre', { class: 'mtext' }, m.body || m.preview || '（没有正文）'));
   return h('div', { class: 'mdetail' },
-    h('h2', { class: 'msubj' }, m.subject || '（无主题）'),
+    h('div', { class: 'mblk mhd' }, h('h2', { class: 'msubj' }, m.subject || '（无主题）'),
     h('div', { class: 'mmeta' }, h('span', {}, '发件人'), h('b', {}, m.from || '未知'), h('span', {}, '收件人'), h('b', {}, m.to || d.email), h('span', {}, '时间'), h('b', {}, mailTime(m.receivedAt, true) || m.receivedAt || '—'),
       h('span', {}, '位置'), h('b', {}, (it.folder || m.folder) === 'Junk' ? '垃圾箱' : '收件箱'),
-      other && [h('span', {}, '链接'), h('b', { title: `这封信是 #${inst.no} 的；点正文里的链接会在当前窗口（#${me.no}）新开标签页，走的是 #${me.no} 的线路` }, `在当前窗口 #${me.no} 新开标签页`)]),
-    m.verificationCode && h('div', { class: 'mcodebox' }, h('span', {}, '验证码'), h('b', { class: 'mono' }, m.verificationCode), h('button', { class: 'btn fill', onclick: () => copyCode(m.verificationCode) }, icon('copy', 16), '复制')),
-    html && ask && hasRemoteImg(html) && !imgs && h('div', { class: 'warn' }, icon('info', 20), h('span', { class: 'tx' }, '远程图片没有加载（加载会让发件人知道你打开了这封信）'), h('button', { class: 'lk', onclick: () => { S.imgs.add(o.key); c.render(); } }, '加载图片')),
+      other && [h('span', {}, '链接'), h('b', { title: `这封信是 #${inst.no} 的；点正文里的链接会在当前窗口（#${me.no}）新开标签页，走的是 #${me.no} 的线路` }, `在当前窗口 #${me.no} 新开标签页`)])),
+    m.verificationCode && h('div', { class: 'mblk mcodebox' }, h('span', {}, '验证码'), h('b', { class: 'mono' }, m.verificationCode), h('button', { class: 'btn fill', onclick: () => copyCode(m.verificationCode) }, icon('copy', 16), '复制')),
+    html && ask && hasRemoteImg(html) && !imgs && h('div', { class: 'mblk warn' }, icon('info', 20), h('span', { class: 'tx' }, '远程图片没有加载（加载会让发件人知道你打开了这封信）'), h('button', { class: 'lk', onclick: () => { S.imgs.add(o.key); c.render(); } }, '加载图片')),
     body);
 }

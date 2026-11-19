@@ -778,6 +778,36 @@ html.wzwin body.bye #main { opacity: 0; transition: opacity var(--d-s) var(--e-a
 .mbody .mload { display: none; position: absolute; inset: 0; align-items: flex-start; justify-content: center; padding-top: 48px; color: var(--on3); font-size: 13px; background: var(--bg); gap: 6px; }
 .mbody.loading .mload { display: flex; }
 @media (hover: none) { .mrow .msel { display: none; } .mlist.picking .msel { display: inline-flex; } }
+/* 信箱 v3（2026-11-19 需求方：“邮件没有边界线，看不出分界，和应用整体 UI 不一致”）：
+   和实例页、设置页同一套分组块（决策 UI-10）——每封信一块、块之间 2px 缝、一组外角 --r-xl 内角 --r-xs、底色 --surf2；
+   详情 = 头部（主题 + 发件人…）、验证码、提示、正文 连成一组；正文是白底的信纸，四周留出 --surf2 的边，一眼分得出“外框”和“信”。 */
+.mhead { padding: 4px calc(var(--gut) + 14px) 10px; }
+.mtabs { padding: 0 var(--gut) 10px; }
+.mstat.off { margin: 4px var(--gut) 8px; border-radius: var(--r-l); padding: 10px 10px 10px 14px; background: var(--surf2); }
+.mdetail .warn.mstat, .warn.mstat { margin: 4px var(--gut) 8px; }
+.msearch { margin: 0 var(--gut) 10px; background: var(--surf2); }
+.mlist { padding: 0 var(--gut); gap: 2px; }
+.mrow { background: var(--surf2); border-radius: var(--r-xs); padding: 10px 14px; min-height: 66px; gap: 12px; transition: background-color var(--d-s) var(--e-std); }
+html.pc .mrow { min-height: 58px; padding: 8px 14px; }
+.mlist > .mrow:first-child { border-top-left-radius: var(--r-xl); border-top-right-radius: var(--r-xl); }
+.mlist > .mrow:last-child { border-bottom-left-radius: var(--r-xl); border-bottom-right-radius: var(--r-xl); }
+.mrow:hover { background: color-mix(in srgb, var(--surf2), var(--on) 6%); }
+.mrow.sel, .mrow.sel:hover { background: var(--tonal); }
+.mrow .from { font-size: 13.5px; } .mrow .subj { font-size: 14.5px; } .mrow .prev { font-size: 12.5px; }
+.mlist + .empty, .mtabs + .empty { margin-top: 0; }
+.mdetail { padding: 4px var(--gut) 24px; gap: 2px; }
+.mdetail > .mblk { margin: 0; border-radius: var(--r-xs); }
+.mdetail > .mblk:first-child { border-top-left-radius: var(--r-xl); border-top-right-radius: var(--r-xl); }
+.mdetail > .mblk:last-child { border-bottom-left-radius: var(--r-xl); border-bottom-right-radius: var(--r-xl); }
+.mhd { background: var(--surf2); padding: 14px 16px 14px; display: flex; flex-direction: column; gap: 10px; }
+.mhd .msubj { margin: 0; font-size: 19px; } html.pc .mhd .msubj { font-size: 17px; }
+.mhd .mmeta { padding-top: 10px; border-top: 1px solid var(--div); }
+.mdetail > .mcodebox { padding: 10px 12px 10px 16px; }
+.mdetail > .warn { padding: 10px 12px 10px 14px; font-size: 13.5px; }
+.mbody { background: var(--surf2); padding: 8px; }
+.mbody .mframe { border: 0; border-radius: var(--r-m); box-shadow: 0 0 0 1px var(--div); background: #fff; }
+.mbody .mtext { border-radius: var(--r-m); background: var(--bg); box-shadow: 0 0 0 1px var(--div); }
+.mbody .mload { inset: 8px; border-radius: var(--r-m); background: var(--surf2); }
 @media (prefers-reduced-motion: reduce) {
   :root { --d-xs: 0ms; --d-s: 0ms; --d-m: 0ms; --d-l: 0ms; }
   *, *::before, *::after { animation-duration: 0ms !important; animation-delay: 0ms !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }
