@@ -765,6 +765,8 @@ translate_phase() {
     echo "  扩展记的线路："; grep -o "MaskTab 翻译请求.*" "$L" | tr -d '\r' | cut -c1-160 | sort | uniq -c | head -6
     echo "  节点日志最后几条连接："; grep -E "\[TCP\]" $W/server.log | sed 's/.*msg=//' | tail -6; fi
   if grep -q "MaskTab 翻译请求 直连" "$L"; then echo "失败：翻译：有翻译请求是直连出去的（没走实例的线路）"; fail=1; fi
+  if grep -q "MaskTab 翻译请求 走实例 #1 的线路" "$L" && ! grep "MaskTab 翻译请求" "$L" | grep -qv "走实例 #1 的线路"; then echo "通过：翻译：扩展把每一条翻译请求都指到了实例 #1 的线路上（$(grep -c "MaskTab 翻译请求" "$L") 条）"
+  else echo "失败：翻译：扩展记的线路不对"; fail=1; grep -o "MaskTab 翻译请求.*" "$L" | tr -d '\r' | cut -c1-160 | sort | uniq -c | head -6; fi
   # 再点一次 = 换回原文
   n0=$(count "MaskTab 翻译 已显示原文")
   if tap_native "更多选项"; then sleep 2

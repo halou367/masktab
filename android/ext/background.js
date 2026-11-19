@@ -96,10 +96,10 @@ function routeFor(id) {
 }
 // 翻译接口（companion/ext/translate.js 用的两家）。到它们的请求走了哪条线路记进日志（最多 12 条），模拟器冒烟靠它核对（docs/android.md）。
 const TR_HOSTS = new Set(['translate.googleapis.com', 'edge.microsoft.com']);
+const isTr = (url) => { try { return TR_HOSTS.has(new URL(url).hostname); } catch { return false; } };
 let trNoted = 0;
 function trNote(d, how) {
-  let h = ''; try { h = new URL(d.url).hostname; } catch { /* 忽略 */ }
-  if (!TR_HOSTS.has(h) || trNoted++ >= 12) return;
+  if (!isTr(d.url) || trNoted++ >= 12) return;
   let f = d.documentUrl || d.originUrl || ''; try { f = new URL(f).protocol + '//' + new URL(f).host; } catch { /* 原样 */ }
   console.info(`MaskTab 翻译请求 ${how} tab=${d.tabId} cs=${d.cookieStoreId || '—'} 来自=${f || '—'}`);
 }
@@ -111,6 +111,12 @@ browser.proxy.onRequest.addListener(async (d) => {
   let id = await instOfTab(d.tabId);
   if (!id) id = idOfCs(d.cookieStoreId) || (isContainer(d.cookieStoreId) && csInst.get(d.cookieStoreId)) || null;
   if (id) { if (d.tabId >= 0) lastInst = id; trNote(d, `走实例 #${insts[id]?.no ?? '?'} 的线路`); return routeFor(id); }
+  // 翻译接口：只有后台替网页代发这一种来路（下面“网页翻译的请求”），线路跟着要翻译的那个实例；别的来路一律拒绝，绝不直连。
+  if (isTr(d.url)) {
+    const w = trWho && insts[trWho] ? trWho : '';
+    trNote(d, w ? `走实例 #${insts[w].no} 的线路（后台代发）` : '已拒绝');
+    return w ? routeFor(w) : BLOCK;
+  }
   // 不属于任何网页标签：扩展自己、app 内部的请求（来源是 moz-extension 或没有来源）直连；其余认不出实例的一律拒绝
   const from = d.documentUrl || d.originUrl || '';
   if (d.tabId < 0 && (!from || from.startsWith('moz-extension:') || from.startsWith('resource:') || from.startsWith('chrome:'))) { trNote(d, '直连'); return { type: 'direct' }; }
@@ -212,6 +218,11 @@ const vaultMsg = vaultBox.msg;
 browser.runtime.onMessage.addListener((m, sender) => {
   if (sender.id !== browser.runtime.id || !m || typeof m !== 'object') return;
   const t = String(m.t || '');
+  // 网页翻译：内容脚本要后台代发一条到翻译接口的请求（只认网页标签页里本扩展的内容脚本）
+  if (t === 'tr:fetch') {
+    if (!sender.tab) return;
+    return trFetch(m, sender.tab).catch((e) => ({ error: e.name === 'AbortError' ? '翻译接口超时' : (e.message || String(e)) }));
+  }
   // 新标签页 / 引导页（扩展自己的页面）登记：这个标签页属于 m.inst
   if (t === 'bind' && sender.tab) {
     if (m.dl && String(sender.url || '').startsWith(browser.runtime.getURL('newtab.html'))) dlBind(sender.tab.id, m.dl, m.ref);
@@ -237,6 +248,36 @@ browser.runtime.onMessage.addListener((m, sender) => {
   // 实例菜单里的“录入登录”（扩展自己的页面发来）：转给这个实例正显示着的网页；没有就记下来，等下一个网页接手。
   if (t === 'rec-start' && !sender.tab?.url?.startsWith('http')) return recStart(String(m.inst || ''));
 });
+// ---------- 网页翻译的请求 ----------
+// 网页里的内容脚本（translate.js）要翻译时，请求由后台代发，线路用“要翻译的那个标签页所属实例”的（决策 A-14 的同一条规矩：
+// 绝不直连，也不串到别的实例的线路上）。后台自己发的请求身上没有标签页，分流那里（proxy.onRequest）认不出是替谁发的，
+// 所以用一把锁：同一时刻只替一个实例发（同一个实例的几条可以一起发），分流时翻译接口的请求就都算在它头上；别的实例排队等。
+// 一条请求最多十几秒，排队的那个实例只是翻译慢一点。
+let trWho = '', trBusy = 0;
+const trWait = [];
+async function trEnter(inst) {
+  while (trWho && (trWho !== inst || trWait.length)) await new Promise((r) => trWait.push(r));
+  trWho = inst; trBusy++;
+}
+function trLeave() {
+  if (--trBusy > 0) return;
+  trBusy = 0; trWho = '';
+  trWait.splice(0).forEach((r) => r());
+}
+async function trFetch(m, tab) {
+  let u;
+  try { u = new URL(m.url); } catch { throw new Error('地址不对'); }
+  if (u.protocol !== 'https:' || !TR_HOSTS.has(u.hostname)) throw new Error('不是翻译接口');
+  await ready;
+  const inst = (await instOfTab(tab.id)) || idOfCs(tab.cookieStoreId) || '';
+  if (!inst || !insts[inst]) throw new Error('认不出这个标签页是哪个实例的');
+  await trEnter(inst);
+  const i = m.init || {}, ctl = new AbortController(), t = setTimeout(() => ctl.abort(), Math.min(15000, Math.max(2000, Number(m.ms) || 15000)));
+  try {
+    const r = await fetch(u, { method: i.method === 'POST' ? 'POST' : 'GET', headers: i.headers || {}, body: i.method === 'POST' ? i.body : undefined, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal: ctl.signal });
+    return { ok: r.ok, status: r.status, body: await r.text() };
+  } finally { clearTimeout(t); trLeave(); }
+}
 // 翻译此页：转给这个实例正显示着的网页（translate.js）。网页刚点开、还没有内容脚本时每半秒再试，最多 20 秒
 // （内容脚本在网页一开始加载时就装上，它自己再等网页加载完）；内部页一直没有，试完就算了。
 const trWaiting = new Set();
