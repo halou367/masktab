@@ -397,16 +397,19 @@ console.log(`[${kind}] 十一 实例菜单：不整列重画、打开有即时�
 {
   const C = (await api('POST', '/api/instances', {})).id; // 第三个实例：菜单里“其它实例”至少两行
   const launches = [];
+  // 页面以为核心服务在这个端口，请求由下面的 route 截下转给真的。不能用 9 这类端口：Firefox 把它列为禁用端口，请求还没到 route 就被拦掉
+  // （页面只看到 NetworkError、菜单写“核心服务未连接”；Chromium 里 route 先截，所以本机只跑 Chromium 时看不出来，2026-11-20 CI 的 Firefox 遍抓到）。
+  const FAKE_PORT = 18999;
   const ctx = await browser.newContext({ viewport: { width: 380, height: 600 } });
   await ctx.addInitScript(() => { window.chrome = { runtime: { getURL: (x) => new URL(x, location.origin + '/').href, sendMessage: () => Promise.resolve() }, tabs: { create: () => {}, query: async () => [] } }; window.close = () => {}; });
   await ctx.route('https://ext.test/**', async (r) => {
     const u = new URL(r.request().url());
-    if (u.pathname === '/config.json') return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ port: 9, token: 'x', instanceId: A }) });
+    if (u.pathname === '/config.json') return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ port: FAKE_PORT, token: 'x', instanceId: A }) });
     const f = path.join(EXT, decodeURIComponent(u.pathname));
     if (!existsSync(f)) return r.fulfill({ status: 404, body: 'nf' });
     r.fulfill({ contentType: { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html; charset=utf-8', '.png': 'image/png' }[path.extname(f)] || 'application/octet-stream', body: readFileSync(f) });
   });
-  await ctx.route('http://127.0.0.1:9/**', async (r) => { // 转给真的核心服务
+  await ctx.route(`http://127.0.0.1:${FAKE_PORT}/**`, async (r) => { // 转给真的核心服务
     const q = r.request(), u = new URL(q.url());
     if (/\/launch$/.test(u.pathname)) launches.push(u.pathname);
     try {
