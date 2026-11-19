@@ -683,14 +683,45 @@ html.pc .scrim.out > .sheet { animation: dlgOut var(--d-s) var(--e-acc) forwards
 .wz .sum .r .k { width: 72px; flex: none; color: var(--on3); font-size: 14px; } .wz .sum .r .v { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .wz .sum .r .lk { color: var(--acc); font-size: 13px; }
 .wz .acts { display: flex; align-items: center; gap: 8px; padding: 10px 16px 0; } .wz .acts .sp { flex: 1; }
+/* 点“创建”之后：原地显示启动进度（决策 UI-31）。头像外面一圈转动的弧，开好了弧收成一整圈、右下角打勾；下面一条进度条和这一步在做什么 */
+.wz .wzo { display: flex; flex-direction: column; align-items: center; padding: 10px 24px 4px; text-align: center; }
+.wz .orb { position: relative; width: 84px; height: 84px; display: grid; place-items: center; margin-bottom: 12px; }
+.wz .orb .face { --s: 60px; animation: orbIn var(--d-l) var(--e-emph); }
+.wz .orb .arc { position: absolute; inset: 0; border-radius: 50%; border: 3px solid transparent; border-top-color: var(--acc); border-right-color: var(--acc); animation: spin .9s linear infinite; transition: border-color var(--d-m) var(--e-std), opacity var(--d-m) var(--e-std); }
+.wz .orb::before { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 3px solid var(--st2); }
+.wz .orb .tick { position: absolute; right: 2px; bottom: 2px; width: 26px; height: 26px; border-radius: 50%; background: var(--good); color: #0b2a14; display: grid; place-items: center; box-shadow: 0 0 0 3px var(--surf); transform: scale(0); }
+.wz .orb.done .arc { animation: none; border-color: var(--good); }
+.wz .orb.done .tick { transform: none; animation: pop var(--d-l) var(--e-emph); }
+.wz .orb.bad .arc { animation: none; border-color: var(--bad); opacity: .9; }
+.wz .orb.bad .face { filter: grayscale(.6); }
+@keyframes orbIn { from { transform: scale(.7); opacity: 0; } }
+.wz .wzo .ot { font-size: 17px; margin-bottom: 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wz .wzo .pb { width: 100%; height: 6px; border-radius: 3px; background: var(--st2); overflow: hidden; }
+.wz .wzo .pb i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--acc); transition: width 120ms linear, background-color var(--d-m) var(--e-std); position: relative; overflow: hidden; }
+.wz .wzo .pb i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent); transform: translateX(-100%); animation: barShine 1.4s ease-in-out infinite; }
+@keyframes barShine { to { transform: translateX(100%); } }
+.wz[data-stage="done"] .wzo .pb i { background: var(--good); } .wz[data-stage="done"] .wzo .pb i::after, .wz[data-stage="fail"] .wzo .pb i::after { animation: none; opacity: 0; }
+.wz[data-stage="fail"] .wzo .pb i { background: var(--bad); }
+.wz .wzo .ps { width: 100%; display: flex; align-items: baseline; gap: 8px; min-height: 20px; margin-top: 8px; font-size: 13px; color: var(--on2); }
+.wz .wzo .pl { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .wz .wzo .pl.chg { animation: labIn var(--d-s) var(--e-dec); }
+.wz .wzo .pn { flex: none; color: var(--on3); font-variant-numeric: tabular-nums; }
+@keyframes labIn { from { opacity: 0; transform: translateY(4px); } }
+.wz .wzo .om { width: 100%; margin-top: 6px; font-size: 13px; line-height: 1.5; color: var(--on2); text-align: left; overflow-wrap: anywhere; } .wz .wzo .om:empty { display: none; }
+.wz[data-stage="fail"] .wzo .om { color: var(--badon); background: var(--badbg); border-radius: 12px; padding: 8px 12px; }
+.wz[data-stage="fail"] .wzo .ps { display: none; }
 .wzpage { max-width: 520px; margin: 0 auto; padding-top: 16px; }
-html.wzwin body { overflow: hidden; } html.wzwin .pnav { display: none; } html.wzwin .pmain { margin: 0; } html.wzwin #main { padding: 0; max-width: none; }
+/* 向导小窗口（wizard.html）：整个窗口就是向导——不再是“窗口里摆一张卡片”，标题在上、按钮贴底，像系统自己的对话框。内容在状态到了以后淡入，关之前淡出 */
+html.wzwin, html.wzwin body { height: 100%; } html.wzwin body { overflow: hidden; margin: 0; background: var(--surf); } html.wzwin .pnav { display: none; } html.wzwin .pmain { margin: 0; } html.wzwin #main { padding: 0; max-width: none; height: 100%; }
+html.wzwin .wzpage { max-width: none; height: 100%; padding: 0; animation: pageFade var(--d-m) var(--e-dec); }
+html.wzwin .wzpage > .wz { width: 100%; height: 100%; margin: 0; border-radius: 0; box-sizing: border-box; display: flex; flex-direction: column; padding: 22px 0 16px; animation: none; background: transparent; }
+html.wzwin .wzpage > .wz > .vp { flex: 0 1 auto; min-height: 0; overflow-y: auto; } html.wzwin .wzpage > .wz > .acts { margin-top: auto; }
+html.wzwin body.bye #main { opacity: 0; transition: opacity var(--d-s) var(--e-acc); }
 
 /* “减少动画”（系统设置 / 浏览器 prefers-reduced-motion）：时长全部归零，只留转圈这类表示“正在进行”的 */
 @media (prefers-reduced-motion: reduce) {
   :root { --d-xs: 0ms; --d-s: 0ms; --d-m: 0ms; --d-l: 0ms; }
   *, *::before, *::after { animation-duration: 0ms !important; animation-delay: 0ms !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }
-  .spin, .dotspin, .stp .ring, .boot i, .prog i.ind, .av .dot.st, .face .run.st { animation-duration: 1.6s !important; }
+  .spin, .dotspin, .stp .ring, .boot i, .prog i.ind, .av .dot.st, .face .run.st, .wz .orb .arc { animation-duration: 1.6s !important; }
 }
 /* 入口优选（decisions N-6）：列表里“本时段最佳”的小标签；节点页“当前时段最佳”那一行的理由可以折行、不截断 */
 .tag.tbest { display: inline-flex; align-items: center; gap: 2px; background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); flex: none; }

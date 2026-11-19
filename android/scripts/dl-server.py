@@ -47,6 +47,29 @@ PAGE = '''<!doctype html><meta charset="utf-8"><meta name="viewport" content="wi
 '''.encode()
 
 
+# 网页翻译的测试页（决策 UI-27）：几句英文、一段代码（不该翻）、一句标了 translate="no" 的（不该翻）。
+# 页面自己盯着文字变没变，变了就往控制台写一行“MTTR 标题 | 第一段 | 第二段 | 代码 | 不翻的 | 后加的”（进 logcat），冒烟脚本看这一行。
+# 文字头一次变（= 开始翻了）两秒后再加一段英文：翻译开着时后加出来的文字也要翻。
+TR_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Translate test</title>
+<style>body{margin:16px;font:18px/1.6 sans-serif}pre{background:#eee;padding:8px}</style>
+<h1 id="h">Welcome to our online bookstore</h1>
+<p id="p1">Good morning. The weather is very nice today.</p>
+<p id="p2">Please enter your email address and choose a strong password.</p>
+<pre id="code">const answer = 42;</pre>
+<p id="p3" translate="no">Do not translate this sentence.</p>
+<div id="box"></div>
+<script>
+var last = '', first = document.getElementById('h').textContent, added = false;
+function txt() { return ['h', 'p1', 'p2', 'code', 'p3', 'late'].map(function (i) { var e = document.getElementById(i); return e ? e.textContent : ''; }).join(' | '); }
+function rep() {
+  var t = txt(); if (t === last) return; last = t; console.info('MTTR ' + t);
+  if (!added && document.getElementById('h').textContent !== first) { added = true; setTimeout(function () { var p = document.createElement('p'); p.id = 'late'; p.textContent = 'Thank you very much for your order.'; document.getElementById('box').appendChild(p); }, 2000); }
+}
+new MutationObserver(function () { setTimeout(rep, 200); }).observe(document.body, { subtree: true, characterData: true, childList: true });
+rep();
+</script></html>'''.encode()
+
+
 class H(http.server.BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
@@ -72,6 +95,8 @@ class H(http.server.BaseHTTPRequestHandler):
         p = self.path.split('?')[0]
         if p == '/dl/page.html':
             return self.reply(200, PAGE, [('Content-Type', 'text/html; charset=utf-8'), ('Set-Cookie', 'mt=1; Path=/')])
+        if p == '/tr/page.html':
+            return self.reply(200, TR_PAGE, [('Content-Type', 'text/html; charset=utf-8')])
         if p == '/dl/pic.png':
             if 'mt=1' not in self.headers.get('Cookie', ''):
                 return self.reply(403, b'no cookie', [('Content-Type', 'text/plain')])

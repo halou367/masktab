@@ -40,6 +40,8 @@ object Motion {
     val dec get() = PathInterpolator(0f, 0f, 0f, 1f)
     val acc get() = PathInterpolator(0.3f, 0f, 1f, 1f)
     val emph get() = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
+    /** 系统设置里没有把动画关掉（开发者选项的“动画时长缩放”为 0、无障碍的“移除动画”）。 */
+    fun on(c: android.content.Context): Boolean = try { android.provider.Settings.Global.getFloat(c.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f } catch (e: Exception) { true }
 }
 
 /** 配色：底色、文字色是固定的（深色取自需求方手机 Chrome 截图）；强调色、选中底色、各层卡片的底色跟着当前实例的颜色走（决策 UI-10，见 Theme.of）。 */

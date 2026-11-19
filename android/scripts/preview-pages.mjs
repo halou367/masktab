@@ -95,6 +95,16 @@ const mock = (state) => {
       if (q.nodeId != null) px.addressId = q.nodeId;
       const it = state.instances.find((x) => x.id === state.me.id); if (it) it.proxy = px;
     }
+    // 新建向导（决策 UI-31）：建好以后页面来问启动进度——8 步一步一步走，然后“开起来了”；state.__newFail 时走到第 2 步报错，重试就好
+    if (k === 'POST /api/instances') { state.__prog = 0; return { id: state.__newFail ? 'bad1' : 'new1', no: 9, note: '' }; }
+    if (m === 'POST' && /^\/api\/instances\/(new1|bad1)\/launch$/.test(p)) { state.__prog = 0; state.__newFail = false; return { ok: true }; }
+    if (m === 'GET' && /^\/api\/instances\/(new1|bad1)\/progress$/.test(p.split('?')[0])) {
+      const n = ++state.__prog, L = ['准备实例', '检查本机网络', '挑选线路', '写入代理配置', '连通检测', '探测出口与时区', '生成指纹与资料目录', '启动浏览器'];
+      if (state.__newFail && n > 2) return { key: 'e', no: 9, step: 0, total: 8, label: '', starting: false, running: false, shown: false, error: '启动内核失败：示例原因（文件被占用）' };
+      if (state.__newHold && n > state.__newHold) return { key: 's' + state.__newHold, no: 9, step: state.__newHold, total: 8, label: L[state.__newHold - 1], starting: true, running: false, shown: false };
+      if (n <= 8) return { key: 's' + n, no: 9, step: n, total: 8, label: L[n - 1], starting: true, running: false, shown: false };
+      return { key: 'r' + (n > 9), no: 9, step: 0, total: 8, label: '', starting: false, running: true, shown: n > 9 };
+    }
     if (k === 'GET /api/state') return state;
     if (k === 'GET /api/vault') return vault;
     if (k === 'GET /api/vault/icons') return { icons: state.__icons };
@@ -107,8 +117,9 @@ const mock = (state) => {
     return { ok: true };
   };
   window.__calls = [];
+  window.__mtState = state; // 个别检查中途改假接口的剧本（比如新建向导停在第几步）
   const rt = {
-    sendNativeMessage: async (app, msg) => { window.__calls.push(msg); return msg.t === 'hello' ? { id: 'p2', seed: 1, tz: 'Asia/Tokyo', lang: 'ja-JP' } : JSON.stringify({ data: reply(msg.m, msg.p, msg.b) }); },
+    sendNativeMessage: async (app, msg) => { window.__calls.push(msg); if (/\/progress/.test(msg.p || '')) await new Promise((r) => setTimeout(r, 120)); return msg.t === 'hello' ? { id: 'p2', seed: 1, tz: 'Asia/Tokyo', lang: 'ja-JP' } : JSON.stringify({ data: reply(msg.m, msg.p, msg.b) }); },
     sendMessage: async (m) => (m?.t === 'diag:blocked' ? { n: 2, list: [{ t: Date.now(), host: 'challenges.cloudflare.com', type: 'xmlhttprequest', from: 'challenges.cloudflare.com', tab: -1, cs: '', pass: false }, { t: Date.now(), host: 'a.example', type: 'script', from: 'b.example', tab: -1, cs: '', pass: true }] } : { ok: true, reg: 'sync' }),
   };
   window.browser = { runtime: rt };
@@ -407,12 +418,56 @@ if (want('flow')) {
   await pg.locator('.wz .chip2.on').click();
   await pg.waitForTimeout(700);
   await calls();
+  // 点“创建”之后（决策 UI-31）：向导不关，原地显示启动进度；开好了打勾再收起。先让假接口停在第 3 步，看中间的样子
+  const wzOpen = () => pg.evaluate(() => { const w = document.querySelector('.wz'), bar = w?.querySelector('.wzo .pb'), i = bar?.querySelector('i');
+    return w ? { stage: w.dataset.stage || '', t: w.querySelector('.wzo .ot')?.textContent || '', l: w.querySelector('.wzo .pl')?.textContent || '', c: w.querySelector('.wzo .pn')?.textContent || '', m: w.querySelector('.wzo .om')?.textContent || '',
+      pct: bar && i ? Math.round(100 * i.getBoundingClientRect().width / bar.getBoundingClientRect().width) : -1, now: +(bar?.getAttribute('aria-valuenow') || -1), spin: !!w.querySelector('.orb .arc') && getComputedStyle(w.querySelector('.orb .arc')).animationName,
+      acts: [...w.querySelectorAll('.acts .btn')].map((b) => b.textContent.trim()), sub: w.querySelector('.wzs')?.textContent || '' } : null; });
+  await pg.evaluate(() => { window.__mtState.__newHold = 3; });
   await pg.locator('.wz .acts .btn.fill').click();
-  await pg.waitForTimeout(600);
+  await pg.waitForTimeout(60);
+  let wo = await wzOpen();
+  check('新建向导：点“创建”马上换成“正在打开”（不等接口回话，头像外面的环在转）', wo?.stage === 'open' && /正在打开 #\d+ 小号/.test(wo.t) && wo.spin === 'spin' && wo.acts.join() === '在后台继续', wo);
+  await pg.waitForTimeout(1500);
+  wo = await wzOpen();
+  check('新建向导：进度条跟着启动步骤走（第 3 步“挑选线路”，3 / 8）', wo?.stage === 'open' && wo.l === '挑选线路…' && wo.c === '3 / 8' && wo.pct >= 20 && wo.pct <= 36 && Math.abs(wo.now - wo.pct) <= 3, wo);
+  await pg.screenshot({ path: path.join(out, 'wizard-opening.png') });
   { const c = (await calls()).find((x) => x.m === 'POST' && x.p === '/api/instances');
     check('实例页 → 新建实例：一个请求带上备注和期望地区（不再建好后 PATCH）', !!c && c.b?.name === '小号' && /^[A-Z]{2}$/.test(c.b?.region || ''), c || {}); }
-  await pg.waitForTimeout(400);
-  check('新建向导：建好后表单收起（播完退场动画后移除）', await pg.locator('.scrim').count() === 0, {});
+  { const p1 = (await wzOpen()).pct; await pg.waitForTimeout(500); const p2 = (await wzOpen()).pct;
+    check('新建向导：停在一步上时进度条不往回走、也不越过这一步', p2 >= p1 && p2 <= 36, { p1, p2 }); }
+  await pg.evaluate(() => { window.__mtState.__newHold = 0; });
+  const doneSeen = await pg.waitForFunction(() => document.querySelector('.wz')?.dataset.stage === 'done', null, { timeout: 6000 }).then(() => true, () => false);
+  await pg.waitForTimeout(220); // 进度条走到头有一小段过渡
+  wo = await wzOpen();
+  check('新建向导：开好了打勾、进度条走满、写“已打开”', doneSeen && /已打开 #9 小号/.test(wo?.t || '') && wo.pct >= 99, wo);
+  await pg.screenshot({ path: path.join(out, 'wizard-opened.png') });
+  await pg.waitForTimeout(1100);
+  check('新建向导：开好后表单收起（播完退场动画后移除）', await pg.locator('.scrim').count() === 0, {});
+  // 没开成：原因留在向导里，可以重试；重试成功照常收起
+  await pg.evaluate(() => { window.__mtState.__newFail = true; });
+  await pg.locator('.appbar button[title="新建伪装实例"]').click(); await pg.waitForTimeout(400);
+  await pg.locator('.wz .acts .btn.fill').click(); await pg.waitForTimeout(400);
+  await pg.locator('.wz .chip2').first().click(); await pg.waitForTimeout(700);
+  await pg.locator('.wz .acts .btn.fill').click();
+  const failSeen = await pg.waitForFunction(() => document.querySelector('.wz')?.dataset.stage === 'fail', null, { timeout: 6000 }).then(() => true, () => false);
+  wo = await wzOpen();
+  check('新建向导：没开成时把原因写出来，有“重试”和“关闭”', failSeen && /没能打开/.test(wo?.t || '') && /启动内核失败/.test(wo.m) && wo.acts.join() === '关闭,重试', wo);
+  await pg.screenshot({ path: path.join(out, 'wizard-failed.png') });
+  await calls();
+  await pg.locator('.wz .acts .btn.fill').click();
+  const retried = await pg.waitForFunction(() => document.querySelector('.wz')?.dataset.stage === 'done', null, { timeout: 8000 }).then(() => true, () => false);
+  check('新建向导：点“重试”再开一次这个实例（不是再建一个），开好收起', retried && (await calls()).filter((x) => x.m === 'POST').map((x) => x.p).join() === '/api/instances/bad1/launch', {});
+  await pg.waitForTimeout(1100);
+  // “在后台继续”：马上收起，实例照开
+  await pg.evaluate(() => { window.__mtState.__newHold = 2; });
+  await pg.locator('.appbar button[title="新建伪装实例"]').click(); await pg.waitForTimeout(400);
+  await pg.locator('.wz .acts .btn.fill').click(); await pg.waitForTimeout(400);
+  await pg.locator('.wz .chip2').first().click(); await pg.waitForTimeout(700);
+  await pg.locator('.wz .acts .btn.fill').click(); await pg.waitForTimeout(500);
+  await pg.locator('.wz .acts .btn', { hasText: '在后台继续' }).click(); await pg.waitForTimeout(600);
+  check('新建向导：“在后台继续”收起表单', await pg.locator('.scrim').count() === 0, {});
+  await pg.evaluate(() => { window.__mtState.__newHold = 0; });
   // 头像菜单的“新建实例”由 app 打开路由 new：整页向导；取消 = 收起
   await setHash('new');
   await pg.waitForTimeout(400);
@@ -484,6 +539,7 @@ if (desk && want('desk')) {
   const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const deskCalls = [];
+  let deskProg = 0, deskProgHold = 0; // 新建向导的启动进度走到第几次问了；deskProgHold = 停在第几步不往下走（截图用）
   // 运行情况（UI-28）：p2 最占内存、两个窗口五个标签页（一个休眠、一个标题很长）；p1 伴随扩展还没报；p3 一个窗口；第一次问没有处理器占用
   let usageAsked = 0, usageRough = false;
   const deskUsage = () => {
@@ -505,6 +561,14 @@ if (desk && want('desk')) {
     if (u.pathname === '/config.json') { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ port: dsrv.address().port, token: 't', instanceId: 'p2', no: 2, color: '#D93025' })); return; }
     if (u.pathname.startsWith('/api/')) {
       if (q.method !== 'GET') { let body = ''; q.on('data', (c) => { body += c; }); q.on('end', () => { let b = null; try { b = body ? JSON.parse(body) : null; } catch { b = body; } deskCalls.push({ m: q.method, p: u.pathname, b }); }); } // 电脑页面改了什么：检查里看
+      // 新建向导的启动进度（决策 UI-31）：和手机那边的假接口一样的剧本
+      if (u.pathname === '/api/instances' && q.method === 'POST') { deskProg = 0; r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ id: 'new1', no: 9, note: '' })); return; }
+      if (/^\/api\/instances\/new1\/progress$/.test(u.pathname)) {
+        const n = ++deskProg, L = ['准备实例', '检查本机网络', '挑选线路', '写入代理配置', '连通检测', '探测出口与时区', '生成指纹与资料目录', '启动浏览器'];
+        const hold = deskProgHold && n > deskProgHold ? deskProgHold : 0, k = hold || n;
+        const pr = k <= 8 ? { key: 's' + k, no: 9, step: k, total: 8, label: L[k - 1], starting: true, running: false, shown: false } : { key: 'r' + (n > 9), no: 9, step: 0, total: 8, label: '', starting: false, running: true, shown: n > 9 };
+        setTimeout(() => { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(pr)); }, hold ? 400 : 120); return;
+      }
       const many = deskMany ? [...fixture.instances, ...Array.from({ length: deskMany === true ? 7 : deskMany }, (_, k) => ({ ...fixture.instances[k % 2 ? 0 : 2], id: 'x' + k, no: 21 + k, name: `user${k}@example.com`, color: ['#8e24aa', '#00897b', '#e8710a'][k % 3] }))] : fixture.instances;
       const need = (i) => (deskNeed && i.rt.running ? { ...i, rt: { ...i.rt, needRestart: ['extensions'] } } : i); // 加过扩展：开着的实例都要重启
       const xr = /^\/api\/extensions\/([^/]+)\/reload$/.exec(u.pathname); // 扩展“重载”：回那个扩展，加上这一次的结果
@@ -777,15 +841,44 @@ if (desk && want('desk')) {
     check('电脑向导：第 3 步按 Esc 回到第 2 步，光标在选中的国家上', kb.step.includes('第 2 步') && kb.on, kb);
     await ip.keyboard.press('Enter'); await ip.waitForTimeout(900); // 在选中的国家上回车 = 再选它一次，进第 3 步
     const kd = await ip.evaluate(() => ({ step: document.querySelector('.wzs')?.textContent || '', act: (document.activeElement?.textContent || '').trim().slice(0, 20) }));
-    deskCalls.length = 0;
-    await ip.keyboard.press('Enter'); await ip.waitForTimeout(500);
+    deskCalls.length = 0; deskProgHold = 5;
+    await ip.keyboard.press('Enter'); await ip.waitForTimeout(1600);
     const kc = deskCalls.filter((c) => c.m === 'POST' && c.p === '/api/instances').map((c) => c.b);
     check('电脑向导：第 3 步回车 = 创建，备注和地区都交出去', kc.length === 1 && kc[0]?.name === '工作号' && !!kc[0]?.region, { kc, kd });
-    await ip.setViewportSize({ width: 440, height: 560 });
-    await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#new'); await ip.waitForTimeout(600);
-    const ww = await ip.evaluate(() => ({ win: document.documentElement.classList.contains('wzwin'), nav: getComputedStyle(document.getElementById('nav')).display, wz: !!document.querySelector('.wzpage .wz'), over: document.documentElement.scrollWidth > innerWidth }));
-    check('电脑向导小窗口（app.html#new）：只有向导，没有左边导航，不横向溢出', ww.win && ww.nav === 'none' && ww.wz && !ww.over, ww);
+    // 创建之后（决策 UI-31）：弹框不关，显示启动进度；窗口出来（伴随扩展连上）以后才收起
+    const dOpen = () => ip.evaluate(() => { const w = document.querySelector('.wz'), bar = w?.querySelector('.wzo .pb'), i = bar?.querySelector('i');
+      return w ? { stage: w.dataset.stage || '', t: w.querySelector('.wzo .ot')?.textContent || '', l: w.querySelector('.wzo .pl')?.textContent || '', c: w.querySelector('.wzo .pn')?.textContent || '', pct: bar && i ? Math.round(100 * i.getBoundingClientRect().width / bar.getBoundingClientRect().width) : -1 } : null; });
+    let dso = await dOpen();
+    check('电脑向导：创建后原地显示启动进度（第 5 步“连通检测”，5 / 8）', dso?.stage === 'open' && dso.l === '连通检测…' && dso.c === '5 / 8' && dso.pct >= 45 && dso.pct <= 60, dso);
+    await ip.screenshot({ path: path.join(out, 'desk-wizard-opening.png') });
+    await ip.keyboard.press('Escape'); await ip.waitForTimeout(500);
+    check('电脑向导：正在打开时按 Esc = 在后台继续（弹框收起）', await ip.locator('.scrim').count() === 0, {});
+    deskProgHold = 0;
+    // 小窗口（Ctrl+M、合并窗口“＋ → 新建实例”）：自己的一页 wizard.html，整个窗口就是向导
+    await ip.setViewportSize({ width: 444, height: 462 });
+    await ip.goto('about:blank'); await ip.goto(dbase + 'wizard.html'); await ip.waitForTimeout(600);
+    const ww = await ip.evaluate(() => { const w = document.querySelector('.wzpage > .wz'), a = w?.querySelector('.acts')?.getBoundingClientRect();
+      return { win: document.documentElement.classList.contains('wzwin'), wz: !!w, over: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, full: w ? Math.round(w.getBoundingClientRect().width) === innerWidth : false, foot: a ? Math.round(innerHeight - a.bottom) : -1, focus: document.activeElement?.matches?.('.wz input.field'), mods: performance.getEntriesByType('resource').filter((r) => /\.js$/.test(r.name)).map((r) => r.name.split('/').pop()) }; });
+    check('电脑向导小窗口（wizard.html）：整个窗口就是向导，按钮贴底，不溢出，光标在备注框', ww.win && ww.wz && !ww.over && ww.full && ww.foot >= 8 && ww.foot <= 24 && ww.focus, ww);
+    check('电脑向导小窗口：只装向导要的代码（不带设置页、节点面板）', ww.mods.length > 0 && !ww.mods.some((m) => ['app.js', 'panel.js', 'pages.js', 'instances.js', 'usage.js'].includes(m)), ww.mods);
     await ip.screenshot({ path: path.join(out, 'desk-wizard-window.png') });
+    await ip.keyboard.press('Enter'); await ip.waitForTimeout(450);
+    await ip.screenshot({ path: path.join(out, 'desk-wizard-window-region.png') });
+    const wo2 = await ip.evaluate(() => ({ over: document.documentElement.scrollHeight > innerHeight, n: document.querySelectorAll('.wz .chip2').length, foot: Math.round(innerHeight - document.querySelector('.wz .acts').getBoundingClientRect().bottom) }));
+    check('电脑向导小窗口：第 2 步的国家排得下，不出滚动条', !wo2.over && wo2.n >= 2 && wo2.foot >= 8, wo2);
+    await ip.evaluate(() => document.querySelectorAll('.wz .chip2')[0].click()); await ip.waitForTimeout(700);
+    deskProgHold = 8;
+    await ip.keyboard.press('Enter'); await ip.waitForTimeout(2600);
+    dso = await dOpen();
+    check('电脑向导小窗口：创建后窗口不关，显示进度（第 8 步“启动浏览器”）', dso?.stage === 'open' && dso.l === '启动浏览器…' && dso.c === '8 / 8', dso);
+    await ip.screenshot({ path: path.join(out, 'desk-wizard-window-opening.png') });
+    deskProgHold = 0;
+    const wdone = await ip.waitForFunction(() => document.querySelector('.wz')?.dataset.stage === 'done', null, { timeout: 8000 }).then(() => true, () => false);
+    await ip.screenshot({ path: path.join(out, 'desk-wizard-window-done.png') });
+    const wbye = await ip.waitForFunction(() => document.body.classList.contains('bye') || /app\.html/.test(location.href), null, { timeout: 3000 }).then(() => true, () => false);
+    check('电脑向导小窗口：窗口出来以后打勾，内容淡出再关窗口', wdone && wbye, { wdone, wbye });
+    await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#new'); await ip.waitForTimeout(500);
+    check('电脑：老地址 app.html#new 转到 wizard.html', /wizard\.html$/.test(ip.url()), ip.url());
     await ip.setViewportSize({ width: 1280, height: 820 }); }
   const pp = await ctx.newPage();
   await pp.goto(base + 'app.html#instances');

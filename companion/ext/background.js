@@ -110,12 +110,12 @@ async function handle(e, c) {
   }
 }
 
-// 新建向导的小窗口（决策 UI-25）：只有向导一页（app.html#new），建好 / 取消就自己关掉。已经开着一个就把它提到前面。
+// 新建向导的小窗口（决策 UI-25、UI-31）：只有向导一页（wizard.html，只装向导要的代码，开得快），建好 / 取消就自己关掉。已经开着一个就把它提到前面。
 async function wizardWindow() {
-  const url = chrome.runtime.getURL('app.html#new');
+  const url = chrome.runtime.getURL('wizard.html');
   const [have] = await chrome.tabs.query({ url });
   if (have) { await chrome.windows.update(have.windowId, { focused: true }); return; }
-  const cur = await chrome.windows.getLastFocused().catch(() => null), w = 440, hh = 560;
+  const cur = await chrome.windows.getLastFocused().catch(() => null), w = 460, hh = 500;
   const pos = cur && cur.width ? { left: Math.round(cur.left + (cur.width - w) / 2), top: Math.round(cur.top + Math.max(40, (cur.height - hh) / 3)) } : {};
   await chrome.windows.create({ url, type: 'popup', width: w, height: hh, focused: true, ...pos });
 }

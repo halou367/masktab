@@ -592,6 +592,12 @@ func (a *App) routes(mux *http.ServeMux) {
 		}()
 		reply(w, map[string]any{"id": id, "no": no, "note": note}, nil)
 	})
+	mux.HandleFunc("GET /api/instances/{id}/progress", func(w http.ResponseWriter, r *http.Request) {
+		// 新建向导的进度（decisions UI-31）：带着上次的 key 来，没变化最多等 wait 毫秒（上限 5 秒，手机那头转发 GET 的时限是 15 秒）
+		q := r.URL.Query()
+		ms, _ := strconv.Atoi(q.Get("wait"))
+		reply(w, a.WaitProgress(r.PathValue("id"), q.Get("key"), time.Duration(min(max(ms, 0), 5000))*time.Millisecond), nil)
+	})
 	mux.HandleFunc("POST /api/instances/{id}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		switch r.PathValue("action") {

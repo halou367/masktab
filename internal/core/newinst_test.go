@@ -3,6 +3,7 @@ package core
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/halou367/masktab/internal/model"
 )
@@ -54,5 +55,54 @@ func TestWizardHost(t *testing.T) {
 	r.Running, r.Seen = true, 5
 	if a.wizardHostLocked() != in.ID {
 		t.Fatal("应挑开着的那个")
+	}
+}
+
+// 新建向导的进度（decisions UI-31）：没变化要等，变了马上回；开起来以后不再带着“线路没确认”的原因报失败。
+func TestLaunchProgress(t *testing.T) {
+	a := healApp(t)
+	id, no, _ := a.CreateInstance(newOpts{})
+	p := a.WaitProgress(id, "", 0)
+	if p.No != no || p.Starting || p.Running || p.Step != 0 || p.Total != len(LaunchSteps) {
+		t.Fatalf("还没启动：%+v", p)
+	}
+	a.mu.Lock()
+	r := a.rtLocked(id)
+	r.Starting, r.Step = true, 3
+	a.mu.Unlock()
+	p2 := a.WaitProgress(id, p.Key, time.Second)
+	if p2.Key == p.Key || p2.Step != 3 || p2.Label != LaunchSteps[2] || !p2.Starting {
+		t.Fatalf("启动中第 3 步：%+v", p2)
+	}
+	// 没变化：等满时间再回同一个 key
+	t0 := time.Now()
+	if p3 := a.WaitProgress(id, p2.Key, 120*time.Millisecond); p3.Key != p2.Key || time.Since(t0) < 100*time.Millisecond {
+		t.Fatalf("没变化应该等：%+v（%v）", p3, time.Since(t0))
+	}
+	// 等的过程中变了：马上回
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		a.mu.Lock()
+		r.Step = 8
+		a.mu.Unlock()
+	}()
+	t0 = time.Now()
+	if p4 := a.WaitProgress(id, p2.Key, 3*time.Second); p4.Step != 8 || time.Since(t0) > time.Second {
+		t.Fatalf("变了应该马上回：%+v（%v）", p4, time.Since(t0))
+	}
+	a.mu.Lock()
+	r.Starting, r.Running, r.Step, r.Error = false, true, 0, "线路没确认"
+	a.mu.Unlock()
+	if p5 := a.WaitProgress(id, "", 0); !p5.Running || p5.Error != "" || p5.Shown {
+		t.Fatalf("开起来了：%+v", p5)
+	}
+	a.mu.Lock()
+	r.Running, r.Error = false, "启动内核失败"
+	a.mu.Unlock()
+	if p6 := a.WaitProgress(id, "", 0); p6.Running || p6.Error == "" {
+		t.Fatalf("没开成要带原因：%+v", p6)
+	}
+	if p7 := a.WaitProgress("nope", "", 0); !p7.Gone {
+		t.Fatalf("不存在的实例：%+v", p7)
 	}
 }

@@ -18,6 +18,8 @@
   const MAX_NODES = 4000, BATCH_N = 60, BATCH_CH = 4500, PAR = 3;
   const CJK = /[\u3400-\u9fff\uf900-\ufaff]/g, WORD = /[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u06FF\u0900-\u0DFF\u0E00-\u0E7F\u1100-\u11FF\u3040-\u30FF\uAC00-\uD7AF]/;
   let on = false, busy = false, gen = 0, mo = null, moT = 0;
+  // 手机上往 logcat 里记一行结果（模拟器冒烟测试看这个；内容脚本的 console 是自己的，网页脚本看不到）
+  const log = (...a) => { if (GECKO) { try { console.info('MaskTab 翻译', ...a); } catch { /* 忽略 */ } } };
   const orig = new Map();     // 文字节点 → 原文
   const attrs = [];           // [元素, 属性名, 原值]
   const cache = new Map();    // 原文 → 译文（这一页里重复的句子只翻一次）
@@ -166,9 +168,10 @@
     const r = await run([...nodes, ...fake], g);
     busy = false;
     if (r.stale) return;
-    if (!nodes.length && !fake.length) { on = false; say('这一页没有需要翻译的外文'); return; }
-    if (r.err && !orig.size) { on = false; say('翻译失败：' + (r.err.message || r.err), { bad: true }); return; }
+    if (!nodes.length && !fake.length) { on = false; log('没有外文'); say('这一页没有需要翻译的外文'); return; }
+    if (r.err && !orig.size) { on = false; log('失败', String(r.err.message || r.err)); say('翻译失败：' + (r.err.message || r.err), { bad: true }); return; }
     attrPass();
+    log(r.err ? '部分失败 ' + (r.err.message || r.err) : '完成', engine ? '微软' : '谷歌', orig.size + ' 段');
     document.documentElement.setAttribute('data-mt-translated', TL); // 只给自己的样式用；网页脚本看到也只知道被翻译过（和浏览器自带翻译一样）
     say(r.err ? `部分翻译失败：${r.err.message || r.err}` : `已翻译为中文${engine ? '（微软）' : '（谷歌）'}`, { undo: true, bad: !!r.err });
     watch();
@@ -180,6 +183,7 @@
     orig.clear();
     for (const [e, a, v] of attrs.splice(0)) e.setAttribute(a, v);
     document.documentElement.removeAttribute('data-mt-translated');
+    log('已显示原文');
     say('已显示原文');
   }
   // 翻译开着时，网页后来加出来的文字也翻（滚动加载、单页应用换内容），最多每 600 毫秒一次

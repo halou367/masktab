@@ -653,6 +653,7 @@ class MainActivity : Activity(), CoreUi {
                 toolbar.visibility = View.GONE
                 pull.enabled2 = false
                 gecko.requestFocus()
+                fadeIn(0f) // 页面不是“啪”地换上来（决策 UI-31）
             }
             applyBars()
             logi("内置页面 $route")
@@ -685,6 +686,15 @@ class MainActivity : Activity(), CoreUi {
         try { panel?.let { if (it.isOpen) { it.loadUri(Core.pageUrl("idle")); it.setActive(false) } } } catch (e: Exception) { logw("内置页面收起出错", e) }
         if (Core.curTab() == null) { try { gecko.releaseSession() } catch (e: Exception) { logw("释放会话出错", e) }; shown = null }
         onTabsChanged()
+        fadeIn(0f) // 收起页面回到网页：同样淡入（换了实例时 onTabsChanged 里那一下从 0.35 起，这里从头来，盖过它）
+    }
+
+    /** 网页区域从 [from] 淡入到不透明（内置页面打开 / 收起、换实例；时长和曲线照决策 UI-26）。系统关了动画就不放。 */
+    private fun fadeIn(from: Float) {
+        pull.animate().cancel()
+        if (!Motion.on(this)) { pull.alpha = 1f; return }
+        pull.alpha = from
+        pull.animate().alpha(1f).setDuration(Motion.M).setInterpolator(Motion.dec).start()
     }
 
     // ---------- 浮层：头像菜单、三点菜单、标签页切换器（原生，决策 UI-2） ----------

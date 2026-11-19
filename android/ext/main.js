@@ -206,13 +206,16 @@ function render(force) {
       exits: () => exitsView(c), addons: addonsPage, diag: () => diagView(c), history: historyPage, downloads: downloadsPage,
       menu: () => [appBar('', back), menuView(st, { node: () => open('node'), fp: () => open('fp'), open, render: () => render(true) })],
       // 新建实例向导（头像菜单的“新建实例”由 app 打开这一页，决策 UI-25）：建好后 app 收起页面并切到新实例；取消 = 收起
-      new: () => wizardPage({ st, onDone: () => {}, onCancel: () => (stack.length ? goBack() : closeMe()) }),
+      // 点了“创建”之后向导留着显示启动进度（决策 UI-31）；开好了 app 自己切到新实例并收起这一页（Bridge.after → Core.openWhenReady），
+      // 这里只留一手：过了 1.5 秒页面还在就自己收起。“在后台继续”= 现在就收起。
+      new: () => wizardPage({ st, onDone: () => setTimeout(() => { if (pageOf() === 'new') closeMe(); }, 1500), onHide: closeMe, onCancel: () => (stack.length ? goBack() : closeMe()) }),
     }[p] || (() => settingsHome(c));
     const kids = [view()].flat(Infinity).filter(Boolean);
     const snap = root.dataset.page === p ? flipSnap(root) : null; // 同一页里重画：列表增删、换位置有过渡（决策 UI-26）
     document.body.className = 'pg-' + p.replace('/', '-');
     root.className = p === 'node' || p === 'fp' ? 'np' : '';
-    root.replaceChildren(...kids);
+    // 还是同一个元素（新建向导：状态一变就重画，而它是常驻的同一个）：不要摘下来再放回去——那样里面的动画全部从头放一遍，光标也丢
+    if (!(kids.length === 1 && root.childNodes.length === 1 && root.firstChild === kids[0])) root.replaceChildren(...kids);
     root.dataset.page = p;
     flipPlay(snap, root);
     if (p === 'node' || p === 'fp') panel.after();

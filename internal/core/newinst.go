@@ -5,8 +5,10 @@ package core
 // 不再是“先按默认建好并启动、再 PATCH 名称和地区”（那样启动时的选线和随后的改地区会撞在一起，第 2 轮留下的时序问题）。
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/halou367/masktab/internal/model"
@@ -83,4 +85,55 @@ func (a *App) wizardHostLocked() string {
 		}
 	}
 	return best
+}
+
+// LaunchProgress 是一个实例“开到哪一步了”（decisions UI-31）：新建向导点了“创建”之后留在原地显示进度用。
+// 比整份状态小得多，而且能等：页面带着上一次的 Key 来问，没变化就等到有变化（或者到时间）再回，进度条跟得上每一步。
+type LaunchProgress struct {
+	Key      string `json:"key"`
+	No       int    `json:"no"`
+	Step     int    `json:"step"`  // 1..Total；没在启动时是 0
+	Total    int    `json:"total"` // 一共几步
+	Label    string `json:"label"` // 这一步在做什么
+	Starting bool   `json:"starting"`
+	Running  bool   `json:"running"`
+	Shown    bool   `json:"shown"` // 浏览器窗口已经起来、伴随扩展连上了（手机上没有这一说，一直是 false）
+	Error    string `json:"error,omitempty"`
+	Gone     bool   `json:"gone,omitempty"` // 实例已经不在了（被删）
+}
+
+func (a *App) launchProgress(id string) LaunchProgress {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p := LaunchProgress{Total: len(LaunchSteps)}
+	in := a.instLocked(id)
+	if in == nil {
+		p.Gone, p.Key = true, "gone"
+		return p
+	}
+	p.No = in.No
+	if r := a.rt[id]; r != nil {
+		p.Starting, p.Running, p.Error, p.Shown = r.Starting, r.Running && !r.Stopping, r.Error, r.Running && r.Seen > 0
+		if r.Starting {
+			p.Step = min(max(r.Step, 1), p.Total)
+			p.Label = LaunchSteps[p.Step-1]
+		}
+		if p.Running { // 窗口照开、但线路没确认（F-HEAL）：不算“没打开”，原因在实例卡片上看
+			p.Error = ""
+		}
+	}
+	p.Key = fmt.Sprintf("%d|%t|%t|%t|%s", p.Step, p.Starting, p.Running, p.Shown, p.Error)
+	return p
+}
+
+// WaitProgress：情况和 key 不一样就马上回；一样就等到变了或者过了 wait。
+func (a *App) WaitProgress(id, key string, wait time.Duration) LaunchProgress {
+	end := time.Now().Add(wait)
+	for {
+		p := a.launchProgress(id)
+		if p.Key != key || !time.Now().Before(end) {
+			return p
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
 }

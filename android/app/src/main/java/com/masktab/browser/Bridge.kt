@@ -135,11 +135,13 @@ object Bridge {
     /** 核心服务办完之后 app 这边接着做的事。在后台线程，状态已经取过新的。 */
     private fun after(m: String, seg: List<String>, b: JSONObject?, body: String) {
         when {
-            // 新建实例：核心服务建好就自己启动它，这里等它就绪后切过去（请求里写了 switch:false 的不切）
+            // 新建实例：核心服务建好就自己启动它，这里等它就绪后切过去（请求里写了 switch:false 的不切）。
+            // 向导那一页先不收（决策 UI-31）：它原地显示启动进度；开好了切到新实例、再把页面收起——
+            // 以前一建好就收起，回到原来那个实例待上几秒，然后突然换成另一个。开不了时页面也留着（原因写在向导里，可以重试）。
             m == "POST" && seg.size == 2 && seg[1] == "instances" -> {
                 val id = try { JSONObject(body).str("id") } catch (e: Exception) { "" }
                 logi("新建实例 #${Host.get(id)?.no ?: "?"}")
-                if (id.isNotEmpty() && b?.optBoolean("switch", true) != false) ui { Core.ui?.closeSheet(); Core.openWhenReady(id) }
+                if (id.isNotEmpty() && b?.optBoolean("switch", true) != false) ui { Core.openWhenReady(id, closePage = true) }
             }
             // 重启实例（重新选线、探出口）：好了以后把它的标签页刷新一遍
             m == "POST" && seg.size == 4 && seg[1] == "instances" && seg[3] == "restart" -> {

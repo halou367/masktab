@@ -318,7 +318,7 @@ object Core {
     fun open(id: String) {
         val i = Host.get(id) ?: return
         if (i.running) { switchTo(id); return }
-        pendingOpen = id; pendingAt = System.currentTimeMillis()
+        pendingOpen = id; pendingAt = System.currentTimeMillis(); pendingClose = false
         ui?.toast("正在打开 #${i.no}…")
         launch(id)
     }
@@ -420,10 +420,11 @@ object Core {
         pendingOpen?.let { id ->
             val i = Host.get(id)
             when {
-                i == null -> pendingOpen = null
-                i.running -> { pendingOpen = null; switchTo(id) }
-                !i.starting && i.error.isNotEmpty() -> { pendingOpen = null; ui?.toast("#${i.no} 打不开：${i.error}") }
-                System.currentTimeMillis() - pendingAt > 45000 -> { pendingOpen = null; ui?.toast("#${i.no} 一直没启动好") }
+                i == null -> { pendingOpen = null; pendingClose = false }
+                i.running -> { pendingOpen = null; switchTo(id); pageAfterOpen() }
+                // 新建向导开着时（pendingClose）原因写在向导里，不再另弹一条
+                !i.starting && i.error.isNotEmpty() -> { pendingOpen = null; if (!pendingClose) ui?.toast("#${i.no} 打不开：${i.error}"); pendingClose = false }
+                System.currentTimeMillis() - pendingAt > 45000 -> { pendingOpen = null; pendingClose = false; ui?.toast("#${i.no} 一直没启动好") }
             }
         }
         // 当前显示的实例没了（被删）：换到第一个；一个都不剩就新建
@@ -445,12 +446,24 @@ object Core {
                 val id = r.str("id")
                 Host.refresh()
                 logi("新建实例 #${Host.get(id)?.no ?: "?"}")
-                ui { Host.saveCurrent(id); pendingOpen = id; pendingAt = System.currentTimeMillis(); Host.get(id)?.let { if (it.running) switchTo(id) } }
+                ui { Host.saveCurrent(id); pendingOpen = id; pendingAt = System.currentTimeMillis(); pendingClose = false; Host.get(id)?.let { if (it.running) switchTo(id) } }
             } catch (e: Exception) { logw("新建实例失败：${e.message}"); ui { ui?.toast("新建实例失败：${e.message}") } } finally { creating = false }
         }
     }
     /** 等某个实例启动好再切过去（新建、导入之后用）。 */
-    fun openWhenReady(id: String) { pendingOpen = id; pendingAt = System.currentTimeMillis(); Host.get(id)?.let { if (it.running) { pendingOpen = null; switchTo(id) } } }
+    fun openWhenReady(id: String, closePage: Boolean = false) {
+        pendingOpen = id; pendingAt = System.currentTimeMillis(); pendingClose = closePage
+        Host.get(id)?.let { if (it.running) { pendingOpen = null; switchTo(id); pageAfterOpen() } }
+    }
+    /** 等的那个实例开好以后要不要把内置页面收起（新建向导：它留着显示进度，决策 UI-31）。 */
+    private var pendingClose = false
+    /** 新实例已经切过去了：让向导的“已打开”露一下面再收起页面，收起时网页区域淡入（MainActivity.closeSheet）。 */
+    private fun pageAfterOpen() {
+        if (!pendingClose) return
+        pendingClose = false
+        logi("新实例已就绪，切过去并收起向导")
+        mainHandler.postDelayed({ ui?.closeSheet() }, 420)
+    }
 
     /** 核心服务被系统杀掉（安卓 12+ 会清理 app 的子进程）或自己退出：拉起来，把开着标签页的实例重新接上。30 秒内最多一次。 */
     private var lastRevive = 0L

@@ -219,19 +219,25 @@ A shell input keyevent KEYCODE_BACK; sleep 3
 if [ "$(ready settings)" -gt "$n0" ]; then echo "通过：返回键从节点页回到设置首页"; else echo "失败：返回键没有回到设置首页"; shot t-back; fail=1; fi
 closepanel
 # 新建向导走完（页面里的控件，坐标修正已经校准）：下一步（备注不填）→ 跳过（不设期望地区）→ 创建；建好要切到新实例、开出它的新标签页
-n0=$(count "新建实例 #"); t0=$(count "MaskTab 新标签页就绪"); w0=$(ready new)
+n0=$(count "新建实例 #"); t0=$(count "MaskTab 新标签页就绪"); w0=$(ready new); z0=$(count "MaskTab 向导 正在打开"); z1=$(count "MaskTab 向导 已打开"); z2=$(count "新实例已就绪，切过去并收起向导"); z3=$(count "MaskTab 向导 进度")
 A shell am start -n $ACT --es mt_open new > /dev/null
 for k in 1 2 3 4 5 6 7 8; do sleep 1; [ "$(ready new)" -gt "$w0" ] && break; done
 sleep 2; shot t-wiz1
 wizok=1
 for step in "下一步" "跳过" "创建"; do
   if ! tap_desc "$step"; then echo "失败：新建向导里没找到“$step”"; shot "t-wiz-miss"; wizok=0; fail=1; break; fi
-  sleep 2
+  if [ "$step" = "创建" ]; then shot t-wiz-opening; else sleep 2; fi # 点了“创建”马上截一张：向导应该原地换成“正在打开”（决策 UI-31；直连实例开得快，可能已经到“已打开”）
 done
 if [ $wizok = 1 ]; then
   for k in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 1; [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ] && break; done
   sleep 2; shot t-newinst
   if [ "$(count "新建实例 #")" -gt "$n0" ] && [ "$(count "MaskTab 新标签页就绪")" -gt "$t0" ]; then echo "通过：新建向导三步走完，建好并打开了新实例的新标签页"; else echo "失败：新建向导走完后没建出实例（新建 $n0 -> $(count "新建实例 #")，新标签页 $t0 -> $(count "MaskTab 新标签页就绪")）"; fail=1; fi
+  # 决策 UI-31：点“创建”后向导留着显示进度，开好了 app 才切到新实例并收起这一页（以前是一建好就收起，回到旧实例等着）
+  if [ "$(count "MaskTab 向导 正在打开")" -gt "$z0" ] && [ "$(count "MaskTab 向导 已打开")" -gt "$z1" ]; then echo "通过：新建向导：点“创建”后原地显示“正在打开”，开好后显示“已打开”（进度报了 $(( $(count "MaskTab 向导 进度") - z3 )) 步）"
+  else echo "失败：新建向导：没有看到“正在打开 → 已打开”（正在打开 $z0 -> $(count "MaskTab 向导 正在打开")，已打开 $z1 -> $(count "MaskTab 向导 已打开")）"; fail=1; grep "MaskTab 向导" "$OUT/logcat-live.txt" | tail -5 | cut -c1-200; fi
+  if [ "$(count "新实例已就绪，切过去并收起向导")" -gt "$z2" ]; then echo "通过：新建向导：新实例就绪后 app 切过去并收起向导"; else echo "失败：新建向导：新实例就绪后 app 没有收起向导"; fail=1; fi
+  # 收起以后显示的应该是网页（工具栏回来了），不是还停在向导上
+  if tap_native "更多选项"; then sleep 1; A shell input keyevent KEYCODE_BACK; sleep 1; echo "通过：新建向导：收起后回到了新实例的网页（工具栏在）"; else echo "失败：新建向导：开好以后页面没有收起（找不到工具栏）"; shot t-wiz-stuck; fail=1; fi
 fi
 closepanel
 A shell "am start -n $ACT --es mt_inst '#1'" > /dev/null; sleep 3
@@ -712,6 +718,62 @@ P
   return 0
 }
 download_phase || fail=1
+
+# ---------- 网页翻译（决策 UI-27） ----------
+# 在实例 #1（走节点）里打开一页英文，三点菜单点“翻译此页”：整页换成中文，代码和标了“不翻”的不动，后加出来的文字接着翻；
+# 翻译请求是从节点出去的（节点服务端日志里有到翻译接口的连接）；再点一次换回原文。
+# 翻译接口是外面真的服务（谷歌，不通换微软）：模拟器所在的机器连不上它们时这一段报“没验证”，不算失败（和功能坏了分开说）。
+translate_phase() {
+  local W=/tmp/mt-node HOSTIP B L="$OUT/logcat-live.txt" k n0 h0 line ok=0 why
+  HOSTIP=$(hostname -I 2>/dev/null | awk '{print $1}'); B="http://$HOSTIP:18081"
+  curl -fs -m 5 -o /dev/null "$B/tr/page.html" || { echo "失败：翻译：测试网站没起来"; return 1; }
+  # 最后一条 MTTR（网页自己报的文字）：trlast <第几栏，从 1 起>
+  trlast() { grep "MTTR " "$L" | tail -1 | sed 's/.*MTTR //' | tr -d '\r' | awk -F' [|] ' -v n="$1" '{print $n}'; }
+  haszh() { printf '%s' "$1" | python3 -c 'import sys,re; sys.exit(0 if re.search("[\u4e00-\u9fff]", sys.stdin.read()) else 1)'; }
+  trhits() { grep -c "translate.googleapis.com\|edge.microsoft.com" $W/server.log; }
+  A shell "am start -n $ACT --es mt_inst p1" > /dev/null; sleep 6; closepanel
+  n0=$(count "MTTR Welcome")
+  A shell am start -a android.intent.action.VIEW -d "$B/tr/page.html" -n $ACT > /dev/null
+  for k in $(seq 1 20); do [ "$(count "MTTR Welcome")" -gt "$n0" ] && break; sleep 1; done
+  sleep 2; shot 50-tr-before
+  if [ "$(count "MTTR Welcome")" -le "$n0" ]; then echo "失败：翻译：测试页没打开"; return 1; fi
+  # 机器本身连不连得上翻译接口（不经模拟器）：连不上的话后面翻不出来不算功能坏
+  local net=0
+  curl -s -m 8 -o /dev/null "https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=zh-CN&dt=t&format=text&q=hello" && net=1
+  [ $net = 1 ] || { curl -s -m 8 -o /dev/null "https://edge.microsoft.com/" && net=1; }
+  echo "说明：这台机器直接连翻译接口：$([ $net = 1 ] && echo 通 || echo 不通)"
+  h0=$(trhits); n0=$(count "MaskTab 翻译")
+  if ! tap_native "更多选项"; then echo "失败：翻译：没找到三点菜单按钮"; return 1; fi
+  sleep 2; shot 51-tr-menu
+  if ! tap_native "翻译此页"; then echo "失败：翻译：三点菜单里没找到“翻译此页”"; A shell input keyevent KEYCODE_BACK; return 1; fi
+  echo "通过：翻译：三点菜单里有“翻译此页”"
+  for k in $(seq 1 40); do [ "$(count "MaskTab 翻译")" -gt "$n0" ] && break; sleep 1; done
+  sleep 2; shot 52-tr-after
+  line=$(grep "MaskTab 翻译" "$L" | tail -1 | sed 's/.*MaskTab 翻译 *//' | tr -d '\r' | cut -c1-160)
+  echo "说明：内容脚本报的结果：${line:-（没有）}"
+  if haszh "$(trlast 1)" && haszh "$(trlast 2)" && haszh "$(trlast 3)"; then ok=1; echo "通过：翻译：标题和两段正文都换成了中文（$(trlast 1) / $(trlast 2)）"
+  elif [ $net = 0 ]; then echo "没验证：翻译：这台机器连不上翻译接口，页面没翻出来（${line:-没有结果}）"; shot 52-tr-nonet; return 0
+  else echo "失败：翻译：页面没有换成中文（标题现在是“$(trlast 1)”；${line:-内容脚本没有报结果}）"; grep "MTTR \|MaskTab 翻译\|认不出实例" "$L" | tail -6 | cut -c1-220; return 1; fi
+  if [ "$(trlast 4)" = "const answer = 42;" ] && [ "$(trlast 5)" = "Do not translate this sentence." ]; then echo "通过：翻译：代码块和标了“不翻译”的那句没动"
+  else echo "失败：翻译：不该翻的被动了（代码“$(trlast 4)”，不翻的“$(trlast 5)”）"; fail=1; fi
+  # 后加出来的一段（文字头一次变的两秒后网页自己加的）也要翻
+  for k in $(seq 1 15); do haszh "$(trlast 6)" && break; sleep 1; done
+  if haszh "$(trlast 6)"; then echo "通过：翻译：翻译开着时后加出来的文字也翻了（$(trlast 6)）"; else echo "失败：翻译：后加出来的文字没翻（现在是“$(trlast 6)”）"; fail=1; fi
+  shot 53-tr-late
+  if [ "$(trhits)" -gt "$h0" ]; then echo "通过：翻译：请求是从实例 #1 的节点出去的（节点日志里多了 $(( $(trhits) - h0 )) 条到翻译接口的连接）"
+  else echo "失败：翻译：节点日志里没有到翻译接口的连接（请求没走实例的线路？）"; fail=1; grep -o "[a-z.]*googleapis[^ ]*\|edge.microsoft[^ ]*" $W/server.log | sort | uniq -c | head -5; fi
+  # 再点一次 = 换回原文
+  n0=$(count "MaskTab 翻译 已显示原文")
+  if tap_native "更多选项"; then sleep 2
+    if tap_native "翻译此页"; then for k in $(seq 1 10); do [ "$(count "MaskTab 翻译 已显示原文")" -gt "$n0" ] && break; sleep 1; done; sleep 2; shot 54-tr-restored
+      if [ "$(trlast 1)" = "Welcome to our online bookstore" ] && [ "$(trlast 2)" = "Good morning. The weather is very nice today." ]; then echo "通过：翻译：再点一次换回了原文"
+      else echo "失败：翻译：再点一次没有换回原文（标题现在是“$(trlast 1)”）"; fail=1; fi
+    else echo "失败：翻译：第二次打开三点菜单没找到“翻译此页”"; fail=1; A shell input keyevent KEYCODE_BACK; fi
+  else echo "失败：翻译：第二次没找到三点菜单按钮"; fail=1; fi
+  grep "MTTR \|MaskTab 翻译" "$L" | sed 's/.*GeckoConsole: //' | cut -c1-200 | tail -12
+  return 0
+}
+translate_phase || fail=1
 
 A logcat -d > "$OUT/logcat-round2-all.txt"
 if ourcrash < "$OUT/logcat-round2-all.txt" > "$OUT/crash-proxy.txt"; then echo "第二轮 logcat 里有崩溃："; cat "$OUT/crash-proxy.txt"; fail=1; else rm -f "$OUT/crash-proxy.txt"; fi
