@@ -113,6 +113,17 @@ func (a *App) checksLocked(in *model.Instance, rt *Runtime, info *fpInfo) *check
 	default:
 		add(check{K: "cf", T: "CF 网站可达", V: "—", NA: true})
 	}
+	// 6b. CF 网站看到的出口 IP 固定（decisions SI-1）：Cloudflare 的放行凭证换了 IP 就要重新验证，低信誉出口上常常要人点一下。
+	switch {
+	case !on || pr == nil || pr.CF == nil:
+		add(check{K: "cfexit", T: "CF 网站出口固定", V: "—", NA: true})
+	case cfEgress(pr.CF):
+		add(check{K: "cfexit", T: "CF 网站出口固定", V: "走的是 Cloudflare 自己的出口，IP 随时在变，CF 网站会反复要求验证；请选一个 ProxyIP", OK: false})
+	case rt.ExitMoved != "":
+		add(check{K: "cfexit", T: "CF 网站出口固定", V: "这次换过 " + rt.ExitMoved + "，CF 网站可能要再验证一次", OK: false})
+	default:
+		add(check{K: "cfexit", T: "CF 网站出口固定", V: pr.CF.IP, OK: true})
+	}
 	// 7. 出口纯净度不低于 50（查不到就不计）。纯净度 = 100 − IPPure 系数，所以也就是“IPPure 系数不高于 50”（50 起是它的“中度风险”）。
 	if q := a.ipqOf(ex); on && q != nil && q.View().Score >= 0 {
 		v := q.View()

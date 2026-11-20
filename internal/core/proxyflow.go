@@ -376,14 +376,67 @@ func pinOf(in *model.Instance, pr *model.ExitProbe) *model.IPInfo {
 	return nil
 }
 
+// trustedSrc 是能拿来定身份（时区 / 语言）的那一路出口：tzSrc 的结果，但 CF 那一路没探到、只剩 Cloudflare 自己的出站地址
+// （Workers / WARP 的 104.28.x，归属地跟着 Cloudflare 机房走，和 ProxyIP 无关）时不算数。
+// 以前这种情况会拿它定时区：正式版日志里多个实例一启动先是 Asia/Tokyo（Workers 在成田的出口），几分钟后又变回自己的国家（decisions SI-1）。
+func trustedSrc(in *model.Instance, pr *model.ExitProbe) *model.IPInfo {
+	src := tzSrc(in, pr)
+	if src == nil || src.Timezone == "" || (pr.CF == nil && cfEgress(src)) {
+		return nil
+	}
+	return src
+}
+
+// identLocked 说明实例的时区 / 语言是否已经固定（decisions SI-1）。
+func identLocked(in *model.Instance) bool {
+	return in.Kind != "normal" && !in.FollowExit && in.Ident != nil && in.Ident.TZ != ""
+}
+
+// langFor 是某个出口国家对应的语言（没有对应的用 en-US）。
+func langFor(country string) string {
+	if l := probe.CountryLang[strings.ToUpper(country)]; l != "" {
+		return l
+	}
+	return "en-US"
+}
+
+// lockIdent 在实例还没有固定身份时，用这次可信的出口定下时区和语言（调用方持有 a.mu）。返回是否新定了。
+// fallback 是上一次记下的出口（state/lastexit.json），这次探不到可信出口时用它：升级上来的老实例按它最近一次的样子固定。
+func lockIdent(in *model.Instance, pr, fallback *model.ExitProbe) bool {
+	if in.Kind == "normal" || in.FollowExit || in.Ident != nil || in.Proxy.State != "on" {
+		return false
+	}
+	src := trustedSrc(in, pr)
+	if src == nil && fallback != nil {
+		src = trustedSrc(in, fallback)
+	}
+	if src == nil {
+		return false
+	}
+	in.Ident = &model.Ident{TZ: src.Timezone, Lang: langFor(src.Country), Country: strings.ToUpper(src.Country), At: now()}
+	if pr != nil && pr.CF != nil && !cfEgress(pr.CF) {
+		in.Ident.ExitIP = pr.CF.IP
+	}
+	in.UpdatedAt = now()
+	return true
+}
+
 // expectTZPinned 同 expectTZ；pin 是实例本次启动时定时区用的那一路出口（国家 + 时区）。
-// 出口国家没变时沿用启动时的时区：同一个国家里换了 ProxyIP（美国东西海岸之类）或只换了入口，都不算“时区变了”，
-// 不提示重启（decisions A-12）。国家真的变了才按新出口算。
+// 身份固定了（默认）：时区、语言就是固定的那一套，出口怎么变都不改（decisions SI-1）。
+// 跟随出口（设置里选的，旧行为）：出口国家没变时沿用启动时的时区——同一个国家里换了 ProxyIP（美国东西海岸之类）或只换了入口，
+// 都不算“时区变了”，不提示重启（decisions A-12）；国家真的变了才按新出口算。
+// 这次没探到可信的出口（只有 Workers 那一路）：有启动时的值就用它，不再拿 Workers 的机房定时区。
 func expectTZPinned(in *model.Instance, pr *model.ExitProbe, pin *model.IPInfo) (tz, lang, country string) {
 	if in.Kind == "normal" {
 		return "", "", ""
 	}
-	src := tzSrc(in, pr)
+	src := trustedSrc(in, pr)
+	if src == nil && pin != nil && pin.Timezone != "" {
+		src = pin
+	}
+	if src == nil {
+		src = tzSrc(in, pr) // 什么都没有：只能按这一路（和以前一样），但不会拿它固定身份
+	}
 	if src != nil && pin != nil && pin.Country != "" && pin.Timezone != "" && src.Country == pin.Country {
 		cp := *src
 		cp.Timezone = pin.Timezone
@@ -392,21 +445,43 @@ func expectTZPinned(in *model.Instance, pr *model.ExitProbe, pin *model.IPInfo) 
 	if src != nil {
 		tz, country = src.Timezone, src.Country
 	}
+	if identLocked(in) {
+		tz, country = in.Ident.TZ, in.Ident.Country
+	}
 	if in.Proxy.State != "on" {
 		tz, country = "", ""
 	}
 	if in.TZ.Mode == "fixed" && in.TZ.Fixed != "" {
 		tz = in.TZ.Fixed
 	}
-	if in.Locale.Mode == "fixed" && in.Locale.Fixed != "" {
+	switch {
+	case in.Locale.Mode == "fixed" && in.Locale.Fixed != "":
 		lang = in.Locale.Fixed
-	} else if country != "" {
-		lang = probe.CountryLang[country]
-		if lang == "" {
-			lang = "en-US"
-		}
+	case identLocked(in) && in.Proxy.State == "on":
+		lang = in.Ident.Lang
+	case country != "":
+		lang = langFor(country)
 	}
 	return
+}
+
+// noteCFExit 记下 Cloudflare 上的网站这次看到的出口 IP；和上次不同时在运行时状态里留一条提示（调用方持有 a.mu）。
+// 实测（decisions SI-1）：同一套身份、同一份放行凭证，换到另一个低信誉的出口 IP，arena.ai 会重新弹验证；换回原来的 IP 不弹。
+func noteCFExit(in *model.Instance, r *Runtime, pr *model.ExitProbe) bool {
+	if in.Ident == nil || pr == nil || pr.CF == nil || pr.CF.IP == "" || cfEgress(pr.CF) {
+		return false
+	}
+	old := in.Ident.ExitIP
+	if old == pr.CF.IP {
+		return false
+	}
+	in.Ident.ExitIP = pr.CF.IP
+	in.UpdatedAt = now()
+	if old != "" && r != nil {
+		r.ExitMoved = old + " → " + pr.CF.IP
+		log.Printf("实例 #%d：CF 网站看到的出口换了（%s），身份没变；低信誉出口上可能要再验证一次", in.No, r.ExitMoved)
+	}
+	return true
 }
 
 // refresh 在实例的代理选择变化后调用：先断流 → 应用配置 → 经探测通道测延迟与出口 →
@@ -501,6 +576,13 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	lat := <-latc
 	a.mu.Lock()
 	r.Probe, r.Latency = &pr, lat
+	if masked && state == "on" && pr.Error == "" {
+		// 身份还没定（第一次启动时没探到可信出口）：这次探到了就定下来。运行中定下来的和启动时用的不同，会按下面的判定提示需重启（只有这一次）。
+		changed := lockIdent(in, &pr, nil)
+		if noteCFExit(in, r, &pr) || changed {
+			a.saveLocked("instances")
+		}
+	}
 	judgeExit(in, r, &pr, want.want == "REJECT", want.err, state, masked, a.adapter.Caps().Live)
 	if masked && state == "on" && want.want != "REJECT" {
 		a.rememberExitLocked(id, in, &pr)

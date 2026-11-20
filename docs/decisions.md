@@ -1663,3 +1663,30 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   - 其余：预览、主题、发件人先去 HTML 标签、解开 `&nbsp;` 这类实体再并成一行（`clean`）；正文 iframe 画出来之前显示“正文加载中”；搜索（发件人 / 主题 / 摘要 / 验证码，跨文件夹）；提示条 `toast` 可以带一个按钮（“撤销”）。
   - **没改**：同一张卡密可以挂到多个实例、导入时把邮箱密码存成“任意站点”的自动填账号、手机系统通知（都在实测报告的改进清单里，等需求方定）。
   - **回退**：界面回到上一版 `mail.js`；`bumpLocked` 里去掉 `mailPoke`；删 `state/mailcache/`。
+
+## 稳定身份（2026-11-20，分支 fix/stable-identity）
+
+### SI-1 实例身份固定、出口稳定：过一次验证以后尽量别再弹（需求方：“每个实例在 arena.ai（以及其他 Cloudflare 站点）验证过一次、登录之后，就像 Cent 浏览器那样尽量不再弹人机验证，即使换了 IP 也一样”）
+
+- **实测结论（需求方 Windows，开发版实例 #4 的放行凭证，项目工作区 `work/stable-id/REPORT.md`）**：同一份 arena.ai 的 `cf_clearance`（+ `__cf_bm`），
+  - **同一个出口 IP**：原样、重启、改时区 + 语言（Asia/Seoul·ko-KR、America/New_York·en-US、Asia/Dhaka·en-US）、换指纹种子（UA-CH 完整版本号、画布、WebGL 都变）、关显卡伪装、几样一起改——**全部不被挑战**，连放行凭证都没重发。
+  - **换出口 IP**（同国的另一个 ProxyIP，或别国的出口）：**每次**第一个请求都被 `403 cf-mitigated: challenge` 拦下，要重新过一遍检测；有时 JS 检测自己补上（看不到框），有时弹出要点的验证框。从新 IP 拿到的放行，换回原来的 IP 又要重来。
+  - 新配置目录：一样要挑战（对照组）。同一个 IP 上放行凭证大约 30 分钟后也会被要求重新检测一次（`__cf_bm` 过期），好环境下是静默的。
+  - 所以 arena 的放行**绑的是出口 IP，不是指纹**；用户觉得 Cent 换 IP 不弹，是因为 Cent 的老配置（一个多月、登录了 Google）在重新检测时分数高、静默通过，不是放行能跨 IP。
+- **正式版里看到的 IP / 身份变化（只读日志和配置）**：实例的 ProxyIP 换过国家（#18：Sofia → Kolkata → Amsterdam，#12：Vancouver → Tbilisi）；更新重启后好几个实例先按 **Cloudflare Workers 的出口（104.28.x，成田）** 定成 Asia/Tokyo 启动、几分钟后又按自己的国家重启（`tzSrc` 在 CF 那一路没探到时退回了 Workers 那一路）；开发版 #3（选的韩国）因此成了 Asia/Dhaka。出口“自动”的实例在后台扫描偶尔测不通时，下次启动就换 ProxyIP；`#0` 这类 CF 那一路走 Cloudflare 自己出口的，IP 每条连接都可能变。
+- **做法**：
+  - **身份固定**（`model.Instance.Ident`，`proxyflow.go` 的 `lockIdent` / `expectTZPinned`）：时区、语言在第一次探到**可信**出口（CF 那一路，或不是 Cloudflare 自己的出口）时定下，存进实例；之后不跟出口变，换国家也不提示“需重启”、不断流。升级上来的老实例按这次探测定，这次探不到就按 `state/lastexit.json` 里上次的出口定（就是它最近一直在用的那一套）。手动指定的时区 / 语言仍然优先。
+  - **不再拿 Workers 的出口定时区**（`trustedSrc`）：CF 那一路没探到、只剩 104.28.x 时，不定身份、不改时区；跟随出口模式下沿用启动时的值。
+  - **“跟随出口”改成可选**（`Instance.FollowExit`，指纹页“时区”下拉第二项，选的时候弹确认写清代价）。“按现在的出口重定”按钮给真要把实例搬到别的国家的人（`identReset`）。
+  - **出口粘住**（`pick.go` 的 `pickExit`）：出口“自动”时，当前这个只要没被这次真连的探测判死，就不因为后台扫描一次没测通而换。真不通仍然换（同一个国家里）。
+  - **出口换了要说**：`Ident.ExitIP` 记 CF 网站最近看到的出口；换了在运行时状态 `exitMoved` 里留一条，指纹页写“这次运行中换过 a → b，CF 网站可能要再验证一次”。一致性检查加一项“CF 网站出口固定”（`cfexit`）：CF 那一路是 Cloudflare 自己的出口（IP 随时变）或这次换过，就不过。
+  - **新实例默认不伪装显卡**（`newInstanceLocked`：`disableSpoofing: ["gpu"]`，电脑才有）：内核只改 WebGL、不改 WebGPU，两边对不上。实测关掉显卡伪装不会让 arena 的放行失效。**老实例不动**（用户自己在指纹页关）。
+  - **库里扩展的内容脚本不进 Cloudflare 验证框**（`extlib.guardManifest` / `GuardDir`）：入库时、以及核心服务启动时对已经在库里的扩展，每组 `content_scripts` 加 `exclude_matches: https://challenges.cloudflare.com/*`。起因是需求方装的“鹈鹕鉴定”在所有框架（含 Turnstile 的框）的主世界改写原生函数。这在 arena 上没测出差别（新配置下有没有它都弹），是按 Cloudflare 文档“不支持修改 Web API 的扩展”做的预防。
+- **Cookie / 登录**：查过，**没有问题、没改**：正式版 13 个有 arena Cookie 的实例，`cf_clearance` 都是持久 Cookie（一年）、登录 Cookie 约 400 天，重启后都在（11-13、11-18 发的还在）；代码里没有清 Cookie、临时配置目录、退出时清数据的逻辑（“一次性”实例除外，那是它的用途）；偏好里没有“退出时清除”。
+- **已知代价**：
+  - **升级内核会让所有放行一起失效一次**：UA 里的大版本号、UA-CH 完整版本号、TLS 指纹都跟着内核变，网站会把每个实例看成换了浏览器。升内核（`internal/kernel/fetch.go`）要在发版说明里提醒“升级后各网站可能要再验证一次”。
+  - 固定身份以后，出口换了国家，时区 / 语言会和 IP 所在地对不上（“时区与出口所在地一致”那项会如实不过）。比起每次换出口都“换一台机器”，这个代价小；要跟着走就选“跟随出口”。
+  - 出口粘住以后，后台扫描判慢的 ProxyIP 不会被自动换掉，要等真不通。
+  - IP 本身变了照样要重新检测（这是 Cloudflare 的规则，客户端改不了）；本分支做的是让 IP 尽量不变、变了告诉用户。
+- **检查**：Go `ident_test.go`（定身份、不拿 Workers 出口定、换出口不变、手动优先、跟随出口、直连、普通窗口、出口换了的提示、出口粘住）、`checks_test.go`（多一项 `cfexit`）、`extlib_test.go`（`TestGuardChallenge`）；页面 `flow`：时区下拉三项、默认“固定身份”。
+- **回退**：`expectTZPinned` 里去掉 `identLocked` 那两处、`Launch` / `refreshTry` 去掉 `lockIdent` / `noteCFExit`；`pickExit` 去掉开头那段；`newInstanceLocked` 的 `off` 改回空；`finalize` 去掉 `guardManifest`、`app.go` 去掉 `GuardDir` 循环。实例里多出来的 `ident`、`followExit` 老版本读到会忽略。

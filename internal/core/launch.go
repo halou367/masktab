@@ -289,7 +289,7 @@ func (a *App) Launch(id string) error {
 				}
 			}
 			a.mu.Lock()
-			fixed := in.TZ.Mode == "fixed" && in.TZ.Fixed != ""
+			fixed := (in.TZ.Mode == "fixed" && in.TZ.Fixed != "") || identLocked(in) // 身份固定了：时区不靠这次探测，探不出来也照常开窗口（主通道照样断着）
 			a.mu.Unlock()
 			switch {
 			case res.want == "REJECT":
@@ -322,6 +322,20 @@ func (a *App) Launch(id string) error {
 			g := le.Probe
 			guess = &g
 		}
+	}
+	// 固定身份（decisions SI-1）：还没定的（新实例、升级上来的老实例），用这次可信的出口定下；这次探不到就用上次记下的出口。
+	var lastPr *model.ExitProbe
+	if le, ok := a.lastExit[id]; ok {
+		p := le.Probe
+		lastPr = &p
+	}
+	if lockIdent(in, pr, lastPr) {
+		log.Printf("实例 #%d 身份已固定：时区 %s、语言 %s（之后不再跟着出口变）", in.No, in.Ident.TZ, in.Ident.Lang)
+		a.saveLocked("instances")
+	}
+	r.ExitMoved = ""
+	if pr != nil && noteCFExit(in, nil, pr) {
+		a.saveLocked("instances")
 	}
 	tz, lang, _ := expectTZ(in, pr)
 	r.Probe, r.launchedSrc = pr, pinOf(in, pr)

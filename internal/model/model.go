@@ -16,6 +16,21 @@ type Instance struct {
 	FP         FP        `json:"fp"`
 	TZ         TZ        `json:"tz"`
 	Locale     Locale    `json:"locale"`
+	// Ident 是固定下来的身份（decisions SI-1）：时区、语言在第一次探到可信出口时定下，之后不再跟着出口变。
+	// nil = 还没定（新实例第一次启动前、或一直没探到可信出口）。FollowExit 为真时不用它（旧行为：每次启动按出口算）。
+	Ident      *Ident `json:"ident,omitempty"`
+	FollowExit bool   `json:"followExit,omitempty"`
+}
+
+// Ident 是实例固定的身份。时区 / 语言只在这里定一次；出口换了国家也不改（换了反而让网站觉得“换了一台机器”）。
+type Ident struct {
+	TZ      string `json:"tz"`
+	Lang    string `json:"lang"`
+	Country string `json:"country,omitempty"` // 定身份时出口所在的国家（只用来提示“出口已不在这个国家”）
+	// ExitIP 是 Cloudflare 上的网站最近一次看到的出口 IP（CF 那一路）。换了就提示一次：放行凭证（cf_clearance）
+	// 换了 IP 以后在低信誉出口上会失效，要再验证一次（decisions SI-1 实测）。
+	ExitIP string `json:"exitIp,omitempty"`
+	At     int64  `json:"at"`
 }
 
 type InstProxy struct {

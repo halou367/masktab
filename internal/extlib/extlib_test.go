@@ -204,3 +204,30 @@ func TestInstallDirAgain(t *testing.T) {
 		t.Fatalf("源带密钥：%+v %v（不该问：%q）", own, err, asked)
 	}
 }
+
+// 库里扩展的内容脚本不进 Cloudflare 验证框（decisions SI-1）：入库时加上，老的目录补上，已经有的不重复加。
+func TestGuardChallenge(t *testing.T) {
+	dir := t.TempDir()
+	m := `{"manifest_version":3,"name":"x","version":"1","content_scripts":[{"matches":["<all_urls>"],"all_frames":true,"js":["a.js"]},{"matches":["https://a.com/*"],"exclude_matches":["https://b.com/*"],"js":["b.js"]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ch, err := GuardDir(dir)
+	if err != nil || !ch {
+		t.Fatalf("应改动：%v %v", ch, err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	var got struct {
+		ContentScripts []struct {
+			Exclude []string `json:"exclude_matches"`
+		} `json:"content_scripts"`
+	}
+	_ = json.Unmarshal(raw, &got)
+	if len(got.ContentScripts) != 2 || len(got.ContentScripts[0].Exclude) != 1 || got.ContentScripts[0].Exclude[0] != ChallengeOrigin ||
+		len(got.ContentScripts[1].Exclude) != 2 || got.ContentScripts[1].Exclude[1] != ChallengeOrigin {
+		t.Fatalf("exclude_matches 不对：%s", raw)
+	}
+	if ch, _ := GuardDir(dir); ch {
+		t.Fatal("第二次不该再改")
+	}
+}

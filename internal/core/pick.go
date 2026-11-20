@@ -167,7 +167,14 @@ func exitOrder(ps []cand, region string, exclude map[string]bool) []cand {
 
 // pickExit 出口"自动"：在 region 这个国家里挑一个反代。当前的仍然可用、仍在这个国家就不换（出口稳定比快更重要）。
 // 这个国家一个可用的都没有时返回 ok = false，调用方不得换到别的国家。
+//
+// 当前这个只是“后台扫描时没测通”（延迟 ≤ 0）、但没有被这次真连的探测判死（exclude）：也不换（decisions SI-1）。
+// 后台扫描走的是另一条测试通道，偶尔失败很常见；以前一失败下次启动就换了 ProxyIP，网站看到的 IP 一变，
+// Cloudflare 的放行凭证在低信誉出口上就不认了。真的不通由启动 / 刷新时的实测发现，那时再换。
 func pickExit(ps []cand, region, cur string, exclude map[string]bool) (string, bool) {
+	if p, ok := findCand(ps, cur); ok && cur != "" && !exclude[pipKey(cur)] && (region == "" || p.Country == "" || strings.EqualFold(p.Country, region)) {
+		return cur, true
+	}
 	order := exitOrder(ps, region, exclude)
 	for _, p := range order {
 		if p.ID == cur && cur != "" {

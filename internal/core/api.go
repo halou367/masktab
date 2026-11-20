@@ -138,8 +138,9 @@ type fpInfo struct {
 	Platform string `json:"platform"`
 	Brand    string `json:"brand"`
 	Cores    int    `json:"cores"`
-	TZ       string `json:"tz"`   // 空 = 系统时区
-	Lang     string `json:"lang"` // 空 = 系统语言
+	TZ       string `json:"tz"`               // 空 = 系统时区
+	Lang     string `json:"lang"`             // 空 = 系统语言
+	Locked   bool   `json:"locked,omitempty"` // 时区 / 语言已固定，不跟出口变（decisions SI-1）
 }
 
 // nodeView 是入口列表里的一行：地址、备注、往返延迟、两路出口。
@@ -248,7 +249,7 @@ func (a *App) State(me string) map[string]any {
 			if a.hosted() && r.Running { // 手机：运行中不热换（decisions A-11），网页拿到的是本次启动时的值
 				tz, lang = r.LaunchedTZ, r.LaunchedLang
 			}
-			v.Info = &fpInfo{Seed: seed32(in.FP.Seed), Platform: in.FP.Platform, Brand: in.FP.Brand, Cores: cores(in), TZ: tz, Lang: lang}
+			v.Info = &fpInfo{Seed: seed32(in.FP.Seed), Platform: in.FP.Platform, Brand: in.FP.Brand, Cores: cores(in), TZ: tz, Lang: lang, Locked: identLocked(in)}
 			if v.Info.Platform == "" {
 				v.Info.Platform = kernel.HostPlatform()
 			}
@@ -345,7 +346,11 @@ type instPatch struct {
 	Proxy  *proxyPatch
 	TZ     *model.TZ
 	Locale *model.Locale
-	FP     *struct {
+	// FollowExit：时区 / 语言改回“每次启动跟着出口走”（旧行为，有代价，见 decisions SI-1）；false = 固定身份（默认）。
+	FollowExit *bool
+	// IdentReset：按现在的出口重新定身份（实例确实要搬到别的国家时用）。网站会把它看成换了一台机器。
+	IdentReset bool
+	FP         *struct {
 		HardwareConcurrency *int
 		PlatformVersion     *string
 		Platform            *string
@@ -402,6 +407,20 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 	}
 	if p.Locale != nil {
 		in.Locale = *p.Locale
+		restart("fingerprint")
+	}
+	if p.FollowExit != nil && *p.FollowExit != in.FollowExit {
+		in.FollowExit = *p.FollowExit
+		if !in.FollowExit { // 改回固定：按本次启动时用的那一套定下来，不让网页看到的值再变一次
+			if in.Ident == nil && r.launchedSrc != nil && r.launchedSrc.Timezone != "" {
+				in.Ident = &model.Ident{TZ: r.launchedSrc.Timezone, Lang: langFor(r.launchedSrc.Country), Country: strings.ToUpper(r.launchedSrc.Country), At: now()}
+			}
+		}
+		restart("fingerprint")
+	}
+	if p.IdentReset {
+		in.Ident = nil
+		lockIdent(in, r.Probe, nil)
 		restart("fingerprint")
 	}
 	if p.FP != nil {

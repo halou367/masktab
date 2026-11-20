@@ -271,6 +271,7 @@ func finalize(libDir, tmp string, pub []byte, keyFor KeyFor) (*Info, error) {
 	}
 	m["key"] = base64.StdEncoding.EncodeToString(pub)
 	delete(m, "update_url") // 解包加载的扩展不走商店自动更新
+	guardManifest(m)        // 内容脚本不进 Cloudflare 验证框（decisions SI-1）
 	out, _ := json.MarshalIndent(m, "", "  ")
 	if err := os.WriteFile(mpath, out, 0o644); err != nil {
 		return nil, err
@@ -408,4 +409,54 @@ func syncInto(src, dst string) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// ChallengeOrigin 是 Cloudflare 人机验证（Turnstile / 托管质询）框所在的网址。库里所有扩展的内容脚本都不进这个框（decisions SI-1）：
+// 验证框会检查页面里的原生函数有没有被改过、有没有多出来的东西；扩展在框里改写原生函数（实测“鹈鹕鉴定”在所有框架的主世界
+// 改写 execCommand / Clipboard / DataTransfer），会让验证框把这个浏览器当成被篡改的环境。
+const ChallengeOrigin = "https://challenges.cloudflare.com/*"
+
+// guardManifest 给 manifest 里每一组内容脚本加上 exclude_matches: challenges.cloudflare.com。返回有没有改动。
+func guardManifest(m map[string]any) bool {
+	cs, ok := m["content_scripts"].([]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for _, x := range cs {
+		e, ok := x.(map[string]any)
+		if !ok {
+			continue
+		}
+		ex, _ := e["exclude_matches"].([]any)
+		has := false
+		for _, v := range ex {
+			if s, _ := v.(string); s == ChallengeOrigin {
+				has = true
+			}
+		}
+		if !has {
+			e["exclude_matches"] = append(ex, ChallengeOrigin)
+			changed = true
+		}
+	}
+	return changed
+}
+
+// GuardDir 对库里已经装好的一个扩展目录补上 guardManifest（老版本装进来的没有这一条）。没改动时不写文件。
+func GuardDir(dir string) (bool, error) {
+	mpath := filepath.Join(dir, "manifest.json")
+	raw, err := os.ReadFile(mpath)
+	if err != nil {
+		return false, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(stripComments(bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))), &m); err != nil {
+		return false, err
+	}
+	if !guardManifest(m) {
+		return false, nil
+	}
+	out, _ := json.MarshalIndent(m, "", "  ")
+	return true, os.WriteFile(mpath, out, 0o644)
 }

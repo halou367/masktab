@@ -488,7 +488,7 @@ const SPOOF = [['canvas', 'Canvas', 'palette'], ['audio', '音频', 'audio'], ['
 // 内核由宿主管的（安卓版 GeckoView）：伪装在网页里按种子做，项目固定，不能逐项开关。
 const HOSTED_SPOOF = ['Canvas', '音频', 'CPU 核数', '屏幕', '时区', '语言'];
 const LANGS = ['en-US', 'en-GB', 'zh-CN', 'zh-TW', 'ja-JP', 'ko-KR', 'de-DE', 'fr-FR', 'es-ES', 'pt-BR', 'ru-RU', 'it-IT', 'nl-NL', 'tr-TR', 'vi-VN', 'th-TH', 'id-ID'];
-const CHK_IC = { proxy: 'shield', exit: 'globe', tz: 'clock', lang: 'lang', same: 'swap', cf: 'cloud', pure: 'leaf', applied: 'refresh', ua: 'devices', webrtc: 'webrtc' };
+const CHK_IC = { proxy: 'shield', exit: 'globe', tz: 'clock', lang: 'lang', same: 'swap', cf: 'cloud', cfexit: 'pin', pure: 'leaf', applied: 'refresh', ua: 'devices', webrtc: 'webrtc' };
 
 function fpView(me) {
   const rt = me.rt, fi = me.fpInfo || {}, caps = st.kernel.caps || {}, dz = disguise(me);
@@ -506,23 +506,37 @@ function fpView(me) {
       h('span', { class: 'tx' }, h('div', { class: 't' }, c.t), h('div', { class: 's' }, c.na ? `判断不了：${c.v}` : c.v)), h('span', { class: 'sub' }, icon(CHK_IC[c.k] || 'info', 18))));
   }
   // 时区与语言
+  // 时区和语言默认“固定身份”：第一次连上可信出口时定下，之后不跟出口变（decisions SI-1）。“跟随出口”是旧行为，代价写在选项里。
+  const tzMode = me.tz.mode === 'fixed' ? 'fixed' : me.followExit ? 'follow' : 'auto';
   const setTzMode = async () => {
-    const v = await choose('时区', [['auto', '跟随出口', '时区始终等于出口 IP 所在地的时区'], ['fixed', '固定', '使用指定的时区，不随出口变化']], me.tz.mode);
-    if (!v) return;
-    if (v === 'auto') { patch({ tz: { mode: 'auto', source: me.tz.source, fixed: me.tz.fixed } }); return; }
+    const v = await choose('时区', [
+      ['auto', '固定身份（推荐）', '第一次连上出口时定下时区和语言，之后换出口也不变。网站看到的一直是同一台机器，已过的验证、已登录的状态不容易丢'],
+      ['follow', '跟随出口', '每次启动按出口所在地重新定时区和语言。代价：出口一换国家，网站就看到“换了一台机器”，Cloudflare 等更容易重新要求验证'],
+      ['fixed', '手动指定', '使用指定的时区']], tzMode);
+    if (!v || v === tzMode) return;
+    if (v === 'auto') { patch({ tz: { mode: 'auto', source: me.tz.source, fixed: me.tz.fixed }, followExit: false }); return; }
+    if (v === 'follow') {
+      if (await confirmDlg('改成跟随出口？', '以后出口换了国家，这个实例的时区和语言也跟着换。网站会把它看成换了一台机器，已经通过的 Cloudflare 验证可能要重新做。', '改成跟随')) patch({ tz: { mode: 'auto', source: me.tz.source, fixed: me.tz.fixed }, followExit: true });
+      return;
+    }
     const z = await ask('固定时区', { value: me.tz.fixed || fi.tz || rt.launchedTz || Intl.DateTimeFormat().resolvedOptions().timeZone, placeholder: '例如 Asia/Tokyo', note: 'IANA 时区名' });
     if (z && z.trim()) patch({ tz: { mode: 'fixed', source: me.tz.source, fixed: z.trim() } });
   };
   const setLang = async () => {
-    const v = await choose('语言', [['follow-exit', '跟随出口', '按出口所在国家选择界面语言与 Accept-Language'], ...LANGS.map((l) => [l, l])], me.locale.mode === 'fixed' ? me.locale.fixed : 'follow-exit');
+    const v = await choose('语言', [['follow-exit', me.followExit ? '跟随出口' : '随身份固定', me.followExit ? '按出口所在国家选择界面语言与 Accept-Language' : '和时区一起，在第一次连上出口时定下'], ...LANGS.map((l) => [l, l])], me.locale.mode === 'fixed' ? me.locale.fixed : 'follow-exit');
     if (!v) return;
     patch({ locale: v === 'follow-exit' ? { mode: 'follow-exit', fixed: me.locale.fixed || '' } : { mode: 'fixed', fixed: v } });
   };
+  const tzTrail = { auto: '固定身份', follow: '跟随出口', fixed: '手动' }[tzMode];
+  const away = me.ident && me.ident.country && rt.probe?.cf?.country && rt.probe.cf.country.toUpperCase() !== me.ident.country;
   kids.push(sec('时区与语言'));
-  kids.push(row({ ic: 'clock', t: '时区', s: [tz ? `${tz}（${utc(tz)}）` : me.proxy.state !== 'on' ? '系统时区' : '出口探测后确定', pending && h('span', { class: 'mid' }, ' · 重启后生效')], trail: me.tz.mode === 'fixed' ? '固定' : '跟随出口', drop: true, onclick: setTzMode }));
-  if (me.tz.mode === 'auto') kids.push(row({ ic: 'swap', t: '跟哪一路出口', s: 'Cloudflare 上的网站和其他网站看到的出口可能不同', trail: me.tz.source === 'exit-direct' ? '普网' : 'CF 网站', drop: true,
+  kids.push(row({ ic: 'clock', t: '时区', s: [tz ? `${tz}（${utc(tz)}）` : me.proxy.state !== 'on' ? '系统时区' : '出口探测后确定', pending && h('span', { class: 'mid' }, ' · 重启后生效')], trail: tzTrail, drop: true, onclick: setTzMode }));
+  if (tzMode === 'follow') kids.push(row({ ic: 'swap', t: '跟哪一路出口', s: 'Cloudflare 上的网站和其他网站看到的出口可能不同', trail: me.tz.source === 'exit-direct' ? '普网' : 'CF 网站', drop: true,
     onclick: async () => { const v = await choose('时区跟哪一路出口', [['exit-cf', 'CF 网站', '托管在 Cloudflare 上的网站看到的出口（ProxyIP）'], ['exit-direct', '普网', 'Google、微软等非 Cloudflare 网站看到的出口']], me.tz.source); if (v) patch({ tz: { mode: 'auto', source: v, fixed: me.tz.fixed } }); } }));
-  kids.push(row({ ic: 'lang', t: '语言', s: fi.lang || '出口探测后确定', trail: me.locale.mode === 'fixed' ? '固定' : '跟随出口', drop: true, onclick: setLang }));
+  kids.push(row({ ic: 'lang', t: '语言', s: fi.lang || '出口探测后确定', trail: me.locale.mode === 'fixed' ? '手动' : me.followExit ? '跟随出口' : '固定身份', drop: true, onclick: setLang }));
+  if (tzMode === 'auto' && me.ident) kids.push(row({ ic: 'globe', t: '身份所在国家', s: away ? `${me.ident.country}（出口现在在 ${rt.probe.cf.country.toUpperCase()}，时区和语言没跟着变）` : me.ident.country || '—',
+    trail: h('button', { class: 'lk', onclick: async (e) => { e.stopPropagation(); if (await confirmDlg('按现在的出口重定身份？', '时区和语言会改成现在出口所在地的。网站会把它看成换了一台机器，已经通过的验证可能要重新做。', '重定')) patch({ identReset: true }); } }, '按现在的出口重定') }));
+  if (rt.exitMoved) kids.push(h('div', { class: 'foot' }, `这次运行中 Cloudflare 上的网站看到的出口换过（${rt.exitMoved}）。放行凭证跟着 IP 走，换了 IP 的网站可能要再验证一次；出口固定不换就不会。`));
   // 设备：电脑可选；手机固定（GeckoView 的内核特征改不掉，UA 改了反而露馅）
   kids.push(sec('设备'));
   if (caps.platform) {

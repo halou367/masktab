@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/halou367/masktab/internal/exits"
+	"github.com/halou367/masktab/internal/extlib"
 	"github.com/halou367/masktab/internal/kernel"
 	"github.com/halou367/masktab/internal/model"
 	"github.com/halou367/masktab/internal/probe"
@@ -41,6 +42,7 @@ type Runtime struct {
 	Fixed        string           `json:"fixed,omitempty"` // 程序替用户改过代理选择（订阅被删、节点没了…），说明改了什么；用户看过（点“知道了”或自己改了选择）就清掉
 	LaunchedTZ   string           `json:"launchedTz"`
 	LaunchedLang string           `json:"launchedLang,omitempty"` // 宿主模式：本次启动交给网页的语言（运行中不热换，见 decisions A-11）
+	ExitMoved    string           `json:"exitMoved,omitempty"`    // 这次运行中 CF 网站看到的出口 IP 换过（“旧 → 新”）：有的网站会要求再验证一次（decisions SI-1）
 	Up           int64            `json:"up"`                     // 累计上传字节
 	Down         int64            `json:"down"`                   // 累计下载字节
 	UpRate       int64            `json:"upRate"`
@@ -262,6 +264,13 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	if readJSON(a.p("config", "extensions.json"), &wx) { // 读不出来（文件坏了 / 没有）就不清：清单都没有，不能凭它删文件
 		a.Exts = wx.Items
 		a.sweepExtDirs()
+		for _, x := range a.Exts { // 老版本装进库的扩展补上“内容脚本不进 Cloudflare 验证框”（decisions SI-1）；这时还没有实例在跑
+			if ch, err := extlib.GuardDir(a.p("extensions", x.ExtID, x.Version)); ch {
+				log.Printf("扩展 %s：内容脚本不再进入 Cloudflare 验证框", x.Name)
+			} else if err != nil && !os.IsNotExist(err) {
+				log.Printf("扩展 %s 的 manifest 读不了：%v", x.Name, err)
+			}
+		}
 	}
 	readJSON(a.p("state", "scan.json"), &a.scan)
 	readJSON(a.p("state", "lastexit.json"), &a.lastExit)
@@ -434,9 +443,15 @@ func (a *App) newInstanceLocked(kind string) *model.Instance {
 	}
 	seed := make([]byte, 32)
 	_, _ = rand.Read(seed)
+	// 新实例默认不伪装显卡（decisions SI-1）：内核只改 WebGL、不改 WebGPU，伪装后两边报的显卡对不上（一个 Intel、一个真实的 NVIDIA），
+	// 正是 pixelscan“Masking detected”这类检测抓的东西。实测在 arena.ai 上关掉显卡伪装不会让放行失效。手机没有这一项。
+	off := []string{}
+	if !a.hosted() {
+		off = []string{"gpu"}
+	}
 	in := &model.Instance{ID: newID(), UpdatedAt: now(), No: no, Kind: kind, CreatedAt: now(), LastUsedAt: now(),
 		Color:  model.Palette[(no+len(model.Palette)-1)%len(model.Palette)],
-		FP:     model.FP{Seed: base64.StdEncoding.EncodeToString(seed), DisableSpoofing: []string{}},
+		FP:     model.FP{Seed: base64.StdEncoding.EncodeToString(seed), DisableSpoofing: off},
 		TZ:     model.TZ{Mode: "auto", Source: a.Settings.TZSourceDefault},
 		Locale: model.Locale{Mode: "follow-exit"},
 		Proxy:  model.InstProxy{State: "off", Auto: true, ExitMode: "auto", EntryMode: "auto", AddressMode: "custom"},

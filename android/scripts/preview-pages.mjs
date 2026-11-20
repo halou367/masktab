@@ -375,7 +375,8 @@ if (want('flow')) {
   await pg.locator('button.row', { has: pg.locator('.t', { hasText: /^时区$/ }) }).click();
   await pg.waitForTimeout(300);
   d = await dd();
-  check('指纹页“时区”：下拉栏，两项，选中的换底色', d?.n === 2 && d.on.length === 1 && d.tinted && d.inside && d.radio === 0, { d });
+  // 三项：固定身份（默认）/ 跟随出口 / 手动指定（decisions SI-1）
+  check('指纹页“时区”：下拉栏，三项，默认“固定身份”选中并换底色', d?.n === 3 && d.on.length === 1 && /固定身份/.test(d.on[0]) && d.tinted && d.inside && d.radio === 0, { d });
   await pg.screenshot({ path: path.join(out, 'flow-dropdown.png') });
   await sysBack();
   i = await info();
