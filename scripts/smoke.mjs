@@ -123,7 +123,8 @@ const RED = `(()=>{const c=document.createElement('canvas');c.width=c.height=32;
 const HEAVY = `(()=>{let n=0;for(let i=0;i<300;i++){const c=document.createElement('canvas');c.width=300;c.height=150;const x=c.getContext('2d');x.fillStyle='#f60';x.fillRect(0,0,100,20);x.fillStyle='#069';x.font='16px Arial';x.fillText('Cwm fjordbank',2,15);x.beginPath();x.arc(200,80,40,0,7);x.fill();n+=x.getImageData(0,0,300,150).data.length;c.toDataURL();}let gl='无 WebGL';try{for(let i=0;i<60;i++){const c=document.createElement('canvas');c.width=256;c.height=128;const g=c.getContext('webgl');if(!g)break;g.clearColor(i/100,0.5,0.2,1);g.clear(g.COLOR_BUFFER_BIT);const px=new Uint8Array(256*128*4);g.readPixels(0,0,256,128,g.RGBA,g.UNSIGNED_BYTE,px);gl='WebGL 读回 60 次正常'}}catch(e){gl='WebGL 出错 '+e.message}return '2D 读回 300 次正常，'+gl+'，'+(navigator.userAgent.match(/Chrome\\/[\\d.]+/)||[''])[0]})()`;
 const FP = `(async()=>{const h=async d=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-1',d))).slice(0,6).map(x=>x.toString(16).padStart(2,'0')).join('');
 const c=document.createElement('canvas');c.width=200;c.height=60;const g=c.getContext('2d');const gr=g.createLinearGradient(0,0,200,60);gr.addColorStop(0,'#f60');gr.addColorStop(1,'#06f');g.fillStyle=gr;g.fillRect(0,0,200,60);g.beginPath();g.arc(60,30,22,0,7);g.fillStyle='rgba(20,200,90,.7)';g.fill();g.font='18px sans-serif';g.fillText('MaskTab 指纹',90,36);
-return {canvas:await h(g.getImageData(0,0,200,60).data),url:await h(new TextEncoder().encode(c.toDataURL())),hc:navigator.hardwareConcurrency,ua:navigator.userAgent,platform:navigator.platform,tz:Intl.DateTimeFormat().resolvedOptions().timeZone,lang:navigator.language,webdriver:navigator.webdriver}})()`;
+const mt=g.measureText('Hello World').width;const d=document.createElement('div');d.textContent='Hello';document.body.appendChild(d);const r1=d.getBoundingClientRect(),rng=document.createRange();rng.selectNode(d);const r2=rng.getBoundingClientRect();d.remove();
+return {canvas:await h(g.getImageData(0,0,200,60).data),url:await h(new TextEncoder().encode(c.toDataURL())),mt,rectEq:r1.x===r2.x&&r1.y===r2.y,hc:navigator.hardwareConcurrency,ua:navigator.userAgent,platform:navigator.platform,tz:Intl.DateTimeFormat().resolvedOptions().timeZone,lang:navigator.language,webdriver:navigator.webdriver}})()`;
 
 // ---- 核心服务 ----
 fs.mkdirSync(path.join(DATA, 'state'), { recursive: true });
@@ -219,7 +220,7 @@ try {
   const ra = await evalPage(prof(a.id), PAGE, FP), rb = await evalPage(prof(b.id), PAGE, FP);
   const fa = ra.value, fb = rb.value;
   console.log('指纹 A：' + JSON.stringify(ra)); console.log('指纹 B：' + JSON.stringify(rb));
-  check(fa && fb && fa.canvas !== fb.canvas, '两个实例画布指纹不同', `${fa?.canvas} / ${fb?.canvas}`);
+  check(ia && ib && ia.fp?.seed !== ib.fp?.seed && fa && fa.mt > 30 && fa.rectEq === true, '两个实例指纹种子不同，且默认关闭有破绽的五项伪装（measureText 与 DOMRect 正常）', `${ia?.fpInfo?.seed} / ${ib?.fpInfo?.seed} mt=${fa?.mt}`);
   const fa2 = (await evalPage(prof(a.id), PAGE, FP)).value;
   check(fa && fa2 && fa.canvas === fa2.canvas, '同一实例画布指纹稳定');
   rec(fa && fa.webdriver === false ? 'ok' : 'warn', 'navigator.webdriver 为 false', String(fa?.webdriver));

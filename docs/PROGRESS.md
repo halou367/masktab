@@ -777,3 +777,10 @@ v0.1.55 只套了 UI-9 的四条规则，页面还是旧样子，需求方不认
 - 没验证：手机；见 N-8 的“没验证”。
 - 上一轮留下的小事（还没做）：Windows 上“管理实例”没有快捷键而提示里写着 Ctrl+Shift+M；新标签页“CF 风险”那一格没有悬停说明。
 
+## 2026-11-20 实例身份固定 + 默认关闭内核有破绽的五项伪装（SI-1）
+- 查明桌面端 `fingerprint-chromium 148.0.7778.215` 在 `--fingerprint` 下的五项伪装（`canvas` 的 `measureText` 算出负宽度、`clientrects` 的 `Range` 与 `Element` 坐标不一致、`gpu` 的 WebGL 与 WebGPU 显卡冲突、`audio` 的 `OfflineAudioContext.sampleRate` 变成小数、`font` 随机屏蔽系统必有字体）存在 C++ 级自相矛盾，导致 Cloudflare Turnstile 反复弹出人机验证。
+- 新实例与升级上来的存量实例默认关闭这五项伪装（`disableSpoofing: ["canvas", "audio", "font", "clientrects", "gpu"]`，记 `spoofDefaultOff: true` 只迁移一次）；保留 `--fingerprint=<种子>`、CPU 核数、固定时区语言、WebRTC 只走代理与独立目录/代理端口。
+- 修正 `trustedSrc`：即使 `CF` 那一路返回的是 Cloudflare 自己的 `104.28.x` 出口也不拿来固定身份，并自动清理之前无 `ExitIP` 且与所选地区不符的错定身份。
+- 需求方电脑实测（同韩国 ProxyIP `222.111.210.67:18264`）：Pixelscan 显示 `No masking detected`，开发版 `#3`、`#5` 与正式版 `#1` 访问和连续刷新 `arena.ai` 均不再弹验证框。
+
+

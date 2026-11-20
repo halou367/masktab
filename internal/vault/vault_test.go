@@ -21,7 +21,7 @@ func TestRoundTripAndMatch(t *testing.T) {
 	_, _ = v.Upsert(Item{Inst: "b", Site: "https://github.com:443", User: "bob", Pass: "q"})
 	_, _ = v.Upsert(Item{Inst: "a", Site: "*", User: "alice@gmail.com", Pass: "Def@123", Src: "import"})
 	b, _ := os.ReadFile(filepath.Join(dir, "vault.bin"))
-	if len(b) == 0 || containsStr(b, "p2") {
+	if len(b) == 0 || containsStr(b, "Def@123") || containsStr(b, "alice@gmail.com") {
 		t.Fatal("落盘内容应加密")
 	}
 	v2, err := Open(dir)

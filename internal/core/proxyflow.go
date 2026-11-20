@@ -376,12 +376,12 @@ func pinOf(in *model.Instance, pr *model.ExitProbe) *model.IPInfo {
 	return nil
 }
 
-// trustedSrc 是能拿来定身份（时区 / 语言）的那一路出口：tzSrc 的结果，但 CF 那一路没探到、只剩 Cloudflare 自己的出站地址
-// （Workers / WARP 的 104.28.x，归属地跟着 Cloudflare 机房走，和 ProxyIP 无关）时不算数。
-// 以前这种情况会拿它定时区：正式版日志里多个实例一启动先是 Asia/Tokyo（Workers 在成田的出口），几分钟后又变回自己的国家（decisions SI-1）。
+// trustedSrc 是能拿来定身份（时区 / 语言）的那一路出口：tzSrc 的结果，但只要它是 Cloudflare 自己的出站地址
+// （Workers / WARP 的 104.28.x，归属地跟着 Cloudflare 机房走，和 ProxyIP 无关——无论出现在 Direct 还是没配好反代时的 CF 那一路）都不算数。
+// 以前这种情况会拿它定时区：正式版日志里多个实例一启动先是 Asia/Tokyo（Workers 在成田的出口）或 Asia/Dhaka（孟加拉机房），几分钟后又变回自己的国家（decisions SI-1）。
 func trustedSrc(in *model.Instance, pr *model.ExitProbe) *model.IPInfo {
 	src := tzSrc(in, pr)
-	if src == nil || src.Timezone == "" || (pr.CF == nil && cfEgress(src)) {
+	if src == nil || src.Timezone == "" || cfEgress(src) {
 		return nil
 	}
 	return src

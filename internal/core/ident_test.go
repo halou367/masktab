@@ -1,6 +1,7 @@
 package core
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/halou367/masktab/internal/model"
@@ -16,9 +17,12 @@ func TestIdentLock(t *testing.T) {
 	in := &model.Instance{ID: "x", No: 3, Kind: "persistent", TZ: model.TZ{Mode: "auto", Source: "exit-cf"}, Locale: model.Locale{Mode: "follow-exit"}}
 	in.Proxy.State = "on"
 
-	// 第一次只探到 Workers 那一路（CF 那一路不通）：不定身份
+	// 第一次只探到 Workers 那一路（CF 那一路不通，或者没配反代时 CF 那一路也是 Cloudflare 自己的 104.28.x 出口）：都不定身份
 	if lockIdent(in, &model.ExitProbe{Direct: workersBD}, nil) || in.Ident != nil {
 		t.Fatalf("只有 Workers 出口时不该定身份：%+v", in.Ident)
+	}
+	if lockIdent(in, &model.ExitProbe{CF: workersBD, Direct: workersBD}, nil) || in.Ident != nil {
+		t.Fatalf("CF 那一路也是 Cloudflare 自己出口时不该定身份：%+v", in.Ident)
 	}
 	// 有上次记下的可信出口：按它定（升级上来的老实例）
 	if !lockIdent(in, &model.ExitProbe{Direct: workersBD}, &model.ExitProbe{CF: kr, Direct: workers}) || in.Ident.TZ != "Asia/Seoul" || in.Ident.Lang != "ko-KR" {
@@ -100,5 +104,50 @@ func TestPickExitSticky(t *testing.T) {
 	}
 	if id, ok := pickExit(ps, "KR", "a", nil); ok || id != "" {
 		t.Fatalf("国家不对、也没有别的可用：应不换国家：%s %v", id, ok)
+	}
+}
+
+// 桌面 148 内核的五项伪装（canvas / audio / font / clientrects / gpu）默认全部关闭；
+// 老实例升级上来时统一迁移关闭一次，之后用户手动打开某项不会被再覆盖（decisions SI-1 补充）。
+func TestSpoofDefaultOffMigration(t *testing.T) {
+	dir := t.TempDir()
+	a, err := Open(dir, dir, "0.1.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, _ := a.CreateInstance(newOpts{Name: "新号"})
+	in := a.instLocked(id)
+	if !reflect.DeepEqual(in.FP.DisableSpoofing, defaultDisableSpoofing) || !in.FP.SpoofDefaultOff {
+		t.Fatalf("新实例应默认关闭五项伪装：%+v", in.FP)
+	}
+	// 模拟老版本留下来的实例（SpoofDefaultOff=false，DisableSpoofing 只有 gpu 或空；且被 Workers 出口错定成了 BD）
+	in.FP.SpoofDefaultOff = false
+	in.FP.DisableSpoofing = []string{"gpu"}
+	in.Proxy.Region = "KR"
+	in.Ident = &model.Ident{TZ: "Asia/Dhaka", Lang: "en-US", Country: "BD"}
+	a.saveLocked("instances")
+
+	a2, err := Open(dir, dir, "0.1.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in2 := a2.instLocked(id)
+	if !reflect.DeepEqual(in2.FP.DisableSpoofing, defaultDisableSpoofing) || !in2.FP.SpoofDefaultOff {
+		t.Fatalf("老实例升级上来应迁移关闭五项伪装：%+v", in2.FP)
+	}
+	if in2.Ident != nil {
+		t.Fatalf("被 Workers 错定成别国的无 ExitIP 身份应清掉重定：%+v", in2.Ident)
+	}
+	// 用户手动把某项伪装重新打开（只关 gpu）：再次启动不再覆盖
+	in2.FP.DisableSpoofing = []string{"gpu"}
+	a2.saveLocked("instances")
+
+	a3, err := Open(dir, dir, "0.1.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in3 := a3.instLocked(id)
+	if !reflect.DeepEqual(in3.FP.DisableSpoofing, []string{"gpu"}) {
+		t.Fatalf("已迁移过的实例不应再覆盖用户手动改动：%+v", in3.FP)
 	}
 }

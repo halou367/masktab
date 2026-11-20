@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -287,7 +288,20 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 		a.adapter = kernel.Hosted{Label: a.Host.KernelName}
 	}
 	// 旧版的"入口用 ProxyIP"：改成直接选中反代列表里的那个地址当入口，效果相同。
+	migrated := false
 	for _, in := range a.Instances {
+		// 桌面 148 内核的五项伪装（canvas / audio / font / clientrects / gpu）都有破绽，会导致 Cloudflare 反复弹验证；
+		// 老实例升级上来时统一关掉一次（SpoofDefaultOff 置 true），之后用户真要在指纹页手动打开某项不会被再覆盖（decisions SI-1 补充）。
+		if !a.hosted() && in.Kind != "normal" && !in.FP.SpoofDefaultOff {
+			in.FP.DisableSpoofing = append([]string{}, defaultDisableSpoofing...)
+			in.FP.SpoofDefaultOff = true
+			migrated = true
+		}
+		// 之前可能被 Cloudflare Workers 自己的出口（104.28.x，没有可信 CF ExitIP）把选了国家的实例错定成别的国家（如 KR 实例定成 BD Asia/Dhaka）：清掉重定。
+		if in.Ident != nil && in.Ident.ExitIP == "" && in.Proxy.Region != "" && !strings.EqualFold(in.Ident.Country, in.Proxy.Region) {
+			in.Ident = nil
+			migrated = true
+		}
 		// 0.1.11 及以前只有一个"自动"开关，而且手动点一下入口或反代就会把它关掉（用户反馈：地区老是自己变成"指定"）。
 		// 现在出口、入口各有一个开关，默认都是自动；旧数据一律按自动迁移，所选的国家保留。
 		if in.Proxy.ExitMode == "" {
@@ -305,10 +319,13 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 			h, port := exits.SplitHostPort(val)
 			in.Proxy.AddressID = "x:" + hostPort(h, port)
 		}
+		migrated = true
 	}
 	// 上一版留下的、指向空处的选择（订阅删了实例还指着它…）：启动时修一遍，见 heal.go
 	if len(a.healAllLocked()) > 0 {
 		log.Printf("启动时修好了一些实例里已经失效的代理选择")
+	} else if migrated {
+		a.saveLocked("instances")
 	}
 	a.loadIPQ()
 	a.openVault()
@@ -434,6 +451,12 @@ func cores(in *model.Instance) int {
 	return opts[int(b[5])%len(opts)]
 }
 
+// defaultDisableSpoofing 是桌面端默认关闭的内核伪装项（decisions SI-1 补充）：
+// fingerprint-chromium 148 的这五项伪装在 C++ 实现里都有自相矛盾的破绽（canvas 的 measureText 乘了噪声系数得出负宽度、
+// clientrects 只改 Range 不改 Element、gpu 只改 WebGL 不改 WebGPU、audio 把 OfflineAudioContext 采样率改成小数、
+// font 随机屏蔽常见系统字体），开启后会被 Cloudflare Turnstile 与 Pixelscan 判定为伪装浏览器并反复弹验证。
+var defaultDisableSpoofing = []string{"canvas", "audio", "font", "clientrects", "gpu"}
+
 // newInstanceLocked 新建实例：最小的空编号（2026-11-17 起；以前只增不复用，见 heal.go“编号”）、按编号取调色板里的颜色、
 // 新指纹种子，代理按全局默认生成（F-INST-2/3）。
 func (a *App) newInstanceLocked(kind string) *model.Instance {
@@ -443,15 +466,13 @@ func (a *App) newInstanceLocked(kind string) *model.Instance {
 	}
 	seed := make([]byte, 32)
 	_, _ = rand.Read(seed)
-	// 新实例默认不伪装显卡（decisions SI-1）：内核只改 WebGL、不改 WebGPU，伪装后两边报的显卡对不上（一个 Intel、一个真实的 NVIDIA），
-	// 正是 pixelscan“Masking detected”这类检测抓的东西。实测在 arena.ai 上关掉显卡伪装不会让放行失效。手机没有这一项。
 	off := []string{}
-	if !a.hosted() {
-		off = []string{"gpu"}
+	if !a.hosted() && kind != "normal" {
+		off = append([]string{}, defaultDisableSpoofing...)
 	}
 	in := &model.Instance{ID: newID(), UpdatedAt: now(), No: no, Kind: kind, CreatedAt: now(), LastUsedAt: now(),
 		Color:  model.Palette[(no+len(model.Palette)-1)%len(model.Palette)],
-		FP:     model.FP{Seed: base64.StdEncoding.EncodeToString(seed), DisableSpoofing: off},
+		FP:     model.FP{Seed: base64.StdEncoding.EncodeToString(seed), DisableSpoofing: off, SpoofDefaultOff: !a.hosted()},
 		TZ:     model.TZ{Mode: "auto", Source: a.Settings.TZSourceDefault},
 		Locale: model.Locale{Mode: "follow-exit"},
 		Proxy:  model.InstProxy{State: "off", Auto: true, ExitMode: "auto", EntryMode: "auto", AddressMode: "custom"},

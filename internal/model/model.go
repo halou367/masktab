@@ -62,6 +62,10 @@ type FP struct {
 	HardwareConcurrency int      `json:"hardwareConcurrency,omitempty"`
 	PlatformVersion     string   `json:"platformVersion,omitempty"`
 	DisableSpoofing     []string `json:"disableSpoofing"`
+	// SpoofDefaultOff：桌面 148 内核的五项伪装（canvas / audio / font / clientrects / gpu）在引擎里都有自相矛盾的破绽
+	// （measureText 算出负宽度、Range 与 Element 尺寸不一致、WebGL 与 WebGPU 显卡不一致、OfflineAudioContext 采样率带小数、常见系统字体缺漏），
+	// 会导致 Cloudflare Turnstile 反复弹验证（decisions SI-1 补充）。新实例默认全关；老实例升级上来时统一关一次并置 true，之后用户手动打开某项不再覆盖。
+	SpoofDefaultOff bool `json:"spoofDefaultOff,omitempty"`
 }
 
 type TZ struct {

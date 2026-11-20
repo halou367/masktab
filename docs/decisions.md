@@ -1680,7 +1680,15 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   - **“跟随出口”改成可选**（`Instance.FollowExit`，指纹页“时区”下拉第二项，选的时候弹确认写清代价）。“按现在的出口重定”按钮给真要把实例搬到别的国家的人（`identReset`）。
   - **出口粘住**（`pick.go` 的 `pickExit`）：出口“自动”时，当前这个只要没被这次真连的探测判死，就不因为后台扫描一次没测通而换。真不通仍然换（同一个国家里）。
   - **出口换了要说**：`Ident.ExitIP` 记 CF 网站最近看到的出口；换了在运行时状态 `exitMoved` 里留一条，指纹页写“这次运行中换过 a → b，CF 网站可能要再验证一次”。一致性检查加一项“CF 网站出口固定”（`cfexit`）：CF 那一路是 Cloudflare 自己的出口（IP 随时变）或这次换过，就不过。
-  - **新实例默认不伪装显卡**（`newInstanceLocked`：`disableSpoofing: ["gpu"]`，电脑才有）：内核只改 WebGL、不改 WebGPU，两边对不上。实测关掉显卡伪装不会让 arena 的放行失效。**老实例不动**（用户自己在指纹页关）。
+  - **新实例与升级上来的老实例默认关闭五项有破绽的内核伪装**（`defaultDisableSpoofing = ["canvas", "audio", "font", "clientrects", "gpu"]`，`FP.SpoofDefaultOff`）：
+    对 `fingerprint-chromium 148.0.7778.215` 的 `chrome.dll` 逐项消融实测发现，内核在 `--fingerprint=<种子>` 下开启的五项伪装在 C++ 实现里都有自相矛盾的破绽：
+    1. `canvas`（`BaseRenderingContext2D::measureText`）：加噪时把 `TextMetrics` 的 `width` / `ascent` 直接乘了微小的噪声系数 `±0.000004`（而不是 `1 + 噪声`），导致 `'16px Arial'` 的 `'Hello World'` 测出负宽度（如 `#1` 种子下为 `-0.000338px`、`#5` 为 `-0.000044px`），而同一页面 DOM / SVG 文本宽度是 `82.4px`，相差 26 万倍；
+    2. `clientrects`：只对 `Range.getBoundingClientRect()` 加了偏移，没对同一元素的 `Element.getBoundingClientRect()` 加偏移，两边坐标不等，被 Pixelscan 与 Turnstile 直接标为 `Masking detected`；
+    3. `gpu`：只改 WebGL（报 Intel 核显）、不改 WebGPU（`navigator.gpu` 仍报真实的 NVIDIA 独显）；
+    4. `audio`：把 `new OfflineAudioContext(1, 4410, 44100).sampleRate` 改成了带小数的 `44100.01171875`；
+    5. `font`：随机屏蔽 `Segoe UI Symbol`、`Wingdings`、`Cambria` 等 Windows 必有的系统字体。
+    只在新实例关 `gpu` 不够，且存量老实例配置里 `disableSpoofing` 仍是 `[]`。现在新实例默认关闭这五项；老实例升级启动时统一迁移关闭一次并记 `spoofDefaultOff: true`（之后用户真要在指纹页手动打开某项不会被再覆盖）；`--fingerprint=<种子>` 本身、CPU 核数、时区、语言、WebRTC 只走代理、独立资料目录与独立代理端口全部保留。在需求方电脑（正式版 `#1`、`#7` 与开发版 `#3`、`#5`，韩国 ProxyIP `222.111.210.67:18264`）实测：Pixelscan 变为 `No masking detected`，arena.ai 首次加载与连续刷新均不再弹 Turnstile 验证框。
+  - **CF 那一路也是 Cloudflare 自己出口时不定身份**（`trustedSrc`）：当 edgetunnel 还没配好反代或反代失效时，CF 探测返回的也是 `104.28.x`（`AS13335 Cloudflare, Inc.`），之前 `pr.CF == nil && cfEgress(src)` 会漏掉这种情况而把选了韩国的 `#3` 错定成孟加拉 `Asia/Dhaka`。改为只要 `cfEgress(src)` 为真都不算可信出口；启动时顺手清掉之前没有可信 `ExitIP` 且与所选 `Region` 不符的错定身份。
   - **库里扩展的内容脚本不进 Cloudflare 验证框**（`extlib.guardManifest` / `GuardDir`）：入库时、以及核心服务启动时对已经在库里的扩展，每组 `content_scripts` 加 `exclude_matches: https://challenges.cloudflare.com/*`。起因是需求方装的“鹈鹕鉴定”在所有框架（含 Turnstile 的框）的主世界改写原生函数。这在 arena 上没测出差别（新配置下有没有它都弹），是按 Cloudflare 文档“不支持修改 Web API 的扩展”做的预防。
 - **Cookie / 登录**：查过，**没有问题、没改**：正式版 13 个有 arena Cookie 的实例，`cf_clearance` 都是持久 Cookie（一年）、登录 Cookie 约 400 天，重启后都在（11-13、11-18 发的还在）；代码里没有清 Cookie、临时配置目录、退出时清数据的逻辑（“一次性”实例除外，那是它的用途）；偏好里没有“退出时清除”。
 - **已知代价**：
