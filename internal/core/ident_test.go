@@ -54,6 +54,12 @@ func TestIdentLock(t *testing.T) {
 	if tz, _, _ := expectTZPinned(in, &model.ExitProbe{Direct: workersBD}, &model.IPInfo{Country: "JP", Timezone: "Asia/Tokyo"}); tz != "Asia/Tokyo" {
 		t.Fatalf("只有 Workers 出口时应沿用启动时的时区：%s", tz)
 	}
+	// 还没定身份、只探到 Workers、选了出口国家：按选的国家算（以前按 Workers 机房成了 Asia/Dhaka）
+	k := &model.Instance{Kind: "persistent", TZ: model.TZ{Mode: "auto", Source: "exit-cf"}, Locale: model.Locale{Mode: "follow-exit"}}
+	k.Proxy.State, k.Proxy.Region = "on", "KR"
+	if tz, lang, _ := expectTZPinned(k, &model.ExitProbe{Direct: workersBD}, nil); tz != "Asia/Seoul" || lang != "ko-KR" {
+		t.Fatalf("应按选的国家算：%s %s", tz, lang)
+	}
 	// 代理关掉：用系统时区（和以前一样）
 	in.FollowExit = false
 	in.Proxy.State = "off"

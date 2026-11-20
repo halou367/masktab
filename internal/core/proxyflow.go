@@ -434,6 +434,11 @@ func expectTZPinned(in *model.Instance, pr *model.ExitProbe, pin *model.IPInfo) 
 	if src == nil && pin != nil && pin.Timezone != "" {
 		src = pin
 	}
+	if src == nil && in.Proxy.Region != "" && probe.CountryTZ[strings.ToUpper(in.Proxy.Region)] != "" {
+		// 实例选了出口国家：按这个国家算，不按 Workers 机房（开发版 #3 选的韩国，以前因此成了 Asia/Dhaka）
+		cc := strings.ToUpper(in.Proxy.Region)
+		src = &model.IPInfo{Country: cc, Timezone: probe.CountryTZ[cc]}
+	}
 	if src == nil {
 		src = tzSrc(in, pr) // 什么都没有：只能按这一路（和以前一样），但不会拿它固定身份
 	}
