@@ -62,11 +62,13 @@ type group struct {
 }
 
 type mgr struct {
-	host Host
-	ctl  uintptr // 不显示的窗口：定时器和别的 goroutine 递来的消息都发给它
-	inst uintptr
-	cls  *uint16
-	evCB uintptr
+	wasBusy bool      // 上一次重画时有实例正在打开（busyTick）
+	busyAt  time.Time // busyTick 上一次重画
+	host    Host
+	ctl     uintptr // 不显示的窗口：定时器和别的 goroutine 递来的消息都发给它
+	inst    uintptr
+	cls     *uint16
+	evCB    uintptr
 
 	st     State
 	main   map[string]uintptr // 实例 → 它的主窗口
@@ -1432,6 +1434,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 					if m.st.Compact {
 						m.hoverTick()
 					}
+					m.busyTick()
 					m.leave()
 				}
 				return 0

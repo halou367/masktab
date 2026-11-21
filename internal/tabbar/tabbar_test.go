@@ -401,12 +401,12 @@ func TestHoverIntent(t *testing.T) {
 	if !h.Want(true, false, at(200)) || !h.Want(true, false, at(250)) || !h.Want(true, true, at(260)) {
 		t.Fatal("擦出去一下不该收")
 	}
-	// 离开满 100 毫秒：收
-	if !h.Want(true, false, at(300)) || h.Want(true, false, at(401)) {
-		t.Fatal("离开 0.1 秒该收")
+	// 离开满 180 毫秒：收
+	if !h.Want(true, false, at(300)) || !h.Want(true, false, at(400)) || h.Want(true, false, at(481)) {
+		t.Fatal("离开 0.18 秒该收")
 	}
 	// 收起时鼠标恰好还在色条上（以前就是这样一开一合）：不再弹，直到鼠标离开过一次
-	for ms := 410; ms < 1500; ms += 16 {
+	for ms := 490; ms < 1500; ms += 16 {
 		if h.Want(false, true, at(ms)) {
 			t.Fatalf("收起以后鼠标没离开过色条，%d 毫秒时又弹了", ms)
 		}
@@ -414,5 +414,23 @@ func TestHoverIntent(t *testing.T) {
 	h.Want(false, false, at(1500))
 	if h.Want(false, true, at(1510)) || !h.Want(false, true, at(1551)) {
 		t.Fatal("离开过一次以后再停到色条上，该照常展开")
+	}
+}
+
+// 有实例正在打开：＋ 变成转圈（和平时的 ＋ 画出来不一样），收起的色条上有光走过（UI-33）。
+func TestBusyPlus(t *testing.T) {
+	l := Lay(800, 2, 1)
+	tabs := []TabPaint{{Color: [3]int{200, 40, 40}, Active: true}, {Color: [3]int{40, 40, 200}}}
+	lk := LookOn([3]int{30, 30, 30})
+	a := Draw(800, l, tabs, lk, 1, false)
+	lk.Busy, lk.Phase = true, 0.3
+	b := Draw(800, l, tabs, lk, 1, false)
+	if string(a.Pix) == string(b.Pix) {
+		t.Fatal("转圈和 ＋ 画得一样")
+	}
+	lk2 := lk
+	lk2.Phase = 0.7
+	if string(Morph(800, l, tabs, lk, 1, 0, false).Pix) == string(Morph(800, l, tabs, lk2, 1, 0, false).Pix) {
+		t.Fatal("收起时色条上的光没有走")
 	}
 }

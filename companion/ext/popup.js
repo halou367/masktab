@@ -89,11 +89,19 @@ function render() {
   if (!whole) holdAnchor(); // 刚点过的开关 / 行：上面的东西变高变矮也让它待在原来的高度
   flipPlay(snap, root); // 其它实例列表：开了、关了、换了次序有过渡（决策 UI-26）
   if (was && was !== now) pageIn(root, menu ? 'back' : 'fwd'); // 菜单 ⇄ 节点面板：前进从右边进，返回从左边进
+  sizeHold();
   if (menu && whole) { // 整个换了：焦点找回来（同一个元素还在时焦点本来就没丢）
     const s = inQ && document.querySelector('.qs input');
     if (at) document.querySelector(`.insts .ai[data-iid="${CSS.escape(at)}"]`)?.focus();
     else if (s) { s.focus(); s.setSelectionRange(inQ[0], inQ[1]); }
   }
+}
+// 第一笔画出来以后：去掉 theme0.js 先撑开的高度，记下这一次菜单的高度，下次打开先按它撑（UI-33，免得弹窗先出一条白条）。
+let held = true;
+function sizeHold() {
+  const d = document.documentElement;
+  if (held) { held = false; requestAnimationFrame(() => { d.style.height = ''; }); }
+  if (menu) requestAnimationFrame(() => { try { localStorage.setItem('mt-popup-h', String(Math.min(600, Math.ceil(document.body.scrollHeight)))); } catch { /* 存不下就算了 */ } });
 }
 let subsAsked = false;
 // 首页上直接打字 = 搜索实例：不用先点搜索框（实例不多时搜索框平时不显示）。打的这个字会进到刚聚焦的搜索框里。

@@ -802,3 +802,7 @@ v0.1.55 只套了 UI-9 的四条规则，页面还是旧样子，需求方不认
 - 需求方电脑实测（同韩国 ProxyIP `222.111.210.67:18264`）：Pixelscan 显示 `No masking detected`，开发版 `#3`、`#5` 与正式版 `#1` 访问和连续刷新 `arena.ai` 均不再弹验证框。
 
 
+
+## 动效（2026-11-21，分支 fix/ui-motion，UI-33）
+- 基于最新 main（94ec99c）合入 fix/ui-jank（UI-32、悬停意图延迟），再加：弹窗先按上次高度撑开（去小白条）、离开收起 0.18 秒、实例启动中 ＋ 转圈 + 色条走光。
+- go test ./internal/tabbar ./internal/core 通过（沙箱 linux）；Windows 真机未测。

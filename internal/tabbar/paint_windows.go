@@ -86,7 +86,7 @@ func (g *group) render() {
 	if g.drop { // 有实例正被拖到这条栏上
 		bg = Tint([3]int{255, 255, 255}, bg, 0.28)
 	}
-	lk := LookOn(bg)
+	lk := g.look(bg)
 	paints := make([]TabPaint, len(g.tabs))
 	for i, t := range g.tabs {
 		paints[i] = TabPaint{Color: t.Color, Active: t.ID == g.active, Hover: g.hover == i, HoverX: g.hover == i && g.hoverKind == HitClose}
@@ -185,7 +185,7 @@ func (g *group) frame(sf *surface, e float64) {
 	if g.drop { // 有实例正被拖到这条栏上
 		bg = Tint([3]int{255, 255, 255}, bg, 0.28)
 	}
-	lk := LookOn(bg)
+	lk := g.look(bg)
 	paints := make([]TabPaint, len(g.tabs))
 	for i, t := range g.tabs {
 		paints[i] = TabPaint{Color: t.Color, Active: t.ID == g.active, Hover: g.hover == i, HoverX: g.hover == i && g.hoverKind == HitClose}
@@ -299,4 +299,31 @@ func (g *group) animate(open bool) bool {
 	}
 	g.frame(sf, goal(open))
 	return open
+}
+
+// look 是这条栏这一刻的配色，加上“有实例正在打开”的转圈（UI-33）。
+func (g *group) look(bg [3]int) Look {
+	lk := LookOn(bg)
+	if g.m.st.Busy > 0 {
+		lk.Busy, lk.Phase = true, float64(time.Now().UnixMilli()%900)/900
+	}
+	return lk
+}
+
+// busyTick 有实例正在打开时，大约每 40 毫秒重画一次栏（转圈、色条上的光在动）；打开完了再画一次，换回 ＋。
+func (m *mgr) busyTick() {
+	busy := m.st.Busy > 0
+	if !busy && !m.wasBusy {
+		return
+	}
+	now := time.Now()
+	if busy && now.Sub(m.busyAt) < 40*time.Millisecond {
+		return
+	}
+	m.busyAt, m.wasBusy = now, busy
+	for _, g := range m.groups {
+		if g.shown && g.rect.W() > 0 {
+			g.render()
+		}
+	}
 }

@@ -34,6 +34,7 @@ type State struct {
 	Compact bool   // 实例栏平时收成一条色条，鼠标靠近才展开（decisions UI-17）
 	Tabs    []Tab  // 按显示顺序
 	Menu    []Item // “＋”菜单：还没打开的实例、新建
+	Busy    int    // 正在打开（还没出窗口）的实例数：＋ 换成转圈，收起的色条上走一道光（UI-33）
 }
 
 // Host 由核心服务实现。
@@ -325,7 +326,7 @@ type Hover struct {
 
 const (
 	HoverIn  = 40 * time.Millisecond
-	HoverOut = 100 * time.Millisecond
+	HoverOut = 180 * time.Millisecond
 )
 
 // Want 报告该不该展开着。cur：现在（或正在变成）展开的；on：收着时 = 鼠标在色条上，展开时 = 鼠标在栏附近（Reach / Stay 的结果）。
