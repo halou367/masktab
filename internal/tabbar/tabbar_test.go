@@ -1,6 +1,9 @@
 package tabbar
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLay(t *testing.T) {
 	l := Lay(1200, 3, 1)
@@ -320,8 +323,9 @@ func TestMorph(t *testing.T) {
 			t.Fatalf("展开后 %v 处是 %v（透明度 %d），该是 %v", pt, c.At(pt[0], pt[1]), alpha(pt[0], pt[1]), want.At(pt[0], pt[1]))
 		}
 	}
-	if alpha(700, 2) != 0 || alpha(mid(0), 3) != 0 {
-		t.Fatalf("展开后窗口上沿外面不该有东西：%d %d", alpha(700, 2), alpha(mid(0), 3))
+	// 窗口上沿外面：色条那一段留着一丝透明度接鼠标（不然鼠标停在那儿会漏到下面的窗口，栏一开一合地抖），色条以外的全透明
+	if alpha(700, 2) != 0 || alpha(mid(0), 3) != 1 || alpha(st[0].L, 0) != 1 {
+		t.Fatalf("展开后窗口上沿外面：色条那段该是一丝（1），别处 0：%d %d %d", alpha(700, 2), alpha(mid(0), 3), alpha(st[0].L, 0))
 	}
 
 	// 中间：标签长了一半，底色半透明、只铺到一半，字还没出来
@@ -377,5 +381,38 @@ func TestInPlace(t *testing.T) {
 	}
 	if InPlace(want, Rect{}, 24) {
 		t.Fatal("没有目标位置不算在位")
+	}
+}
+
+// 自动收起的栏：路过不弹、停一下才弹；离开一小下不收；收起后鼠标没离开过色条就不再弹（2026-11-20，“鼠标靠近离开反复会一直弹”）。
+func TestHoverIntent(t *testing.T) {
+	var h Hover
+	t0 := time.Unix(1000, 0)
+	at := func(ms int) time.Time { return t0.Add(time.Duration(ms) * time.Millisecond) }
+	// 一划而过：在色条上只待了 16 毫秒
+	if h.Want(false, true, at(0)) || h.Want(false, true, at(16)) || h.Want(false, false, at(32)) {
+		t.Fatal("路过色条不该展开")
+	}
+	// 停住：40 毫秒以后展开
+	if h.Want(false, true, at(100)) || h.Want(false, true, at(120)) || !h.Want(false, true, at(141)) {
+		t.Fatal("停在色条上 40 毫秒该展开")
+	}
+	// 展开着，鼠标离开 50 毫秒又回来：不收
+	if !h.Want(true, false, at(200)) || !h.Want(true, false, at(250)) || !h.Want(true, true, at(260)) {
+		t.Fatal("擦出去一下不该收")
+	}
+	// 离开满 100 毫秒：收
+	if !h.Want(true, false, at(300)) || h.Want(true, false, at(401)) {
+		t.Fatal("离开 0.1 秒该收")
+	}
+	// 收起时鼠标恰好还在色条上（以前就是这样一开一合）：不再弹，直到鼠标离开过一次
+	for ms := 410; ms < 1500; ms += 16 {
+		if h.Want(false, true, at(ms)) {
+			t.Fatalf("收起以后鼠标没离开过色条，%d 毫秒时又弹了", ms)
+		}
+	}
+	h.Want(false, false, at(1500))
+	if h.Want(false, true, at(1510)) || !h.Want(false, true, at(1551)) {
+		t.Fatal("离开过一次以后再停到色条上，该照常展开")
 	}
 }

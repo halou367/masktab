@@ -15,7 +15,7 @@
                 └─ 内置扩展 = companion/ext 里共用的页面 + android/ext 的外壳；请求经 Bridge.kt 转给核心服务
 ```
 
-- **状态只有一份，在核心服务里**。界面不存状态：每次拿整份 `/api/state` 重画。实例的运行时状态在 `rt` 里（`Runtime`，不落盘）。
+- **状态只有一份，在核心服务里**。界面不存状态：每次拿整份 `/api/state` 重画（同一页里原地更新，见 `ui.js` 的 `morph`，决策 UI-32）。实例的运行时状态在 `rt` 里（`Runtime`，不落盘）。
 - **两端一份代码**（decisions D-4）：逻辑只写在 Go 里，页面只写在 `companion/ext` 的共用文件里。Kotlin 只是浏览器外壳。
 - **内核不改**：fingerprint-chromium / GeckoView / mihomo 都是拿现成的，能动的只有启动参数和配置。
 
@@ -60,6 +60,7 @@
 | 管什么 | 在哪 |
 |---|---|
 | 组件和样式（行、开关、对话框、下拉、图标、主题） | `ui.js`、`ui.css`。页面里不要另写一套 |
+| 状态变了怎么重画：原地更新 `morph`（行要给键 `data-k`）、点过的待在原处 `holdAnchor`、列表次序定住 `stableOrder`（决策 UI-32） | `ui.js`；外壳 `app.js`、`popup.js`、`android/ext/main.js` 在 `render` 里调；“打开”实例统一走 `menu.js` 的 `openInst` |
 | 两端共用的小函数、措辞（“需重启：…”之类） | `common.js` |
 | 节点与出口、指纹与伪装 | `panel.js`（`panel.target(实例 id)`：可以对着任何实例，不只本窗口） |
 | 设置各页、订阅与地址库、组件与更新、诊断 | `pages.js` |

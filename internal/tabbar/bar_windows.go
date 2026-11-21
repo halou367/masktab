@@ -42,6 +42,7 @@ type group struct {
 	open     bool      // 现在是展开的
 	openedAt time.Time // 上一次开始展开是什么时候（紧接着按在色条那几行上的，算按色条，见鼠标消息的处理）
 	menuOn   bool      // ＋ 的菜单开着：不收
+	hv       Hover     // 悬停的意图延迟和迟滞（tabbar.go 的 Hover）
 	pin      time.Time // 测试脚本刚发过鼠标消息：这之前不收起（真鼠标不在这儿）
 
 	lastWin Rect // 当前窗口最近一次的外框：它没了以后，下一个摆在这里
@@ -1227,7 +1228,9 @@ func under(x, y int) uintptr {
 // wantOpen 报告按鼠标现在的位置，这条栏该展开着还是收着。cur：它现在（或正在变成）展开的。
 // 收着的：鼠标到了色条上就该展开。展开着的：鼠标还在栏附近（四周放宽 10 像素）就留着，出去了就该收。
 // “在色条上 / 在栏上”= 鼠标底下最上面的窗口就是这条栏或它的浏览器窗口（别的程序的窗口盖在上面时不算）。
-// 正拖着、正有实例要并进来、＋ 的菜单开着的时候一直展开。没有等待时间：到了就展开，离开就收（需求方：要零延迟、跟手）。
+// 正拖着、正有实例要并进来、＋ 的菜单开着的时候一直展开。
+// 到了色条上停一小下（40 毫秒）才展开、离开 0.1 秒才收、收起后鼠标先离开一次色条才会再弹（Hover，2026-11-20：以前“零等待”，
+// 加上展开后色条那一条不接鼠标，鼠标停在窗口最上沿时栏一秒开合好几下，需求方：“鼠标靠近离开反复会一直弹”）。
 func (g *group) wantOpen(cur bool, now time.Time) bool {
 	m := g.m
 	if g.drop || g.menuOn || (m.drag.on && m.drag.g == g) || now.Before(g.pin) {
@@ -1235,11 +1238,14 @@ func (g *group) wantOpen(cur bool, now time.Time) bool {
 	}
 	x, y := cursor()
 	at := under(x, y)
+	var on bool
 	if !cur {
-		return at == g.hwnd && Reach(g.rect, g.lay, x, y, g.scale)
+		on = at == g.hwnd && Reach(g.rect, g.lay, x, y, g.scale)
+	} else {
+		open := Rect{g.rect.L, g.rect.T, g.rect.R, g.rect.T + px(OpenH, g.scale)}
+		on = (at == g.hwnd || at == m.main[g.active]) && Stay(open, x, y, g.scale)
 	}
-	open := Rect{g.rect.L, g.rect.T, g.rect.R, g.rect.T + px(OpenH, g.scale)}
-	return (at == g.hwnd || at == m.main[g.active]) && Stay(open, x, y, g.scale)
+	return g.hv.Want(cur, on, now)
 }
 
 // hoverTick 每 10 毫秒看一次鼠标（系统的定时器实际约 16 毫秒一次）：该展开的展开，该收的收。
@@ -1484,7 +1490,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 			g.pin = time.Now().Add(6 * time.Second)
 			g.setOpen(true)
 		case !g.open && !m.drag.on: // 正拖着的时候不走这里：松手、移动都要交给下面的拖动处理，不能在这儿吃掉
-			// 真鼠标到了收着的色条上：当场展开，不等（需求方：要零延迟、跟手）。
+			// 真鼠标到了收着的色条上：记下来，停够 HoverIn 就展开（定时器那边接着看）；按下去当场展开。
 			// 没动鼠标就直接按下去了（鼠标本来就停在这儿）：马上展开（不放过渡），按的是哪一段色条就当作点了哪个标签的正中间
 			// （色条是一段挨一段排的，和展开后的标签左右对不上，所以要换算）
 			if ms != wmLButtonDown {

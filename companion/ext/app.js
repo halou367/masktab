@@ -1,5 +1,6 @@
 import { api, shownExit } from './api.js';
-import { h, icon, ibtn, toast, run, applyTheme, appBar, sec, row, sw, choose, ask, confirmDlg, pageIn, flipSnap, flipPlay } from './ui.js';
+import { h, icon, ibtn, toast, run, applyTheme, appBar, sec, row, sw, choose, ask, confirmDlg, pageIn, flipSnap, flipPlay, morph, holdAnchor, resetOrders } from './ui.js';
+import { launchWatch } from './menu.js';
 import { instancesView } from './instances.js';
 import { syncIcons } from './sites.js';
 import { panel } from './panel.js';
@@ -24,12 +25,24 @@ const open = (r) => { location.hash = r; };
 const back = () => open('settings');
 const main = document.getElementById('main');
 
+// 同一时间只取一份状态（事件和点按撞在一起时并成一次）；取回来和上一份一样、又不是点按后要的（force），就不重画（2026-11-20，decisions UI-32）。
+let lastJ = '', inflight = null, again = false, againForce = false;
 async function load(force) {
-  try { st = await api('GET', '/api/state'); } catch (e) { main.replaceChildren(h('div', { class: 'warn bad', style: { marginTop: '24px' } }, icon('warn', 20), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); return; }
-  applyTheme(st.settings?.theme || 'system', st.me?.color);
-  await syncIcons(st);
-  panel.set(st);
-  if (force || (!editing() && !document.querySelector('.scrim:not(.out)'))) render();
+  if (inflight) { again = true; againForce ||= !!force; return inflight; }
+  inflight = (async () => {
+    let s, j;
+    try { s = await api('GET', '/api/state'); j = JSON.stringify(s); } catch (e) { main.replaceChildren(h('div', { class: 'warn bad', style: { marginTop: '24px' } }, icon('warn', 20), h('span', { class: 'tx' }, '核心服务未连接：' + e.message))); main.dataset.page = ''; return; }
+    const iconsNew = await syncIcons(s);
+    if (!force && j === lastJ && !iconsNew) return;
+    lastJ = j; st = s;
+    applyTheme(st.settings?.theme || 'system', st.me?.color);
+    panel.set(st);
+    launchWatch(st, render);
+    // 开着对话框 / 下拉（挂在 body 上的遮罩）、正在输入时不重画；实例详情抽屉是页面自己的一部分，原地更新不打扰它（进度、开关状态跟着变）
+    if (force || (!editing() && !document.querySelector('body > .scrim:not(.out)'))) render();
+  })();
+  try { await inflight; } finally { inflight = null; }
+  if (again) { const f = againForce; again = againForce = false; await load(f); }
 }
 
 const shell = { load: () => load(true), render: () => render(), open, back: null }; // back：改别的实例时回到它的详情
@@ -100,14 +113,15 @@ async function diagText() {
 }
 
 function render() {
-  if (!st) return;
+  if (!st || document.body.classList.contains('dragging')) return; // 正拖着卡片排序：不动它（松手后会重新取状态）
   const p = page();
   // 新建向导的小窗口有自己的一页（wizard.html，决策 UI-31）；老地址 app.html#new 转过去
   if (p === 'new') { location.replace('wizard.html'); return; }
+  if (route() !== lastRoute) { lastRoute = route(); resetOrders(); } // 换了页：列表下次按当时的数重排（决策 UI-32）
   const tid = p === 'node' ? route().split('/')[1] || '' : ''; // 节点面板对着哪个实例（空 = 本窗口的）
   const at = p === 'settings/ntp' ? 'settings' : tid || p === 'mail' ? 'instances' : p; // 信箱是某个实例的，算在“实例”里 // “新标签页”的设置是从“基本设置”点进去的；改别的实例的节点算在“实例”里
-  document.getElementById('nav').replaceChildren(h('div', { class: 'h' }, h('span', { class: 'lg' }, icon('mask', 20)), 'MaskTab'),
-    ...NAV.flatMap(([g, l]) => [g && h('div', { class: 'g' }, g), ...l.map(([r, ic, t]) => h('button', { class: at === r ? 'on' : '', onclick: () => open(r) }, icon(ic, 20), t))]).filter(Boolean));
+  morph(document.getElementById('nav'), [h('div', { class: 'h' }, h('span', { class: 'lg' }, icon('mask', 20)), 'MaskTab'),
+    ...NAV.flatMap(([g, l]) => [g && h('div', { class: 'g' }, g), ...l.map(([r, ic, t]) => h('button', { class: at === r ? 'on' : '', onclick: () => open(r) }, icon(ic, 20), t))]).filter(Boolean)]);
   const c = { st, act, open, back, render, link: (u) => chrome.tabs.create({ url: u }), diag: diagText };
   const ic = { st, act, load, render, openNode: (id) => open('node/' + id), open };
   let kids;
@@ -123,15 +137,16 @@ function render() {
       mail: () => { const [, mid, key] = route().split('/'); return mailView({ ...c, load, back: { fn: () => open('instances/' + mid), title: '回到实例' } }, mid, key ? decodeURIComponent(key) : ''); } }[p] || (() => instancesView(ic)))();
   }
   const snap = lastPage === p ? flipSnap(main) : null; // 同一页里重画：列表增删、换位置有过渡（决策 UI-26）
-  main.dataset.page = p;
-  main.replaceChildren(...[kids].flat(Infinity).filter(Boolean));
+  // 同一页里原地更新（ui.js 的 morph）：没变的行一个节点都不动，滚动位置、焦点、悬停都在；换页才整个换（决策 UI-32）
+  const whole = morph(main, kids, p);
   if (p === 'node' || p === 'fp') panel.after();
+  if (!whole) holdAnchor(); // 刚点过的开关 / 行待在原来的高度
   flipPlay(snap, main);
   if (lastPage !== p) { scrollTo(0, 0); pageIn(main, 'fade'); }
   lastPage = p;
   document.title = 'MaskTab · ' + (TITLES[p] || (p === 'mail' ? '信箱' : '设置'));
 }
-let lastPage = '';
+let lastPage = '', lastRoute = '';
 addEventListener('hashchange', () => render());
 await load(true);
 if (page() === 'node') panel.refreshSubs();

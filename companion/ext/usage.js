@@ -1,5 +1,6 @@
 import { api, shownExit, letterOf } from './api.js';
-import { h, icon, ibtn, appBar, sec, row, avatar, flag, cname, run } from './ui.js';
+import { h, icon, ibtn, appBar, sec, row, avatar, flag, cname, run, morph } from './ui.js';
+import { openInst, launching } from './menu.js';
 
 // 运行情况（决策 UI-28，电脑版）：整个 MaskTab 和每个开着的实例各占多少内存、处理器，有几个进程，
 // 开着哪些窗口和标签页，记住了哪些站点的账号。数从核心服务的 /api/usage 来（它顺着内核进程的父子关系算）。
@@ -26,7 +27,7 @@ async function tick() {
 // body() 给的是嵌套的数组（里面还有 false）：先交给 h() 摊平，再整批换进去
 function paint() {
   const root = document.getElementById('usage');
-  if (root) root.replaceChildren(...h('div', {}, body()).childNodes);
+  if (root) morph(root, body()); // 原地更新：每 2 秒只改变了的数字，悬停提示、按钮不跟着闪（决策 UI-32）
 }
 
 const nums = (p, warm) => [h('span', { class: 'unum mono', title: '内存' }, memText(p.mem)), h('span', { class: 'unum cpu mono', title: '处理器（按整机算，和任务管理器一样）' }, cpuText(p.cpu, warm))];
@@ -96,7 +97,7 @@ function body() {
     off.length > 0 && [sec('没开的实例', `${off.length} 个 · 不占内存`),
       off.map((i) => row({ cls: 'uoff', ic: avatar(i.color, letterOf(i), 36), t: [h('span', { class: 'mono no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))],
         s: [i.acct?.count ? `记住 ${i.acct.count} 个账号` : '没有记住的账号', i.acct?.cookieN ? `${i.acct.cookieN} 条 Cookie` : ''].filter(Boolean).join(' · '),
-        trail: ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go') }))],
+        trail: launching(i) ? h('button', { class: 'ib busy go', title: '正在打开…', 'aria-disabled': 'true', 'aria-busy': 'true', onclick: (e) => e.stopPropagation() }, icon('refresh')) : ibtn('play', '打开', () => openInst(i), 'go') }))],
     h('div', { class: 'foot noic' }, 'Windows 任务管理器里，各实例的浏览器进程归成一组“MaskTab”，分不出哪个是哪个实例的；想看哪个实例占了多少，以这一页为准。' + (u.rough ? '这台电脑的系统较旧，内存只能取到“工作集”（含和别的进程共用的部分），会比任务管理器“内存”那一列大一些；' : '内存是各进程的专用工作集之和，和任务管理器“内存”那一列同一个口径；') + '处理器按整机算。'),
   ];
 }

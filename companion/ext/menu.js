@@ -3,7 +3,7 @@
 // 上面是当前实例：大头像、出口、纯净度圆环（越满越干净）和 CF 风险（数字越低越好）；中间是三项常用入口；下面列出其它实例，运行中的点了切过去（聚焦它的窗口），休眠的点了打开。
 // 电脑的工具栏弹窗用它；手机的头像菜单浮在网页上，由 app 原生画（同样的内容、同样的接口，见 decisions UI-2）。
 import { api, shownExit, fmtBytes, letterOf as letter } from './api.js';
-import { h, icon, flag, run, delayText, delayCls, cname, ringEl, cfDot } from './ui.js';
+import { h, icon, flag, run, toast, delayText, delayCls, cname, ringEl, cfDot } from './ui.js';
 import { disguise, exitQ, cfRisk, restartText, restartPath } from './common.js';
 import { siteIcon, uniqSites } from './sites.js';
 import { newWizard } from './wizard.js';
@@ -18,7 +18,7 @@ export function face(i, big, withDot, noFlag) {
   const tx = letterOf(i);
   return h('span', { class: 'face' + (big ? ' big' : '') + (tx.length > 2 ? ' l3' : tx.length > 1 ? ' l2' : ''), style: { background: i.color } }, tx,
     ex?.country && flag(ex.country),
-    withDot && h('i', { class: 'run' + (i.rt.running ? ' on' : i.rt.starting ? ' st' : '') }));
+    withDot && h('i', { class: 'run' + (i.rt.running ? ' on' : i.rt.starting || launching(i) ? ' st' : '') }));
 }
 // 启动进度：第几步 / 共几步 + 当前步骤名，配一条进度条。
 export function stepLine(i, steps) {
@@ -27,9 +27,56 @@ export function stepLine(i, steps) {
     h('span', { class: 'stb' }, h('i', { style: { width: `${Math.round((n - 0.5) * 100 / all)}%` } })), `${steps?.[n - 1] || '启动中'} ${n}/${all}`);
 }
 
+// ---------- 打开实例：点了马上有反应（2026-11-20，需求方：“打开实例没进度动画，有时候不知道触发没有”） ----------
+// “打开”的接口只是把启动交给核心服务的后台就回话，真正的“启动中 1/8”要等下一份状态才看得到——中间这一两百毫秒到一两秒什么都没变，
+// 用户不知道点没点上，于是再点一下。现在点下去当场记成“正在打开”：按钮、卡片、菜单里那一行马上换成进度条（还没有步骤时是来回走的那种），
+// 同一个实例在“正在打开”里再点不会再发；状态里出现 starting 就接上启动步骤（LaunchSteps）；没开成（接口报错、状态里带回了原因、
+// 15 秒没有任何动静）弹一条红色提示写原因。头像菜单、实例页（卡片 / 抽屉 / 手机一行一张）、信箱页、节点面板里的“打开”都走这里。
+const pend = new Map(); // 实例 id → { at: 点下去的时间, err0: 那时候它身上的错误（不把旧的当成这一次的） }
+let repaint = null;     // 外壳的“只重画”：点下去以后马上画出“正在打开”
+/** 这个实例是不是刚点了“打开”、核心服务还没开始启动它。 */
+export const launching = (i) => !!i && pend.has(i.id) && !i.rt?.starting && !i.rt?.running;
+/** 点“打开”：马上进入“正在打开”、防止连点；失败有提示。返回 false = 已经在开了，这一下没发。 */
+export function openInst(i, { stay, done } = {}) {
+  if (!i || pend.has(i.id) || i.rt?.starting) return false;
+  const tag = `#${i.no}`;
+  pend.set(i.id, { at: Date.now(), err0: i.rt?.error || '' });
+  repaint?.();
+  api('POST', `/api/instances/${i.id}/launch`, stay ? { stay: true } : undefined).then(() => done?.(), (e) => {
+    pend.delete(i.id); repaint?.();
+    toast(`${tag} 没能打开：${e.message || e}`, true);
+  });
+  setTimeout(() => { const p = pend.get(i.id); if (p && Date.now() - p.at >= 15000) { pend.delete(i.id); repaint?.(); toast(`${tag} 点了打开，15 秒没有动静：核心服务可能卡住了，到“诊断”里看看`, true); } }, 15100);
+  return true;
+}
+const wasStarting = new Set();
+/** 每拿到一份新状态调一次（外壳的 load 里）：“正在打开”接上真正的启动进度；没开成就说原因。render = 外壳的“只重画”。 */
+export function launchWatch(st, render) {
+  if (render) repaint = render;
+  for (const i of st?.instances || []) {
+    const rt = i.rt || {}, p = pend.get(i.id);
+    if (p) {
+      if (rt.starting || rt.running) pend.delete(i.id);
+      else if (rt.error && (rt.error !== p.err0 || Date.now() - p.at > 1500)) { pend.delete(i.id); toast(`#${i.no} 没能打开：${rt.error}`, true); }
+    }
+    // 启动途中失败（启动中 → 没在运行、带着原因）：以前进度条一下没了，卡片变回“打开”，不说为什么
+    if (wasStarting.has(i.id) && !rt.starting && !rt.running && rt.error) toast(`#${i.no} 没能打开：${rt.error}`, true);
+    if (rt.starting) wasStarting.add(i.id); else wasStarting.delete(i.id);
+  }
+}
+/** 启动中显示进度：真的在启动 = 第几步；刚点下去、核心服务还没开始 = 来回走的进度条 + “正在打开…”。都不是返回 null。 */
+export function busyLine(i, steps) {
+  if (i.rt?.starting) return stepLine(i, steps);
+  if (launching(i)) return h('span', { class: 'stp pend', title: '已经交给核心服务，马上开始启动' }, h('span', { class: 'stb ind' }, h('i')), '正在打开…');
+  return null;
+}
+
 const nameOf = (i) => i.name || (i.kind === 'normal' ? '普通窗口' : '伪装实例');
 const exitText = (i) => { if (i.kind === 'normal' || i.proxy.state !== 'on') return '直连'; const ex = shownExit(i); return ex ? ex.ip : i.rt?.running || i.rt?.starting ? '出口探测中' : '出口未探测'; }; // 休眠的实例没在探测，和实例页写一样的话
 
+let ord = null; // 其它实例的次序（实例 id → 第几个）：菜单打开时定下，开着的时候不变
+/** 重新打开菜单时调（手机上菜单页是常驻的）：下一次按当时的状态重新排。 */
+export function menuReset() { ord = null; }
 let q = '', askQ = false; // askQ = 用户开始打字了：实例不多、平时不显示搜索框时也把它显示出来
 // 电脑弹窗里直接打字就是搜索（popup.js 在没有输入框聚焦时调它）：显示搜索框，之后由调用方聚焦。
 export function menuSearch() { askQ = true; }
@@ -49,7 +96,7 @@ export function menuView(st, nav) {
         on ? (ex ? [flag(ex.country), h('span', { class: 'mono' }, ex.ip), h('span', { class: 'lat ' + delayCls(rt.latency) }, delayText(rt.latency))] : rt.cut || rt.error ? h('span', { class: 'bad' }, rt.error || rt.cut) : '出口探测中…')
           : me.kind === 'normal' ? '直连 · 不伪装' : h('span', { class: 'mid' }, '直连中，网站看到真实 IP')),
       on && ex && !rt.starting && h('div', { class: 'tf mono', title: `已用 ↑ ${fmtBytes(rt.up || 0)}  ↓ ${fmtBytes(rt.down || 0)}` }, `↑ ${fmtBytes(rt.upRate || 0)}/s   ↓ ${fmtBytes(rt.downRate || 0)}/s`),
-      rt.starting && stepLine(me, st.launchSteps),
+      busyLine(me, st.launchSteps),
       sites.length > 0 && h('div', { class: 'sites', title: '记住了账号的站点' }, sites.slice(0, 8).map((s) => siteIcon(s, 15)), sites.length > 8 && h('span', { class: 'sub' }, `+${sites.length - 8}`))),
     on && h('span', { class: 'rep', title: `${q2.pure ? q2.pure.tip : '纯净度未知'}\n\n${cf.tip}` }, ringEl(q2.score, 36, null, q2.pure?.cls), cfDot(cf.st, cf.n != null ? `CF ${cf.n}` : cf.st === 'bad' ? 'CF 不可达' : 'CF 未测'))));
   // 有要重启才生效的改动（加了扩展、改了指纹…）：写在首页最上面，旁边就是“立即重启”（决策 UI-19）。
@@ -64,9 +111,14 @@ export function menuView(st, nav) {
     nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : ''),
     me.mail && mi('mail', '信箱', () => nav.open(`mail/${me.id}`), me.mail.unread ? h('span', { class: 'mdot n' }, String(me.mail.unread)) : ''))); // 设了卡密才有（decisions MB-1）
 
-  // 开着的排在前面（和实例页“运行中 / 休眠”两组一个次序），组内还是拖出来的次序：要切过去的多半是开着的
+  // 开着的排在前面（和实例页“运行中 / 休眠”两组一个次序），组内还是拖出来的次序：要切过去的多半是开着的。
+  // 次序在菜单打开时定一次（决策 UI-32）：开着菜单点“打开”某一个，它不会从下面跳到最上面去，还在原处转进度；下次打开菜单才按新的排。
   const live = (x) => (x.rt.running || x.rt.starting ? 0 : 1);
-  const others = st.instances.filter((x) => x.id !== me.id).sort((a, b) => live(a) - live(b));
+  const base = st.instances.filter((x) => x.id !== me.id).sort((a, b) => live(a) - live(b));
+  if (!ord) ord = new Map(base.map((x, k) => [x.id, k]));
+  const n0 = ord.size;
+  base.forEach((x, k) => { if (!ord.has(x.id)) ord.set(x.id, n0 + k); });
+  const others = base.slice().sort((a, b) => ord.get(a.id) - ord.get(b.id));
   const qs = q.trim().toLowerCase();
   const match = (x) => !qs || `#${x.no} ${x.name || ''} ${exitText(x)}`.toLowerCase().includes(qs);
   const list = others.filter(match).sort((a, b) => rank(a, qs) - rank(b, qs));
@@ -97,12 +149,14 @@ export function menuView(st, nav) {
     h('div', { class: 'insts' }, list.map((x) => {
       const xe = x.proxy.state === 'on' ? shownExit(x) : null;
       return h('button', {
-        class: 'ai ' + (x.rt.running || x.rt.starting ? 'run' : 'idle'), style: { '--c': x.color }, 'data-iid': x.id, onkeydown: move,
-        title: (x.rt.running ? `切换到 #${x.no} 的窗口` : `打开 #${x.no}`) + `\n${nameOf(x)}\n${xe ? [xe.ip, cname(xe.country)].filter(Boolean).join(' · ') : exitText(x)}`,
-        onclick: () => run(async () => { await api('POST', `/api/instances/${x.id}/launch`); if (x.rt.running && !MOBILE) window.close(); }, x.rt.running ? null : `正在打开 #${x.no}…`),
+        class: 'ai ' + (x.rt.running || x.rt.starting || launching(x) ? 'run' : 'idle') + (x.rt.starting || launching(x) ? ' busy' : ''), style: { '--c': x.color }, 'data-iid': x.id, onkeydown: move,
+        'aria-busy': x.rt.starting || launching(x) ? 'true' : null,
+        title: (x.rt.running ? `切换到 #${x.no} 的窗口` : x.rt.starting || launching(x) ? `#${x.no} 正在打开` : `打开 #${x.no}`) + `\n${nameOf(x)}\n${xe ? [xe.ip, cname(xe.country)].filter(Boolean).join(' · ') : exitText(x)}`,
+        // 开着的：切过去（电脑上顺手关掉弹窗）；没开的：当场变成“正在打开”，弹窗留着看进度；正在打开的：再点不重复发
+        onclick: () => (x.rt.running ? run(async () => { await api('POST', `/api/instances/${x.id}/launch`); if (!MOBILE) window.close(); }) : openInst(x)),
       }, face(x, false, true, true),
       h('span', { class: 'tx' }, h('span', { class: 'n' }, `#${x.no} ${nameOf(x)}`),
-        x.rt.starting ? stepLine(x, st.launchSteps) : h('span', { class: 's' }, xe ? [flag(xe.country), h('span', { class: 'mono' }, xe.ip)] : exitText(x), x.acct?.count ? h('span', { class: 'cnt2', title: `${x.acct.count} 个账号` }, icon('key', 13), x.acct.count) : null)));
+        busyLine(x, st.launchSteps) || h('span', { class: 's' }, xe ? [flag(xe.country), h('span', { class: 'mono' }, xe.ip)] : exitText(x), x.acct?.count ? h('span', { class: 'cnt2', title: `${x.acct.count} 个账号` }, icon('key', 13), x.acct.count) : null)));
     })),
     !list.length && h('div', { class: 'empty' }, others.length ? '没有匹配的实例' : '还没有别的实例'));
 
