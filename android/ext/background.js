@@ -115,8 +115,18 @@ browser.proxy.onRequest.addListener(async (d) => {
   await ready;
   let id = await instOfTab(d.tabId);
   if (!id) id = idOfCs(d.cookieStoreId) || (isContainer(d.cookieStoreId) && csInst.get(d.cookieStoreId)) || null;
-  if (id) { if (d.tabId >= 0) lastInst = id; trNote(d, `走实例 #${insts[id]?.no ?? '?'} 的线路`); return routeFor(id); }
+  if (id) {
+    if (d.tabId >= 0) lastInst = id;
+    if (d.type === 'main_frame' || d.type === 'sub_frame') noteSite(d.url, id);
+    trNote(d, `走实例 #${insts[id]?.no ?? '?'} 的线路`);
+    return routeFor(id);
+  }
   const from = d.documentUrl || d.originUrl || '';
+  // 认不出标签页、但来源网页最近只在一个实例里打开过：算那个实例的（decisions A-17 补充）。
+  // 网页的后台线程（SharedWorker 等）、预连接发的请求常常没有标签页、也不带容器；以前一律拒绝，拒绝后内核又退回直连——
+  // 开着 FlClash 时从 FlClash 出去所以看不出，不开时这些请求失败，网页就“部分加载不出来”。
+  const guess = siteInst(from);
+  if (guess && !isTr(d.url)) { trNote(d, `按来源网页走实例 #${insts[guess].no} 的线路`); return routeFor(guess); }
   // 后台替某个实例的网页代发的请求（下面“替网页代发”一节）：这段时间里后台自己发出去的都算在那个实例头上，走它的线路（跳转以后也是）。
   if (d.tabId < 0 && from.startsWith(SELF) && relayWho && insts[relayWho] && !isLoop(d.url)) {
     trNote(d, `走实例 #${insts[relayWho].no} 的线路（后台代发）`);
@@ -135,6 +145,21 @@ browser.proxy.onRequest.addListener(async (d) => {
   trNote(d, pass ? '诊断放行' : '已拒绝');
   return pass ? routeFor(pass) : BLOCK; // 诊断时放行也只走实例的线路，绝不直连
 }, { urls: ['<all_urls>'] });
+// 网页所在的站点 → 打开它的实例（只记最近 200 个；同一站点开在两个实例里就不猜，免得串线）
+const siteMap = new Map();
+const siteOf = (u) => { try { const h = new URL(u).hostname; const p = h.split('.'); return p.length > 2 ? p.slice(-2).join('.') : h; } catch { return ''; } };
+function noteSite(url, id) {
+  const k = siteOf(url);
+  if (!k) return;
+  const v = siteMap.get(k);
+  siteMap.delete(k);
+  siteMap.set(k, v && v !== id ? '*' : id);
+  if (siteMap.size > 200) siteMap.delete(siteMap.keys().next().value);
+}
+function siteInst(from) {
+  const v = siteMap.get(siteOf(from));
+  return v && v !== '*' && insts[v] ? v : null;
+}
 function noteBlocked(d, from, pass) {
   const host = (u) => { try { return new URL(u).host; } catch { return ''; } };
   const e = { t: Date.now(), host: host(d.url), type: d.type || '', from: host(from), tab: d.tabId, cs: d.cookieStoreId || '', pass: !!pass };
