@@ -92,7 +92,10 @@ function routeFor(id) {
   const x = insts[id];
   if (!x) return BLOCK;
   if (x.direct) return { type: 'direct' };
-  return { type: 'socks', host: '127.0.0.1', port: x.port, proxyDNS: true, failoverTimeout: 1 };
+  // 实例的线路只有这一条，没有可以换的：等久一点（10 秒）再算失败；失败就是失败，绝不换成直连（decisions A-17）。
+  // 以前是 1 秒：线路刚建、内核忙的时候本机代理一秒没应答，内核就当它坏了，按默认改走直连或系统代理——
+  // 开着 FlClash 时这些请求从 FlClash 出去（网页照常，只是出口 IP 和实例不一样），不开时被墙的站点就打不开（需求方：“不开 FlClash 部分网页不加载”）。
+  return { type: 'socks', host: '127.0.0.1', port: x.port, proxyDNS: true, failoverTimeout: 10 };
 }
 // 翻译接口（companion/ext/translate.js 用的两家）。到它们的请求走了哪条线路记进日志（最多 12 条），模拟器冒烟靠它核对（docs/android.md）。
 const TR_HOSTS = new Set(['translate.googleapis.com', 'edge.microsoft.com']);

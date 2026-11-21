@@ -488,7 +488,7 @@ const SPOOF = [['canvas', 'Canvas', 'palette'], ['audio', '音频', 'audio'], ['
 // 内核由宿主管的（安卓版 GeckoView）：伪装在网页里按种子做，项目固定，不能逐项开关。
 const HOSTED_SPOOF = ['Canvas', '音频', 'CPU 核数', '屏幕', '时区', '语言'];
 const LANGS = ['en-US', 'en-GB', 'zh-CN', 'zh-TW', 'ja-JP', 'ko-KR', 'de-DE', 'fr-FR', 'es-ES', 'pt-BR', 'ru-RU', 'it-IT', 'nl-NL', 'tr-TR', 'vi-VN', 'th-TH', 'id-ID'];
-const CHK_IC = { proxy: 'shield', exit: 'globe', tz: 'clock', lang: 'lang', same: 'swap', cf: 'cloud', cfexit: 'pin', pure: 'leaf', applied: 'refresh', ua: 'devices', webrtc: 'webrtc' };
+const CHK_IC = { proxy: 'shield', exit: 'globe', tz: 'clock', lang: 'lang', same: 'swap', cf: 'cloud', cfexit: 'pin', pure: 'leaf', applied: 'refresh', ua: 'devices', spoof: 'shield', cores: 'devices', webrtc: 'webrtc' };
 
 function fpView(me) {
   const rt = me.rt, fi = me.fpInfo || {}, caps = st.kernel.caps || {}, dz = disguise(me);

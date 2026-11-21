@@ -360,6 +360,7 @@ func (a *App) Launch(id string) error {
 		if !strings.HasPrefix(lang, "en") {
 			l.AcceptLang += ",en-US,en"
 		}
+		l.AcceptLang = withSysLang(l.AcceptLang, a.hosted())
 	}
 	if a.coreOK {
 		l.ProxyPort = in.Port
@@ -1023,4 +1024,32 @@ func isOurProcess(pid int, marker string, exeNames ...string) bool {
 		return err2 == nil && strings.Contains(string(out), marker)
 	}
 	return strings.Contains(string(b), marker)
+}
+
+// withSysLang 把本机系统的显示语言（如 zh-CN）补在可接受语言的最后（decisions FP-1）。
+// 浏览器的系统语音（speechSynthesis 的默认语音）、system-ui / menu 字体都跟着 Windows 显示语言走，内核伪装改不到：
+// 实例说日语、语音和系统字体却是简体中文，前后对不上就被当成“改过”。把系统语言列进可接受语言，等于说
+// “这是一台中文 Windows、用户也看日文”，真实用户里很常见，前后就说得通了。已经在里面、宿主模式（手机）、取不到时不动。
+func withSysLang(accept string, hosted bool) string {
+	if hosted {
+		return accept
+	}
+	return addLang(accept, hostUILang())
+}
+
+func addLang(accept, sys string) string {
+	if sys == "" || accept == "" {
+		return accept
+	}
+	have := map[string]bool{}
+	for _, v := range strings.Split(accept, ",") {
+		have[strings.ToLower(strings.TrimSpace(v))] = true
+	}
+	for _, v := range []string{sys, strings.SplitN(sys, "-", 2)[0]} {
+		if !have[strings.ToLower(v)] {
+			accept += "," + v
+			have[strings.ToLower(v)] = true
+		}
+	}
+	return accept
 }

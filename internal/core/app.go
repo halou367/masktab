@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -445,10 +446,25 @@ func cores(in *model.Instance) int {
 	}
 	b, _ := base64.StdEncoding.DecodeString(in.FP.Seed)
 	opts := []int{4, 6, 8, 8, 12, 16}
-	if len(b) < 8 {
-		return 8
+	v := 8
+	if len(b) >= 8 {
+		v = opts[int(b[5])%len(opts)]
 	}
-	return opts[int(b[5])%len(opts)]
+	return capCores(v, runtime.NumCPU())
+}
+
+// capCores：随机出来的核数不超过本机真实的逻辑核数（decisions FP-1）。网页开几个 Worker 测并行跑得多快，
+// 就知道真有几个核；报 16 核却只跑得出 4 核的速度，是“改过”的明显痕迹。往少报没事（真实机器上常见）。
+func capCores(v, real int) int {
+	if real < 2 || v <= real {
+		return v
+	}
+	for _, o := range []int{16, 12, 8, 6, 4, 2} {
+		if o <= real {
+			return o
+		}
+	}
+	return 2
 }
 
 // defaultDisableSpoofing 是桌面端默认关闭的内核伪装项（decisions SI-1 补充）：

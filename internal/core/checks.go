@@ -1,6 +1,8 @@
 package core
 
 import (
+	"github.com/halou367/masktab/internal/kernel"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -137,11 +139,44 @@ func (a *App) checksLocked(in *model.Instance, rt *Runtime, info *fpInfo) *check
 	} else {
 		add(check{K: "applied", T: "设置已生效", V: "无待生效的改动", OK: true})
 	}
-	// 9. UA 与内核同源：电脑由指纹内核在引擎里改；手机固定为内核真实的安卓火狐（改了反而露馅）
+	// 9. 系统和本机一致（decisions FP-1）：电脑上把系统伪装成别的（Windows 报成 macOS），字体、TCP 指纹、系统语音都会露底。
+	//    以前这一项永远打勾；手机固定为内核真实的安卓火狐，照旧算通过。
 	ua := info.Brand + " · " + info.Platform
-	add(check{K: "ua", T: "UA 与内核一致", V: ua, OK: true})
-	// 10. WebRTC 只走代理（电脑：启动参数 + 偏好；手机：Gecko 偏好），不暴露本机地址
-	add(check{K: "webrtc", T: "WebRTC 不暴露本机 IP", V: "只走代理", OK: true})
+	if a.hosted() || info.Platform == "" || strings.EqualFold(info.Platform, kernel.HostPlatform()) {
+		add(check{K: "ua", T: "系统与本机一致", V: ua, OK: true})
+	} else {
+		add(check{K: "ua", T: "系统与本机一致", V: info.Platform + " ≠ 本机 " + kernel.HostPlatform() + "（字体、TCP 指纹会露底）", OK: false})
+	}
+	// 10. 内核伪装项没有已知破绽（电脑，decisions SI-1 / FP-1）：148 内核的画布、音频、字体、矩形、显卡五项开着会被识破
+	if !a.hosted() {
+		var bad []string
+		off := map[string]bool{}
+		for _, v := range in.FP.DisableSpoofing {
+			off[v] = true
+		}
+		names := map[string]string{"canvas": "画布", "audio": "音频", "font": "字体", "clientrects": "矩形", "gpu": "显卡"}
+		for _, k := range defaultDisableSpoofing {
+			if !off[k] {
+				bad = append(bad, names[k])
+			}
+		}
+		if len(bad) == 0 {
+			add(check{K: "spoof", T: "伪装项无已知破绽", V: "前后一致", OK: true})
+		} else {
+			add(check{K: "spoof", T: "伪装项无已知破绽", V: strings.Join(bad, "、") + "伪装开着：当前内核会被识破", OK: false})
+		}
+	}
+	// 11. CPU 核数不超过本机（报多了，网页测并行速度就知道是改的）
+	if !a.hosted() {
+		if n := runtime.NumCPU(); n >= 2 && info.Cores > n {
+			add(check{K: "cores", T: "CPU 核数可信", V: strconv.Itoa(info.Cores) + " 核 > 本机 " + strconv.Itoa(n) + " 核", OK: false})
+		} else {
+			add(check{K: "cores", T: "CPU 核数可信", V: strconv.Itoa(info.Cores) + " 核", OK: true})
+		}
+	}
+	// 12. WebRTC 只走代理（电脑：启动参数 + 偏好；手机：Gecko 偏好），不暴露本机地址。
+	//     代价写明：代理不转 UDP，网页拿不到任何候选，能看出 WebRTC 被限制了（但不泄露 IP）。
+	add(check{K: "webrtc", T: "WebRTC 不暴露本机 IP", V: "只走代理（无候选）", OK: true})
 
 	s := &checkSum{Items: out}
 	for _, c := range out {

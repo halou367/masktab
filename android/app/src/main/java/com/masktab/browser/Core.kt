@@ -142,6 +142,8 @@ object Core {
               media.peerconnection.ice.default_address_only: true
               media.peerconnection.ice.no_host: true
               network.proxy.socks_remote_dns: true
+              network.proxy.failover_direct: false
+              network.proxy.allow_bypass: false
               dom.serviceWorkers.enabled: $sw
               signon.rememberSignons: false
             """.trimIndent() + "\n",

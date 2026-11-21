@@ -1698,3 +1698,18 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   - IP 本身变了照样要重新检测（这是 Cloudflare 的规则，客户端改不了）；本分支做的是让 IP 尽量不变、变了告诉用户。
 - **检查**：Go `ident_test.go`（定身份、不拿 Workers 出口定、换出口不变、手动优先、跟随出口、直连、普通窗口、出口换了的提示、出口粘住）、`checks_test.go`（多一项 `cfexit`）、`extlib_test.go`（`TestGuardChallenge`）；页面 `flow`：时区下拉三项、默认“固定身份”。
 - **回退**：`expectTZPinned` 里去掉 `identLocked` 那两处、`Launch` / `refreshTry` 去掉 `lockIdent` / `noteCFExit`；`pickExit` 去掉开头那段；`newInstanceLocked` 的 `off` 改回空；`finalize` 去掉 `guardManifest`、`app.go` 去掉 `GuardDir` 循环。实例里多出来的 `ident`、`followExit` 老版本读到会忽略。
+
+### FP-1 伪装前后对得上（2026-11-22，分支 fix/fp-consistency，只做代码核对，没有实测）
+需求方：“之前出现了漏伪装，导致人机验证一直出现，关了好一些但还是得完善伪装”。SI-1 补充已把 148 内核有破绽的五项默认关掉；剩下靠参数改的几项逐项核对：
+- CPU 核数：按种子从 4～16 里挑，可能比本机还多；网页开 Worker 测并行速度就能看出来。改为不超过本机逻辑核数（capCores）。
+- 语言：实例说 ja-JP，系统语音（speechSynthesis 默认语音）和 system-ui / menu 字体却跟着 Windows 显示语言（zh-CN），内核改不到。把本机显示语言补在 Accept-Language 末尾（hostUILang，只在电脑上），等于“中文 Windows、看日文的用户”，前后说得通。
+- 自检：“UA 与内核一致”“WebRTC 不暴露”以前永远打勾。改为：系统是否和本机一致（伪装成别的系统会被字体、TCP 指纹揭穿）、五项有破绽的伪装是否开着、核数是否可信；WebRTC 写明“无候选”。
+- 显卡：五项关掉后 WebGL 与 WebGPU 都报真实显卡，前后一致。
+- 没做（要改内核）：系统语音列表、system-ui 字体按实例语言改写；Widevine；内核版本落后。
+
+### A-17 手机：实例线路失败不再悄悄改走直连；解析只用国内服务器（2026-11-22，分支 fix/fp-consistency，没有真机实测）
+需求方：“手机端必须开 FlClash 有些网页才可以正常用，不开靠浏览器自己的代理会出现部分网页不加载”。
+- 推断的原因：扩展给每个请求的代理写着 failoverTimeout 1 秒，内核默认 network.proxy.failover_direct = true：本机代理一秒没应答、或被我们拒绝的请求，内核会退回直连。开着 FlClash 时直连从 FlClash 出去，网页照常（但那部分请求的出口 IP 和实例不同，也是 CF 反复验证的来源之一）；不开时被墙的站点就打不开。
+- 改：Gecko 偏好 network.proxy.failover_direct = false、network.proxy.allow_bypass = false；实例线路 failoverTimeout 改 10 秒。
+- 改：宿主模式 mihomo 的 DNS 去掉 8.8.8.8 和 1.1.1.1（国内网络下 8.8.8.8 的 UDP 会被抢答成假地址、1.1.1.1 常不通），和电脑一样只用 223.5.5.5 / 119.29.29.29 / 1.12.12.12。
+- 风险：以前靠“退回直连”才打开的请求，改了以后开着 FlClash 也会失败；“设置 → 人机验证诊断”里认不出实例的请求列表能看到是哪些。

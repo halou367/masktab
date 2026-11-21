@@ -784,3 +784,7 @@ v0.1.55 只套了 UI-9 的四条规则，页面还是旧样子，需求方不认
 - 需求方电脑实测（同韩国 ProxyIP `222.111.210.67:18264`）：Pixelscan 显示 `No masking detected`，开发版 `#3`、`#5` 与正式版 `#1` 访问和连续刷新 `arena.ai` 均不再弹验证框。
 
 
+
+## 伪装一致性与手机直连（2026-11-22，分支 fix/fp-consistency，FP-1、A-17）
+- 基于 main 94ec99c。核数不超过本机、Accept-Language 补系统显示语言、自检三项改成真检查；手机实例线路不再退回直连、DNS 只用国内。
+- go test ./internal/core ./internal/proxy 通过（沙箱 linux）；Windows、手机都没实测。

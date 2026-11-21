@@ -28,8 +28,10 @@ type Input struct {
 	Hosted bool
 }
 
-// hostedDNS 是宿主模式用的解析服务器（0.1.41 及以前安卓版一直用这一组，手机上实测可用）。
-var hostedDNS = []string{"https://223.5.5.5/dns-query", "https://1.1.1.1/dns-query", "223.5.5.5", "8.8.8.8"}
+// hostedDNS 是宿主模式（手机）用的解析服务器，2026-11-22 起和电脑绑定网卡时一样只用国内的（decisions A-17）。
+// 以前混着 1.1.1.1 的 DoH 和 8.8.8.8：mihomo 同时问一组服务器、谁先回用谁，国内网络下 8.8.8.8 的 UDP 查询会被抢答成假地址，
+// 1.1.1.1 常常不通，入口用域名时就时好时坏（需求方：“不开 FlClash 部分网页不加载”，开了 FlClash 这些查询走它的代理就正常）。
+var hostedDNS = []string{"https://223.5.5.5/dns-query", "https://1.12.12.12/dns-query", "223.5.5.5", "119.29.29.29"}
 
 // boundDNS 是绑定网卡时用的解析服务器：都写 IP，不依赖系统 DNS。
 var boundDNS = []string{"223.5.5.5", "119.29.29.29", "https://223.5.5.5/dns-query"}
@@ -134,7 +136,7 @@ func Generate(in Input) []byte {
 		}
 		if in.Hosted {
 			dns["nameserver"], dns["proxy-server-nameserver"] = hostedDNS, hostedDNS
-			dns["default-nameserver"] = []string{"223.5.5.5", "119.29.29.29", "1.1.1.1", "8.8.8.8"}
+			dns["default-nameserver"] = []string{"223.5.5.5", "119.29.29.29"}
 		}
 		if len(policy) > 0 {
 			dns["nameserver-policy"] = policy

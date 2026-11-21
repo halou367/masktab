@@ -10,11 +10,12 @@ import (
 func TestChecks(t *testing.T) {
 	a := &App{ipq: map[string]*model.IPQ{"203.0.113.11": {Type: "res", Score: 92}}}
 	in := &model.Instance{ID: "p1", Kind: "persistent"}
+	in.FP.DisableSpoofing = append([]string{}, defaultDisableSpoofing...)
 	in.Proxy.State = "on"
 	in.TZ.Source = "exit-cf"
 	jp := &model.IPInfo{IP: "203.0.113.11", Country: "JP", Timezone: "Asia/Tokyo"}
 	rt := &Runtime{Probe: &model.ExitProbe{CF: jp, Direct: &model.IPInfo{IP: "198.51.100.7", Country: "JP", Timezone: "Asia/Tokyo"}}}
-	info := &fpInfo{Platform: "android", Brand: "Firefox", TZ: "Asia/Tokyo", Lang: "ja-JP"}
+	info := &fpInfo{Platform: "", Brand: "Chrome", Cores: 2, TZ: "Asia/Tokyo", Lang: "ja-JP"}
 	find := func(s *checkSum, k string) check {
 		for _, c := range s.Items {
 			if c.K == k {
@@ -26,16 +27,16 @@ func TestChecks(t *testing.T) {
 	}
 
 	s := a.checksLocked(in, rt, info)
-	if s.Pass != 11 || s.Total != 11 {
-		t.Fatalf("全部一致应为 11/11，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
+	if s.Pass != 13 || s.Total != 13 {
+		t.Fatalf("全部一致应为 13/13，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
 	}
 
 	// 两路出口不同国、固定了别的时区：这两项不过
 	rt.Probe.Direct = &model.IPInfo{IP: "198.51.100.7", Country: "HK", Timezone: "Asia/Hong_Kong"}
 	info.TZ = "Europe/Berlin"
 	s = a.checksLocked(in, rt, info)
-	if find(s, "same").OK || find(s, "tz").OK || s.Pass != 9 || s.Total != 11 {
-		t.Fatalf("应为 9/11 且 same、tz 不过，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
+	if find(s, "same").OK || find(s, "tz").OK || s.Pass != 11 || s.Total != 13 {
+		t.Fatalf("应为 11/13 且 same、tz 不过，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
 	}
 
 	// CF 网站出口换过 / 走的是 Cloudflare 自己的出口：cfexit 不过（decisions SI-1）
@@ -50,11 +51,23 @@ func TestChecks(t *testing.T) {
 	}
 	rt.Probe.CF = jp
 
+	// 打开了有破绽的伪装项、系统报成别的：spoof、ua 不过（decisions FP-1）
+	in.FP.DisableSpoofing = []string{"font"}
+	info.Platform = "macos-not-host"
+	if c := find(a.checksLocked(in, rt, info), "spoof"); c.OK {
+		t.Fatalf("开着画布等伪装应不过：%+v", c)
+	}
+	if c := find(a.checksLocked(in, rt, info), "ua"); c.OK {
+		t.Fatalf("系统和本机不同应不过：%+v", c)
+	}
+	in.FP.DisableSpoofing = append([]string{}, defaultDisableSpoofing...)
+	info.Platform = ""
+
 	// 直连：出口、时区、语言、两路、CF、纯净度都判断不了；“经代理”不过
 	in.Proxy.State = "off"
 	s = a.checksLocked(in, rt, info)
-	if find(s, "proxy").OK || !find(s, "tz").NA || !find(s, "pure").NA || s.Total != 4 || s.Pass != 3 {
-		t.Fatalf("直连应为 3/4，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
+	if find(s, "proxy").OK || !find(s, "tz").NA || !find(s, "pure").NA || s.Total != 6 || s.Pass != 5 {
+		t.Fatalf("直连应为 5/6，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
 	}
 
 	// 普通窗口不做伪装：没有检查
