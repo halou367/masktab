@@ -16,8 +16,8 @@
 //   __back          app 的系统返回键：由页面按自己的返回栈处理（见 goBack）
 // 数据全部来自核心服务（和电脑版是同一个程序，决策 D-4），经 app 的 Bridge 转一道；这里没有手机专用的接口和状态。
 import { api } from './api.js';
-import { h, icon, ibtn, toast, run, appBar, row, sw, confirmDlg, applyTheme, leave, pageIn, flipSnap, flipPlay } from './ui.js';
-import { menuView } from './menu.js';
+import { h, icon, ibtn, toast, run, appBar, row, sw, confirmDlg, applyTheme, leave, pageIn, flipSnap, flipPlay, morph, holdAnchor, resetOrders } from './ui.js';
+import { menuView, launchWatch, menuReset } from './menu.js';
 import { instancesView } from './instances.js';
 import { wizardPage } from './wizard.js';
 import { syncIcons, siteIcon } from './sites.js';
@@ -72,6 +72,7 @@ async function load(force) {
   if (!force && j === last) return; // 没变化不重画（重画会打断输入、拖动）
   const first = !st;
   last = j; st = s; panel.set(st);
+  launchWatch(st, () => render(true)); // “正在打开”接上启动进度；没开成说原因（决策 UI-32）
   if (!force && !first && (editing() || document.querySelector('.scrim:not(.out)'))) return; // 正在输入 / 开着对话框：不重画，下一轮再说
   if (first) enter(); else render(force);
 }
@@ -217,11 +218,12 @@ function render(force) {
     const snap = root.dataset.page === p ? flipSnap(root) : null; // 同一页里重画：列表增删、换位置有过渡（决策 UI-26）
     document.body.className = 'pg-' + p.replace('/', '-');
     root.className = p === 'node' || p === 'fp' ? 'np' : '';
-    // 还是同一个元素（新建向导：状态一变就重画，而它是常驻的同一个）：不要摘下来再放回去——那样里面的动画全部从头放一遍，光标也丢
-    if (!(kids.length === 1 && root.childNodes.length === 1 && root.firstChild === kids[0])) root.replaceChildren(...kids);
-    root.dataset.page = p;
-    flipPlay(snap, root);
+    // 同一页里原地更新（ui.js 的 morph，决策 UI-32）：没变的行一个节点都不动，滚动位置、焦点、正在放的动画都在；换页才整个换。
+    // 还是同一个元素（新建向导：状态一变就重画，而它是常驻的同一个）时 morph 原样留着它。
+    const whole = morph(root, kids, p);
     if (p === 'node' || p === 'fp') panel.after();
+    if (!whole) holdAnchor(); // 刚点过的开关 / 行待在原来的高度（手机：手指一动就不管了）
+    flipPlay(snap, root);
     BOOT.ready = true;
     bars();
   } catch (e) {
@@ -239,6 +241,8 @@ function enter() {
   navving = false;
   const dir = navDir; navDir = '';
   if (p === 'idle') { lastPage = 'idle'; render(true); return; }
+  resetOrders(); // 进一页：列表按当时的数排一次，之后不挪（决策 UI-32）
+  if (p === 'menu') menuReset(); // 每次打开头像菜单按当时的状态排一次，开着的时候次序不变（决策 UI-32）
   if ((p === 'node' || p === 'fp') && p !== lastPage) { panel.home(p === 'fp'); if (p === 'node') panel.refreshSubs(); }
   lastPage = p;
   if (p === 'addons') { addons = null; loadAddons(); }

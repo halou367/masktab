@@ -6,7 +6,7 @@ export function h(tag, attrs, ...kids) {
     if (v == null || v === false) continue;
     if (k === 'class') el.className = v;
     else if (k === 'style' && typeof v === 'object') { for (const [sk, sv] of Object.entries(v)) sk.startsWith('--') ? el.style.setProperty(sk, sv) : (el.style[sk] = sv); }
-    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k.startsWith('on')) on(el, k.slice(2), v);
     else if (k === 'value' || k === 'checked' || k === 'disabled' || k === 'selected') el[k] = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
@@ -16,6 +16,111 @@ export function h(tag, attrs, ...kids) {
   }
   return el;
 }
+// 事件处理函数挂在元素的 _h 上、由一个公共的监听转过去：重画时 morph() 保留旧元素，只把 _h 换成这一次的（闭包里是新状态），不用摘了再挂。
+function disp(ev) { const f = this._h?.[ev.type]; return f ? f.call(this, ev) : undefined; }
+function on(el, type, fn) { if (!el._h) el._h = {}; if (!(type in el._h)) el.addEventListener(type, disp); el._h[type] = fn; }
+
+// ---------- 原地更新（2026-11-20，需求方：“打开下拉选择实例会卡断然后重新刷新实例列表”“开关后整个列表顺序打乱位置跳走”） ----------
+// 以前每次状态一变就 replaceChildren 整页重建：几百个节点摘下来再造，悬停、焦点、滚动、正在转的动画、悬停提示全部重来，
+// 列表里滚到一半的位置也丢了（看上去就是闪一下、跳一下）。morph(容器, 新的子元素) 拿这一次画出来的东西和页面上现有的对：
+//   同一个元素（同标签、同键）留着，只改变了的属性、文字、处理函数；新出现的插进去，没了的拿掉。没变的行一个节点都不动。
+//   键：data-k / data-id / data-iid / data-key（列表的行）；没有键的按“同标签的第几个”对。
+//   data-keep="值"：值没变就整个保留、里面一点不动（信箱正文的 iframe 这类自己管自己的）。
+//   输入框正在打字的不改 value；开关、复选框的 checked 跟着新的走。
+// 返回 true = 整个换掉了（第一次画、换页）；调用方据此决定要不要放进场动画、回到顶上。
+const keyOfNode = (n) => (n.nodeType === 1 ? n.getAttribute('data-k') ?? n.getAttribute('data-id') ?? n.getAttribute('data-iid') ?? n.getAttribute('data-key') ?? n.getAttribute('data-keep') : null);
+function sameKind(a, b) { return a.nodeType === b.nodeType && (a.nodeType !== 1 || (a.tagName === b.tagName && keyOfNode(a) === keyOfNode(b))); }
+function syncEl(o, n) {
+  if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; return; }
+  if (n.hasAttribute('data-keep') && o.getAttribute('data-keep') === n.getAttribute('data-keep')) return;
+  for (const a of [...o.attributes]) if (!n.hasAttribute(a.name)) o.removeAttribute(a.name);
+  for (const a of n.attributes) if (o.getAttribute(a.name) !== a.value) o.setAttribute(a.name, a.value);
+  const tag = o.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+    if (o.value !== n.value && document.activeElement !== o) o.value = n.value;
+    if (o.checked !== n.checked) o.checked = n.checked;
+  }
+  if ('disabled' in o && o.disabled !== n.disabled) o.disabled = n.disabled;
+  // 处理函数：h() 挂的换成新的；新元素上没有的事件清掉（旧的公共监听留着，找不到函数就什么都不做）
+  if (o._h || n._h) { const nh = n._h || {}; for (const t of Object.keys(nh)) on(o, t, nh[t]); if (o._h) for (const t of Object.keys(o._h)) if (!(t in nh)) o._h[t] = null; }
+  for (const p of ['onkeydown', 'oninput', 'onchange', 'onclick']) if (n[p] || o[p]) o[p] = n[p];
+  if (tag !== 'TEXTAREA') morphKids(o, [...n.childNodes]);
+}
+function morphKids(parent, kids) {
+  const old = [...parent.childNodes], byKey = new Map(), loose = new Map();
+  for (const c of old) {
+    const k = keyOfNode(c);
+    if (k != null) byKey.set(c.tagName + '|' + k, c);
+    else { const t = c.nodeType === 1 ? c.tagName : '#' + c.nodeType; if (!loose.has(t)) loose.set(t, []); loose.get(t).push(c); }
+  }
+  const used = new Set();
+  let at = parent.firstChild;
+  for (const n of kids) {
+    let o = null;
+    if (n.parentNode === parent) o = n; // 调用方给的就是页面上这一个（常驻的元素）
+    else {
+      const k = keyOfNode(n);
+      if (k != null) o = byKey.get(n.tagName + '|' + k) || null;
+      else { const l = loose.get(n.nodeType === 1 ? n.tagName : '#' + n.nodeType); while (l && l.length && !o) { const c = l.shift(); if (!used.has(c)) o = c; } }
+      if (o && (used.has(o) || !sameKind(o, n))) o = null;
+    }
+    if (o) { used.add(o); if (o !== n) syncEl(o, n); } else o = n;
+    if (o === at) at = at.nextSibling; // 已经在该在的位置
+    else parent.insertBefore(o, at);   // 挪过来（或新插进来）放在 at 前面；at 还是“下一个该放的位置”
+  }
+  for (const c of old) if (!used.has(c) && c.parentNode === parent) c.remove();
+}
+// ---------- 点了以后它待在原地（决策 UI-32；需求方：“开关后整个列表顺序会打乱、位置跳走……关了自动看一眼，视觉中心变成入口的了”） ----------
+// 点一个开关 / 一行之后，接下来几秒里的重画（核心服务改配置、重新探测出口、提示条出来又收起）会让它上面的东西变高变矮，被点的那一行就被推走了。
+// 按下时记住按的是哪一个、它离窗口顶多远；之后每次重画完把页面滚回去，让它还在原来那个高度。用户自己滚了（滚轮、拖动、翻页键）就不管了。
+let anc = null;
+const ancKeyOf = (el) => el.closest?.('[data-k]')?.getAttribute('data-k') || el.getAttribute?.('aria-label') || '';
+if (typeof addEventListener === 'function') {
+  addEventListener('pointerdown', (e) => {
+    const el = e.target?.closest?.('.sw, .row, .iprow, .tg, .chip, .ai, button');
+    anc = el && !el.closest('.scrim') ? { el, key: ancKeyOf(el), top: el.getBoundingClientRect().top, until: Date.now() + 5000 } : null;
+  }, true);
+  const drop = () => { anc = null; };
+  addEventListener('wheel', drop, { passive: true }); addEventListener('touchmove', drop, { passive: true });
+  addEventListener('keydown', (e) => { if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' '].includes(e.key) && !e.target?.matches?.('input, textarea')) drop(); });
+}
+/** 重画以后调：刚点过的那一个回到点它时的高度（只滚页面，不改内容）。返回滚了多少。 */
+export function holdAnchor() {
+  if (!anc) return 0;
+  if (Date.now() > anc.until) { anc = null; return 0; }
+  let el = anc.el.isConnected ? anc.el : null;
+  if (!el && anc.key) el = document.querySelector(`[data-k="${CSS.escape(anc.key)}"]`) || [...document.querySelectorAll('[aria-label]')].find((x) => x.getAttribute('aria-label') === anc.key) || null;
+  if (!el) return 0;
+  anc.el = el;
+  const d = Math.round(el.getBoundingClientRect().top - anc.top);
+  if (Math.abs(d) < 1) return 0;
+  const se = document.scrollingElement || document.documentElement, y0 = se.scrollTop;
+  se.scrollTop = y0 + d;
+  return se.scrollTop - y0;
+}
+
+// ---------- 列表次序定住（决策 UI-32） ----------
+// 按延迟、下载这类一直在变的数排的列表：进页面（或换了排序 / 筛选，key 变了）时排一次，之后数变了只改行里的字、不挪位置；
+// 新出现的接在后面。scope = 哪一个列表；换页时外壳调 resetOrders()，下次进来重新排。
+const orders = new Map();
+export function stableOrder(scope, key, sorted, idOf = (x) => x.id) {
+  const o = orders.get(scope);
+  if (!o || o.key !== key) { orders.set(scope, { key, pos: new Map(sorted.map((x, k) => [idOf(x), k])) }); return sorted; }
+  const base = o.pos.size;
+  sorted.forEach((x, k) => { const id = idOf(x); if (!o.pos.has(id)) o.pos.set(id, base + k); });
+  return sorted.slice().sort((a, b) => o.pos.get(idOf(a)) - o.pos.get(idOf(b)));
+}
+export function resetOrders(scope) { if (scope) orders.delete(scope); else orders.clear(); }
+
+/** 把 root 的内容换成 kids：同一页（root.dataset.page 没变）时原地更新，否则整个换。返回 true = 整个换了。 */
+export function morph(root, kids, page) {
+  kids = [kids].flat(Infinity).filter((k) => k != null && k !== false).map((k) => (k instanceof Node ? k : document.createTextNode(String(k))));
+  if (page != null && root.dataset.page !== page) { root.replaceChildren(...kids); root.dataset.page = page; return true; }
+  if (!root.firstChild) { root.replaceChildren(...kids); return true; }
+  morphKids(root, kids);
+  return false;
+}
+
 // 打包的图标集（24×24 描边图标）。只有这里的常量字符串会进 innerHTML。
 const P = {
   power: '<path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>',
@@ -236,9 +341,10 @@ export const appBar = (title, back, ...acts) => h('div', { class: 'appbar' }, ba
 // 分组标题（Chrome 设置页的蓝色小标题）。
 export const sec = (t, r, noic) => h('div', { class: 'sec' + (noic ? ' noic' : '') }, t, r != null && r !== false && h('span', { class: 'r' }, r));
 // 一行：左边图标、标题、副标题、右边的东西、可选的“>”（chev：进下一页）或“∨”（drop：原地开下拉栏）。有 onclick 就是按钮。
+// k = 这一行的键（data-k）：重画时按它对上原来那一行（morph），点过以后按它找回来、让它待在原地（holdAnchor）。
 export function row(o) {
   const tag = o.onclick ? 'button' : 'div';
-  return h(tag, { class: 'row' + (o.s != null && o.s !== false && o.s !== '' ? ' two' : '') + (o.dis ? ' dis' : '') + (o.cls ? ' ' + o.cls : ''), onclick: o.onclick, title: o.title, 'aria-label': o.aria, disabled: tag === 'button' && o.dis ? true : null },
+  return h(tag, { class: 'row' + (o.s != null && o.s !== false && o.s !== '' ? ' two' : '') + (o.dis ? ' dis' : '') + (o.cls ? ' ' + o.cls : ''), onclick: o.onclick, title: o.title, 'aria-label': o.aria, 'data-k': o.k, disabled: tag === 'button' && o.dis ? true : null },
     o.ic !== undefined && h('span', { class: 'lic' }, typeof o.ic === 'string' ? icon(o.ic, 24) : o.ic),
     h('span', { class: 'tx' }, h('span', { class: 't' }, o.t), o.s != null && o.s !== false && o.s !== '' && h('span', { class: 's' + (o.nw ? ' nw' : '') }, o.s)),
     o.trail != null && o.trail !== false && h('span', { class: 'trail' }, o.trail),

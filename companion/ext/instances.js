@@ -5,7 +5,7 @@ import { api, shownExit, RESTART_WHY } from './api.js';
 import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, appBar, sec, row, sw, ask, confirmDlg, overlay } from './ui.js';
 import { newWizard } from './wizard.js';
 import { siteIcon, siteName, siteKey, uniqSites } from './sites.js';
-import { face, stepLine } from './menu.js';
+import { face, busyLine, openInst, launching } from './menu.js';
 import { mailRows, cardLines } from './mail.js';
 
 const MAXI = 9; // 卡片上最多几个站点图标，多的显示 +N
@@ -36,8 +36,7 @@ export function instancesView(c) {
   // 分成“运行中 / 休眠”两组（演示定稿，决策 UI-10）；拖动排序只在同一组里换位置。
   const mk = c.lite ? cardLite : card, live = st.instances.filter((i) => i.rt.running || i.rt.starting), idle = st.instances.filter((i) => !(i.rt.running || i.rt.starting));
   const group = (t, list, cls, note) => list.length > 0 && [sec([t, ' · ', list.length], note), h('div', { class: 'grid' + (c.lite ? ' lt' : '') + cls }, list.map(mk))];
-  const grid = h('div', { class: 'grids' }, group('运行中', live, '', '长按卡片拖动排序'), group('休眠', idle, ' idle', live.length ? null : '长按卡片拖动排序'));
-  dragSort(grid);
+  const grid = h('div', { class: 'grids', onpointerdown: dragDown }, group('运行中', live, '', '长按卡片拖动排序'), group('休眠', idle, ' idle', live.length ? null : '长按卡片拖动排序'));
   const out = [head, st.vault?.error ? h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, st.vault.error)) : null, grid,
     rulesBox(st)];
   const cur = sub && sub !== 'import' && st.instances.find((i) => i.id === sub);
@@ -82,19 +81,25 @@ const stopBtn = (i) => (i.rt.reopen
   ? ibtn('close', '不重新打开了', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
   : ibtn('play', '关完后重新打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`), '关完后会重新打开'), 'go'));
 
+// “打开”按钮：点下去当场转圈、不能再点，卡片上同时出“正在打开…”（menu.js 的 openInst，决策 UI-32）
+const openBtn = (i, cls = 'go') => (launching(i)
+  // 不用 disabled：点在禁用的按钮上，这一下会落到卡片上、把详情抽屉打开（Windows 开发版上连点时实测到的）。这里接住、什么都不做
+  ? h('button', { class: 'ib busy ' + cls, title: '正在打开…', 'aria-label': '正在打开', 'aria-busy': 'true', 'aria-disabled': 'true', onclick: (e) => e.stopPropagation() }, icon('refresh'))
+  : ibtn('play', '打开', () => openInst(i), cls));
+
 function card(i) {
   const ex = i.proxy.state === 'on' ? shownExit(i) : null, rt = i.rt;
   const sites = cardSites(i);
   // 运行中 / 休眠不写字（决策 UI-9）：头像右上角的点、右边是“关闭”还是“打开”已经说了；只有正在启动时写进度。
-  const state = rt.starting ? stepLine(i, ctx.st.launchSteps) : rt.stopping ? stopLine(rt) : null;
+  const state = busyLine(i, ctx.st.launchSteps) || (rt.stopping ? stopLine(rt) : null);
   const warn = warnLine(i);
   const el = h('div', { class: 'cardi' + (rt.running ? ' running' : '') + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color }, title: '点开看账号与 Cookie；长按拖动排序',
-    onclick: (ev) => { if (ev.target.closest('button,input,.fl') || el.dataset.dragged) return; setRoute(i.id); } },
+    onclick: (ev) => { if (ev.target.closest('button,input,.fl') || ev.currentTarget.dataset.dragged) return; setRoute(i.id); } },
   h('div', { class: 'ct' }, face(i, false, true, true), h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm', title: nameOf(i) }, nameOf(i))), state || exitLine(i)),
     // 动作在名字右边（演示定稿）：运行中 = 关闭，休眠 = 打开。有改动等着重启时多一个“重启”；平时要重启，点开卡片，在详情顶上。
     rt.stopping ? stopBtn(i) : rt.running ? [rt.needRestart?.length > 0 && ibtn('refresh', '重启（让改动生效）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`)), 'need'), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
       : rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
-        : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
+        : openBtn(i)),
   sites.length > 0 && h('div', { class: 'cs' }, sites.length ? [sites.slice(0, MAXI).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
     sites.length > MAXI && h('span', { class: 'more', title: sites.slice(MAXI).map(siteTip).join('\n') }, `+${sites.length - MAXI}`)]
     : null),
@@ -127,12 +132,12 @@ const mailChip = (i) => i.mail && h('button', { class: 'cnt2 mchip' + (i.mail.un
 function cardLite(i) {
   const rt = i.rt, on = i.proxy.state === 'on', sites = cardSites(i), MAXL = 8;
   const el = h('div', { class: 'cardi lt' + (rt.running ? ' running' : '') + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color },
-    onclick: (ev) => { if (ev.target.closest('button,input') || el.dataset.dragged) return; setRoute(i.id); } },
+    onclick: (ev) => { if (ev.target.closest('button,input') || ev.currentTarget.dataset.dragged) return; setRoute(i.id); } },
   h('div', { class: 'ct' }, face(i, false, true, true),
-    h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))), rt.starting ? stepLine(i, ctx.st.launchSteps) : rt.stopping ? stopLine(rt) : exitLine(i)),
+    h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm' }, nameOf(i))), busyLine(i, ctx.st.launchSteps) || (rt.stopping ? stopLine(rt) : exitLine(i))),
     rt.stopping ? stopBtn(i) : rt.running ? ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
       : rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
-        : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)), 'go')),
+        : openBtn(i)),
   sites.length > 0 && h('div', { class: 'cs' }, sites.slice(0, MAXL).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
     sites.length > MAXL && h('span', { class: 'more' }, `+${sites.length - MAXL}`)),
   warnLine(i));
@@ -140,28 +145,30 @@ function cardLite(i) {
 }
 
 // 长按 350ms 后拖动；松手时把新顺序交给核心服务。
-function dragSort(grid) {
-  let timer = 0, drag = null;
-  grid.addEventListener('pointerdown', (ev) => {
-    const c = ev.target.closest('.cardi');
-    if (!c || ev.button !== 0 || ev.target.closest('button,input,.fl')) return;
-    const sx = ev.clientX, sy = ev.clientY;
-    const cancel = () => { clearTimeout(timer); removeEventListener('pointermove', early); };
-    const early = (e) => { if (Math.hypot(e.clientX - sx, e.clientY - sy) > 8) cancel(); };
-    addEventListener('pointermove', early);
-    addEventListener('pointerup', cancel, { once: true });
-    timer = setTimeout(() => {
-      removeEventListener('pointermove', early);
-      const r = c.getBoundingClientRect();
-      drag = { c, home: c.parentNode, dx: sx - r.left, dy: sy - r.top, ph: h('div', { class: 'cardi ph', style: { height: r.height + 'px' } }) };
-      c.dataset.dragged = '1';
-      c.classList.add('lift');
-      Object.assign(c.style, { width: r.width + 'px', left: r.left + 'px', top: r.top + 'px' });
-      c.before(drag.ph);
-      c.setPointerCapture?.(ev.pointerId);
-      document.body.classList.add('dragging');
-    }, 350);
-  });
+// 以前每画一次实例页就往 window 上多挂一对 pointermove / pointerup（状态每变一次画一次，开一会儿就是几百个，每动一下鼠标全跑一遍）；
+// 现在只挂一次，按下的那一下记在网格自己的处理函数里（h() 的 onpointerdown，重画时 morph 换给页面上那个网格）。
+let dragTimer = 0, drag = null;
+function dragDown(ev) {
+  const grid = ev.currentTarget, c = ev.target.closest('.cardi');
+  if (!c || ev.button !== 0 || ev.target.closest('button,input,.fl')) return;
+  const sx = ev.clientX, sy = ev.clientY;
+  const cancel = () => { clearTimeout(dragTimer); removeEventListener('pointermove', early); };
+  const early = (e) => { if (Math.hypot(e.clientX - sx, e.clientY - sy) > 8) cancel(); };
+  addEventListener('pointermove', early);
+  addEventListener('pointerup', cancel, { once: true });
+  dragTimer = setTimeout(() => {
+    removeEventListener('pointermove', early);
+    const r = c.getBoundingClientRect();
+    drag = { grid, c, home: c.parentNode, dx: sx - r.left, dy: sy - r.top, ph: h('div', { class: 'cardi ph', style: { height: r.height + 'px' } }) };
+    c.dataset.dragged = '1';
+    c.classList.add('lift');
+    Object.assign(c.style, { width: r.width + 'px', left: r.left + 'px', top: r.top + 'px' });
+    c.before(drag.ph);
+    c.setPointerCapture?.(ev.pointerId);
+    document.body.classList.add('dragging');
+  }, 350);
+}
+if (typeof addEventListener === 'function') {
   addEventListener('pointermove', (ev) => {
     if (!drag) return;
     drag.c.style.left = ev.clientX - drag.dx + 'px';
@@ -171,7 +178,7 @@ function dragSort(grid) {
   });
   addEventListener('pointerup', () => {
     if (!drag) return;
-    const { c, ph } = drag; drag = null;
+    const { c, ph, grid } = drag; drag = null;
     ph.replaceWith(c); c.classList.remove('lift'); c.style.cssText = c.style.cssText.replace(/(width|left|top):[^;]+;?/g, '');
     document.body.classList.remove('dragging');
     setTimeout(() => delete c.dataset.dragged, 0);
@@ -255,7 +262,7 @@ function drawer(i) {
         // 电脑上开关也在这里（卡片上平时只有“关闭 / 打开”一个按钮）；手机屏窄，这一行留给名字，开关在卡片上
         ctx.lite ? null : i.rt.running ? [ibtn('refresh', '重启', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`))), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
           : i.rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
-            : ibtn('play', '打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/launch`)))),
+            : openBtn(i, '')),
       h('div', { class: 'sw2', style: { padding: '4px 16px 0' }, title: '实例颜色' }, ctx.st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, title: '实例颜色', onclick: () => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
       netRows(i),
       mailRows({ ...ctx, load: ctx.load }, i),

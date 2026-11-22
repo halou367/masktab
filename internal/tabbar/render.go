@@ -78,6 +78,53 @@ func (c *Canvas) Line(x0, y0, x1, y1, w float64, col [3]int, alpha float64) {
 type Look struct {
 	Bg  [3]int // 栏的底色 = 浏览器窗口顶上那一条（标题栏）的颜色，两者接在一起看不出缝
 	Dim [3]int // ＋ 这样的小记号
+	// Busy：有实例正在打开（UI-33，需求方：“新建实例或者顶部 ＋ 号唤醒实例也不出现进度动画”）。
+	// ＋ 换成一个转圈，收起时色条上从左到右走一道光；Phase 是这一刻转到哪儿（0…1，按时间算，一圈 0.9 秒）。
+	Busy  bool
+	Phase float64
+}
+
+// plusMark 画 ＋，有实例在打开时画转圈（四分之三圈的弧，尾巴渐淡）。
+func plusMark(c *Canvas, p Rect, lk Look, scale, alpha float64) {
+	cx, cy, d := float64(p.L+p.R)/2, float64(p.T+p.B)/2, 5*scale
+	if !lk.Busy {
+		c.Line(cx-d, cy, cx+d, cy, 1.5*scale, lk.Dim, alpha)
+		c.Line(cx, cy-d, cx, cy+d, 1.5*scale, lk.Dim, alpha)
+		return
+	}
+	const n = 18
+	r := 5.5 * scale
+	a0 := lk.Phase * 2 * math.Pi
+	for i := 0; i < n; i++ {
+		t0, t1 := a0+float64(i)/n*1.5*math.Pi, a0+float64(i+1)/n*1.5*math.Pi
+		c.Line(cx+r*math.Cos(t0), cy+r*math.Sin(t0), cx+r*math.Cos(t1), cy+r*math.Sin(t1), 1.6*scale, lk.Dim, alpha*(0.25+0.75*float64(i+1)/n))
+	}
+}
+
+// busySweep 在收起的色条上画一道从左往右走的光（只盖在已经有颜色的点上，透明处不动）。
+func busySweep(c *Canvas, band Rect, lk Look, a float64) {
+	w := band.W()
+	if !lk.Busy || w <= 0 || a <= 0 {
+		return
+	}
+	seg := float64(w) / 3
+	head := float64(band.L) - seg + lk.Phase*(float64(w)+seg)
+	for y := band.T; y < band.B && y < c.H; y++ {
+		for x := band.L; x < band.R && x < c.W; x++ {
+			p := c.Pix[(y*c.W+x)*4:]
+			if p[3] < 128 {
+				continue
+			}
+			k := (float64(x) - head) / seg // 0…1 在光里
+			if k < 0 || k > 1 {
+				continue
+			}
+			v := a * 0.55 * math.Sin(k*math.Pi)
+			for j := 0; j < 3; j++ {
+				p[j] = byte(float64(p[j])*(1-v) + float64(p[3])*v + 0.5)
+			}
+		}
+	}
 }
 
 // LookOn 按底色配出一套：深底上用浅色记号，浅底上用深色。
@@ -226,9 +273,7 @@ func draw(w, h int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus
 	if hoverPlus {
 		c.RoundRect(l.Plus, rad, Tint(lk.Dim, lk.Bg, 0.22))
 	}
-	cx, cy, d := float64(l.Plus.L+l.Plus.R)/2, float64(l.Plus.T+l.Plus.B)/2, 5*scale
-	c.Line(cx-d, cy, cx+d, cy, 1.5*scale, lk.Dim, 1)
-	c.Line(cx, cy-d, cx, cy+d, 1.5*scale, lk.Dim, 1)
+	plusMark(c, l.Plus, lk, scale, 1)
 	return c
 }
 
@@ -286,17 +331,17 @@ func InkAlpha(e float64) float64 {
 // Morph 画自动收起的栏在 e 这一刻的样子（不含字）：e = 0 收着，只有色条；e = 1 完全展开。
 // 中间：每一段色条往下长成标签（颜色、圆角一起过渡），底色从透明变实并从上往下铺开，×、＋ 最后淡入。
 // 位图高 OpenH、预乘透明度，直接交给分层窗口。最上面 stripUp 行在窗口上沿外面，什么都不画（只接鼠标）；色条、底色都从窗口上沿开始。
-// 没展开完的时候，Band 那一条里没画东西的点留一丝透明度（看不出来，但接得住鼠标），别处全透明、点得穿。
+// Band 那一条里没画东西的点留一丝透明度（看不出来，但接得住鼠标），别处全透明、点得穿。
+// 展开以后也留着（2026-11-20，decisions UI-17 补充）：以前完全展开时这一条（窗口上沿外面那 4 行）是全透明的，
+// 鼠标停在那里时系统把它算到下面的窗口上 → 当成“离开了” → 收起 → 收起的画面又接住鼠标 → 又展开……一秒抖好几下（需求方：“鼠标靠近离开反复会一直弹”）。
 func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlus bool) *Canvas {
 	e = math.Max(0, math.Min(1, e))
 	h, up := px(OpenH, scale), px(stripUp, scale)
 	c := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4), Premul: true}
-	if e < 1 {
-		band := Band(l, scale)
-		for y := band.T; y < band.B && y < h; y++ {
-			for x := band.L; x < band.R && x < w; x++ {
-				c.Pix[(y*w+x)*4+3] = 1
-			}
+	band := Band(l, scale)
+	for y := band.T; y < band.B && y < h; y++ {
+		for x := band.L; x < band.R && x < w; x++ {
+			c.Pix[(y*w+x)*4+3] = 1
 		}
 	}
 	if e > 0 { // 底
@@ -340,10 +385,9 @@ func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlu
 		if hoverPlus {
 			c.RoundRect(l.Plus, 7*scale, Tint(lk.Dim, lk.Bg, 0.22*ink))
 		}
-		cx, cy, d := float64(l.Plus.L+l.Plus.R)/2, float64(l.Plus.T+l.Plus.B)/2, 5*scale
-		c.Line(cx-d, cy, cx+d, cy, 1.5*scale, lk.Dim, ink)
-		c.Line(cx, cy-d, cx, cy+d, 1.5*scale, lk.Dim, ink)
+		plusMark(c, l.Plus, lk, scale, ink)
 	}
+	busySweep(c, Rect{band.L, 0, band.R, up + px(StripH, scale)}, lk, 1-e)
 	return c
 }
 

@@ -1,5 +1,5 @@
 import { api, shownExit } from './api.js';
-import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, dropdown, ask, confirmDlg, isV6, ipSpan, delayText, delayCls, pbar, scoreCls, typeTag } from './ui.js';
+import { h, icon, ibtn, flag, toast, cname, sw, appBar, sec, row, choose, dropdown, ask, confirmDlg, isV6, ipSpan, delayText, delayCls, pbar, scoreCls, typeTag , stableOrder } from './ui.js';
 import { disguise, pureInfo, cfRisk, openWeb, CF_TEST_URL } from './common.js';
 import { face } from './menu.js';
 
@@ -394,7 +394,7 @@ export function exitsView(c) {
   // 子页：一个列表（或一个域名）里的全部地址
   const gid = route2().startsWith('g-') ? route2().slice(2) : '', ge = gid && st.exits.find((x) => x.id === gid && grouped(x));
   if (ge) {
-    const its = itemsOf(ge), sm = sumOf(its), lst = isList(ge), shown = its.filter((x) => !grpF.alive || x.delay > 0).sort((a, b) => rank(a) - rank(b));
+    const its = itemsOf(ge), sm = sumOf(its), lst = isList(ge), shown = stableOrder('grp', `${gid}|${grpF.alive}`, its.filter((x) => !grpF.alive || x.delay > 0).sort((a, b) => rank(a) - rank(b)), (x) => x.id || x.value); // 测完延迟不挪位置（决策 UI-32）
     const itemMenu = async (x) => {
       const pip = x.xs.find((y) => y.pip && me?.proxy?.subscriptionId === y.sub.id);
       const v = await choose(x.value.replace(/^.*@/, ''), [pip && ['use', `#${me.no} 用这个出口`], x.xs.length > 0 && ['ping', '重测延迟'], x.b && ['speed', '测下载峰值'], ['copy', '复制地址']].filter(Boolean), null);
@@ -491,7 +491,8 @@ function vgView(c, e) {
   const sorter = { delay: (a, b) => rk(a) - rk(b), speed: (a, b) => sp(b) - sp(a) || rk(a) - rk(b), score: (a, b) => (b.delay > 0) - (a.delay > 0) || sc(b) - sc(a) || rk(a) - rk(b) }[vgF.sort] || ((a, b) => rk(a) - rk(b));
   const shown = all.filter((x) => (!vgF.cc || x.cc === vgF.cc) && (!vgF.res || x.q?.type === 'res') && (!vgF.alive || x.delay > 0));
   const byC = vgCountries(all), groups = new Map();
-  for (const x of shown.slice().sort(sorter)) { const k = x.cc || '~'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); }
+  // 测完延迟 / 下载不挪位置：进来时（或换了排序 / 筛选时）排一次（决策 UI-32）
+  for (const x of stableOrder('vg', `${vgF.sort}|${vgF.cc}|${vgF.res}|${vgF.alive}`, shown.slice().sort(sorter), (x) => x.id)) { const k = x.cc || '~'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); }
   const order = [...groups.keys()].sort((a, b) => (a === '~') - (b === '~') || (byC.find(([k]) => k === b)?.[1] || 0) - (byC.find(([k]) => k === a)?.[1] || 0));
   const more = async () => {
     const v = await choose('VPN Gate', [['refresh', '立即刷新列表'], ['hours', '刷新列表的间隔'], ['del', '删除这个源']], null);

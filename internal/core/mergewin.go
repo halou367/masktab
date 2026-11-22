@@ -40,7 +40,9 @@ func (h mergeHost) State() tabbar.State {
 		case r != nil && r.Running && r.Pid > 0:
 			t.Pid = r.Pid
 			st.Tabs = append(st.Tabs, t)
-		case r == nil || !r.Starting:
+		case r != nil && r.Starting:
+			st.Busy++ // 正在打开：＋ 上转圈（UI-33）
+		default:
 			st.Menu = append(st.Menu, tabbar.Item{Key: "open:" + in.ID, Label: "打开 " + t.Label()})
 		}
 	}
