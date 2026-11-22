@@ -540,7 +540,7 @@ if (want('newtab')) {
 // 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点页比内容。
 // 两边是同一份 panel.js，所以除了内核能力决定的那几项（指纹页里的系统 / 浏览器 / 逐项开关），文字应该一模一样。
 if (desk && want('desk')) {
-  let deskTheme = fixture.settings?.theme, deskMany = false, deskUpd = null, deskNeed = false, deskExts = null, deskOutcome = 'hot', deskExits = null;
+  let deskTheme = fixture.settings?.theme, deskMany = false, deskUpd = null, deskNeed = false, deskExts = null, deskOutcome = 'hot', deskExits = null, deskMail = null;
   const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
     { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
   const deskCalls = [];
@@ -578,7 +578,7 @@ if (desk && want('desk')) {
       const need = (i) => (deskNeed && i.rt.running ? { ...i, rt: { ...i.rt, needRestart: ['extensions'] } } : i); // 加过扩展：开着的实例都要重启
       const xr = /^\/api\/extensions\/([^/]+)\/reload$/.exec(u.pathname); // 扩展“重载”：回那个扩展，加上这一次的结果
       if (xr && deskExts) { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ ...deskExts.find((x) => x.id === xr[1]), outcome: deskOutcome })); return; }
-      const st = { ...fixture, ...(deskExts ? { extensions: deskExts } : {}), ...(deskExits ? { exits: deskExits } : {}), me: need(fixture.me), instances: many.map(need), ...(deskUpd ? { update: deskUpd } : {}), settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
+      const st = { ...fixture, ...(deskExts ? { extensions: deskExts } : {}), ...(deskExits ? { exits: deskExits } : {}), me: need(deskMail ? { ...fixture.me, mail: deskMail } : fixture.me), instances: many.map(need), ...(deskUpd ? { update: deskUpd } : {}), settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
       r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : u.pathname === '/api/usage' ? deskUsage() : { ok: true })); return;
     }
     const f = path.join(desk, decodeURIComponent(u.pathname));
@@ -616,7 +616,7 @@ if (desk && want('desk')) {
     const hits = []; a4.on('request', (r) => { const k = /\/api\/instances\/([^/]+)\/restart$/.exec(r.url()); if (k && r.method() === 'POST') hits.push(k[1]); });
     await a4.screenshot({ path: path.join(out, 'desk-ext-need.png') });
     await a4.evaluate(() => document.querySelector('.warn.need .lk').click()); await a4.waitForTimeout(500); // 这一页跟着状态不停重画，用 click() 会一直等“元素稳定”
-    check('电脑扩展页：最上面写着哪几个开着的实例要重启，点“全部重启”把它们都重启，自己所在的那个放最后', /#1、#2、#14 开着，重启后才会用上这里的改动/.test(xt) && /全部重启/.test(xt) && hits.length === 3 && hits[2] === 'p2', { xt, hits });
+    check('电脑扩展页：最上面写着哪几个开着的实例要重启，点“全部重启”把它们都重启，自己所在的那个放最后', /#1、#2、#14 开着，新加的扩展重启后才会出现/.test(xt) && /全部重启/.test(xt) && hits.length === 3 && hits[2] === 'p2', { xt, hits });
     const n4 = await c4.newPage(); n4.on('pageerror', (e) => errors.push(`电脑新标签页 需重启: ${e.message}`));
     await n4.setViewportSize({ width: 1280, height: 820 });
     await n4.goto(dbase + 'newtab.html'); await n4.waitForTimeout(600);
@@ -625,6 +625,21 @@ if (desk && want('desk')) {
     const [rq2] = await Promise.all([n4.waitForRequest((r) => r.method() === 'POST' && /\/api\/instances\/p2\/restart$/.test(r.url()), { timeout: 3000 }).catch(() => null), n4.click('.nswarn.need')]);
     check('电脑新标签页：有一行“需重启：扩展有增删 立即重启”，点了重启当前实例', /需重启：扩展有增删/.test(nt) && /立即重启/.test(nt) && !!rq2, { nt });
     await c4.close(); deskNeed = false;
+  }
+  // “共享扩展”入口（需求方 2026-11-23：信箱右边，方便重载插件）：设了信箱的实例，紧挨信箱右边、同一行，弹窗不多占高度；写着本实例用着几个；有新加的扩展要重启时带红点
+  {
+    deskMail = { kind: 'outlook', email: 'carol.demo@outlook.com', unread: 2, newest: [] }; deskNeed = true;
+    deskExts = [{ id: 'ab', extId: 'a'.repeat(32), name: '鹈鹕鉴定', version: '2.2.0', enabled: true, scope: 'all', instanceIds: [], data: 'shared', backups: [], source: 'file', path: 'D:\\dev\\pelican-ext' }, { id: 'cd', extId: 'c'.repeat(32), name: '别的实例的', version: '1.0', enabled: true, scope: 'selected', instanceIds: ['zz'], data: 'isolated', backups: [], source: 'store' }];
+    const c6 = await br.newContext({ viewport: { width: 380, height: 600 }, deviceScaleFactor: 2, locale: 'zh-CN' });
+    await c6.addInitScript(mock, fixture);
+    const p6 = await c6.newPage(); p6.on('pageerror', (e) => errors.push(`电脑弹窗 共享扩展: ${e.message}`));
+    await p6.goto(dbase + 'popup.html'); await p6.waitForTimeout(600);
+    const g6 = await p6.evaluate(() => { const mi = [...document.querySelectorAll('.amenu .mis .mi')], f = (t) => mi.find((x) => x.querySelector('.grow')?.textContent === t), m = f('信箱'), e = f('共享扩展');
+      const mb = m?.getBoundingClientRect(), eb = e?.getBoundingClientRect();
+      return { n: mi.length, same: !!(mb && eb) && Math.abs(mb.top - eb.top) < 1 && eb.left > mb.left, k: e?.querySelector('.k')?.textContent || '', dot: !!e?.querySelector('.k .bad'), label: (() => { const g = e?.querySelector('.grow'); return g ? g.scrollWidth <= g.clientWidth + 1 : false; })(), tool: !!document.querySelector('.amenu .tools button[title^="共享扩展"]'), page: document.documentElement.scrollHeight }; });
+    check('电脑弹窗：设了信箱时“共享扩展”紧挨信箱右边同一行，写着本实例用着几个，有新加的扩展待重启时数字标红；名字不被截断；下面那排小图标里不再重复', g6.n === 6 && g6.same && g6.k === '1' && g6.dot && g6.label && !g6.tool, g6);
+    await p6.screenshot({ path: path.join(out, 'desk-menu-ext.png') });
+    await c6.close(); deskMail = null; deskNeed = false; deskExts = null;
   }
   // 扩展“重载”（决策 EXT-1，需求方 2026-11-18：“锁定一个路径之后插件重载……刷新即可生效不需要重启”）
   {
@@ -637,7 +652,7 @@ if (desk && want('desk')) {
     const rows = await a5.evaluate(() => [...document.querySelectorAll('#main .row')].map((r) => ({ t: r.querySelector('.t')?.textContent || '', src: r.querySelector('.src')?.textContent || '', btn: !!r.querySelector('.trail button[title^="重载"]'), fits: r.scrollWidth <= r.clientWidth + 1 })));
     check('电脑扩展页：每一行都有“重载”按钮；从文件夹加的写着“来自 <路径>”，以前加的（没记路径）写着“点重载填一次路径”', rows.length === 3 && /来自 D:\\dev\\pelican-ext/.test(rows[0].src) && /点“重载”填一次路径/.test(rows[1].src) && !rows[2].src && rows.every((r) => r.btn && r.fits), { rows });
     await a5.screenshot({ path: path.join(out, 'desk-ext-reload.png') });
-    for (const [o, re] of [['hot', /已重载：开着的实例里马上生效，已经打开的网页刷新一下/], ['restart', /版本号或 manifest 变了，开着的实例要重启才生效/], ['same', /和上次一样，没有变化/]]) {
+    for (const [o, re] of [['hot', /已重载：开着的实例里马上生效，已经打开的网页刷新一下/], ['restart', /还在用老位置的文件，这次要重启一下，以后不用/], ['same', /和上次一样，没有变化/]]) {
       deskOutcome = o;
       const [rq5] = await Promise.all([a5.waitForRequest((r) => r.method() === 'POST' && /\/api\/extensions\/ab\/reload$/.test(r.url()), { timeout: 3000 }).catch(() => null), a5.evaluate(() => document.querySelector('#main .row .trail button[title^="重载"]').click())]);
       await a5.waitForTimeout(500);
@@ -729,10 +744,10 @@ if (desk && want('desk')) {
     const g = await p3.evaluate(() => { const l = document.querySelector('.amenu .insts'), lb = l.getBoundingClientRect(), mi = [...document.querySelectorAll('.amenu .mis .mi')].map((x) => x.getBoundingClientRect());
       const rows = [...l.children].map((x) => x.getBoundingClientRect());
       return { n: rows.length, seen: rows.filter((r) => r.top >= lb.top - 1 && r.bottom <= Math.min(lb.bottom, 600) + 1).length, dense: l.classList.contains('dense'), scroll: l.scrollHeight > l.clientHeight + 1, qs: document.querySelectorAll('.qs').length,
-        cols: mi.length === 4 && Math.abs(mi[0].top - mi[1].top) < 1 && Math.abs(mi[2].top - mi[3].top) < 1 && mi[2].top > mi[0].top, page: document.documentElement.scrollHeight,
+        cols: mi.length === 4 && Math.abs(mi[0].top - mi[1].top) < 1 && Math.abs(mi[2].top - mi[3].top) < 1 && mi[2].top > mi[0].top, ext: !!document.querySelector('.amenu .tools button[title^="共享扩展"]'), page: document.documentElement.scrollHeight,
         order: [...l.children].map((x) => (x.classList.contains('run') ? 'r' : 'i')).join('') }; });
     check(`电脑弹窗：${others} 个别的实例一屏全看得到（${dense ? '一行一个的紧凑排法' : '两行一个'}），不用滚、不出搜索框`, g.n === others && g.seen === others && g.dense === dense && !g.scroll && g.qs === 0 && g.page <= 600, g);
-    if (!dense) check('电脑弹窗：四个入口排成两列；开着的实例排在休眠的前面', g.cols && /^r*i*$/.test(g.order), g);
+    if (!dense) check('电脑弹窗：四个入口排成两列（没设信箱时“共享扩展”在下面那排小图标里）；开着的实例排在休眠的前面', g.cols && g.ext && /^r*i*$/.test(g.order), g);
     await p3.screenshot({ path: path.join(out, `desk-menu-${others}.png`) });
     if (!dense) {
       // 直接打字 = 搜索：不用先点搜索框；数字先按编号排；回车打开第一个；↓ 进列表
@@ -751,7 +766,7 @@ if (desk && want('desk')) {
   }
   // 电脑版设置页：左边导航 + 共用的页面
   // 左边照定稿的演示：MaskTab 的八页（2026-11 加了“运行情况”，UI-28）+ “浏览器”一组两页，没有“概览”；这些页没有“返回”（导航就在旁边）；不带 # 时打开“实例”
-  for (const [hash, title, on] of [['', '实例', '实例'], ['settings', '基本设置', '基本设置'], ['settings/ntp', '自定义新标签页', '基本设置'], ['exits', '订阅与地址库', '订阅与地址库'], ['node', '节点与出口', '节点与出口'], ['fp', '指纹与伪装', '指纹与伪装'], ['settings/adv', '高级', '高级'], ['extensions', '扩展', '扩展'], ['usage', '运行情况', '运行情况']]) {
+  for (const [hash, title, on] of [['', '实例', '实例'], ['settings', '基本设置', '基本设置'], ['settings/ntp', '自定义新标签页', '基本设置'], ['exits', '订阅与地址库', '订阅与地址库'], ['node', '节点与出口', '节点与出口'], ['fp', '指纹与伪装', '指纹与伪装'], ['settings/adv', '高级', '高级'], ['extensions', '共享扩展', '共享扩展'], ['usage', '运行情况', '运行情况']]) {
     const ap = await dctx.newPage();
     ap.on('pageerror', (e) => errors.push(`电脑版设置页 ${hash}: ${e.message}`));
     await ap.setViewportSize({ width: 1280, height: 820 });

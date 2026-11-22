@@ -19,8 +19,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/halou367/masktab/companion"
 	"github.com/halou367/masktab/internal/kernel"
 )
+
+// Live 是库里放扩展代码的目录名：<库>/<扩展 ID>/live。以前按版本号分目录（<扩展 ID>/<版本>），换了版本目录就变，
+// 开着的浏览器还指着旧目录，只能重启；现在目录固定，换版本也是原地换文件，再由伴随扩展叫它自己重新加载（decisions EXT-2）。
+const Live = "live"
+
+// Dir 是库里某个扩展的代码目录。
+func Dir(libDir, extID string) string { return filepath.Join(libDir, extID, Live) }
 
 // Info 是入库结果。
 type Info struct {
@@ -28,6 +36,7 @@ type Info struct {
 	Replaced                   bool // 库里原来就有这个扩展的这个版本：文件是原地换的（目录没变，开着的浏览器还指着它）
 	Changed                    bool // 原地换的时候，有文件和原来不一样（含 manifest.json）
 	ManifestChanged            bool // 原地换的时候，manifest.json 和原来不一样（浏览器要整个重新加载扩展才认，关一下再开不够）
+	VersionChanged             bool // 原地换的时候，版本号和原来不一样
 }
 
 // KeyFor 在扩展包自己没带密钥时被问一次：name 是 manifest 里的名字。返回以前给这个扩展用过的公钥（DER），
@@ -270,8 +279,11 @@ func finalize(libDir, tmp string, pub []byte, keyFor KeyFor) (*Info, error) {
 		}
 	}
 	m["key"] = base64.StdEncoding.EncodeToString(pub)
-	delete(m, "update_url") // 解包加载的扩展不走商店自动更新
-	guardManifest(m)        // 内容脚本不进 Cloudflare 验证框（decisions SI-1）
+	delete(m, "update_url")                         // 解包加载的扩展不走商店自动更新
+	guardManifest(m)                                // 内容脚本不进 Cloudflare 验证框（decisions SI-1）
+	if _, err := hookManifest(m, tmp); err != nil { // 让伴随扩展能叫它自己重新加载（decisions EXT-2）
+		return nil, err
+	}
 	out, _ := json.MarshalIndent(m, "", "  ")
 	if err := os.WriteFile(mpath, out, 0o644); err != nil {
 		return nil, err
@@ -295,11 +307,16 @@ func finalize(libDir, tmp string, pub []byte, keyFor KeyFor) (*Info, error) {
 	if len(perms) > 0 {
 		info.Warn = "该扩展申请了 " + strings.Join(perms, "、") + " 权限，可能带账号身份；数据设为\"共享\"会让服务商看到同一身份从多个出口出现，建议改为\"独立\""
 	}
-	dst := filepath.Join(libDir, info.ExtID, info.Version)
+	dst := Dir(libDir, info.ExtID)
 	if old, err := os.ReadFile(filepath.Join(dst, "manifest.json")); err == nil {
-		// 库里已经有这个版本：原地换文件，目录不动。开着的浏览器是按这个目录加载的，
+		// 库里已经有这个扩展：原地换文件，目录不动（版本号变了也一样）。开着的浏览器是按这个目录加载的，
 		// 整个删掉再搬过来的话，中间有一下目录是空的；Windows 上有文件正被读着时还删不掉。
 		info.Replaced, info.ManifestChanged = true, !bytes.Equal(old, out)
+		var om map[string]any
+		if json.Unmarshal(old, &om) == nil {
+			ov, _ := om["version"].(string)
+			info.VersionChanged = ov != info.Version
+		}
 		n, err := syncInto(tmp, dst)
 		info.Changed = n > 0
 		return info, err
@@ -443,8 +460,8 @@ func guardManifest(m map[string]any) bool {
 	return changed
 }
 
-// GuardDir 对库里已经装好的一个扩展目录补上 guardManifest（老版本装进来的没有这一条）。没改动时不写文件。
-func GuardDir(dir string) (bool, error) {
+// Prepare 对库里已经装好的一个扩展目录补上 guardManifest 和重新加载的钩子（老版本装进来的没有）。没改动时不写文件。
+func Prepare(dir string) (bool, error) {
 	mpath := filepath.Join(dir, "manifest.json")
 	raw, err := os.ReadFile(mpath)
 	if err != nil {
@@ -454,9 +471,99 @@ func GuardDir(dir string) (bool, error) {
 	if err := json.Unmarshal(stripComments(bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))), &m); err != nil {
 		return false, err
 	}
-	if !guardManifest(m) {
+	g := guardManifest(m)
+	hk, err := hookManifest(m, dir)
+	if err != nil {
+		return false, err
+	}
+	if !g && !hk {
 		return false, nil
 	}
 	out, _ := json.MarshalIndent(m, "", "  ")
 	return true, os.WriteFile(mpath, out, 0o644)
+}
+
+// ---------- 重新加载的钩子（decisions EXT-2） ----------
+// 浏览器只在启动时按 --load-extension 读扩展；“关一下再开”只重读代码，不重读 manifest（版本号、权限、内容脚本的范围都还是旧的）。
+// chrome.runtime.reload() 会按原目录把扩展整个重新加载（和 chrome://extensions 里点“重新加载”一样，manifest 也重读），
+// 但只有扩展自己能调。所以入库时给库里那一份加一个小后台入口：先挂一个只认伴随扩展的消息监听，再原样载入扩展自己的后台脚本。
+// 用户自己的源文件夹不动；扩展自己的逻辑不动。
+
+// HookFile 是加进扩展里的后台入口文件名（不能以下划线开头：浏览器把那种名字留给自己）。
+const HookFile = "masktab-sw.js"
+
+// hookListener 只认伴随扩展发来的 {masktab:"reload"}：先回话，再重新加载自己。
+var hookListener = `// MaskTab：伴随扩展可以叫这个扩展重新加载自己（库里换了文件、版本号或 manifest 之后，开着的实例不用重启）。只认伴随扩展，别的消息不碰。
+try {
+  chrome.runtime.onMessageExternal.addListener((m, s, reply) => {
+    if (!s || s.id !== '` + companion.ID + `' || !m || m.masktab !== 'reload') return;
+    reply({ ok: true, version: chrome.runtime.getManifest().version });
+    setTimeout(() => chrome.runtime.reload(), 100);
+  });
+} catch (e) { /* 没有这个接口的环境：什么都不做 */ }
+`
+
+// hookManifest 把 background.service_worker 换成钩子入口（和原脚本放在同一个文件夹：原脚本里 importScripts 的相对路径不变），
+// 并让伴随扩展能给它发消息（externally_connectable）。已经换过的不再换。返回有没有改动。
+func hookManifest(m map[string]any, dir string) (bool, error) {
+	bg, _ := m["background"].(map[string]any)
+	if bg == nil {
+		bg = map[string]any{}
+	}
+	sw, _ := bg["service_worker"].(string)
+	sw = strings.TrimPrefix(strings.ReplaceAll(sw, "\\", "/"), "/")
+	changed := false
+	if sw == "" || filepath.Base(sw) != HookFile {
+		sub, orig := "", ""
+		if sw != "" {
+			sub, orig = filepath.ToSlash(filepath.Dir(sw)), filepath.Base(sw)
+			if sub == "." {
+				sub = ""
+			}
+		}
+		module, _ := bg["type"].(string)
+		var code string
+		switch {
+		case orig == "":
+			code = hookListener
+		case module == "module":
+			// 模块：import 按顺序执行，钩子先挂上；扩展自己的脚本出错时整个后台起不来（和没有钩子时一样）。
+			if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(sub), "masktab-hook.js"), []byte(hookListener), 0o644); err != nil {
+				return false, err
+			}
+			code = "import './masktab-hook.js';\nimport './" + orig + "';\n"
+		default:
+			// 普通脚本：钩子先挂上，再载入原脚本；原脚本出错照样报到扩展的错误里，但钩子还在——修好文件点“重载”就能恢复，不用重启。
+			code = hookListener + "try { importScripts('./" + orig + "'); } catch (e) { setTimeout(() => { throw e; }); }\n"
+		}
+		p := filepath.Join(dir, filepath.FromSlash(sub), HookFile)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(p, []byte(code), 0o644); err != nil {
+			return false, err
+		}
+		if sub != "" {
+			bg["service_worker"] = sub + "/" + HookFile
+		} else {
+			bg["service_worker"] = HookFile
+		}
+		m["background"] = bg
+		changed = true
+	}
+	// 声明了 externally_connectable 却没列 ids = 别的扩展都连不上；列了但没有伴随扩展也连不上：把伴随扩展加进去。
+	if ec, ok := m["externally_connectable"].(map[string]any); ok {
+		ids, _ := ec["ids"].([]any)
+		has := false
+		for _, v := range ids {
+			if s, _ := v.(string); s == "*" || s == companion.ID {
+				has = true
+			}
+		}
+		if !has {
+			ec["ids"] = append(ids, companion.ID)
+			changed = true
+		}
+	}
+	return changed, nil
 }

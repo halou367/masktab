@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,7 +59,7 @@ func TestInstallCRX3(t *testing.T) {
 	if info.ExtID != want || info.Version != "1.2.3" || info.Name != "Demo Ext" || info.Warn == "" {
 		t.Fatalf("入库结果不对：%+v（期望 ID %s）", info, want)
 	}
-	dir := filepath.Join(lib, want, "1.2.3")
+	dir := Dir(lib, want)
 	if _, err := os.Stat(filepath.Join(dir, "_metadata")); err == nil {
 		t.Error("_metadata 应被删除")
 	}
@@ -153,7 +154,7 @@ func TestInstallDirAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(lib, first.ExtID, "2.2.0")
+	dir := Dir(lib, first.ExtID)
 	if first.Replaced || first.Changed || first.ManifestChanged {
 		t.Fatalf("第一次入库不该算“原地换”：%+v", first)
 	}
@@ -198,7 +199,7 @@ func TestInstallDirAgain(t *testing.T) {
 	}
 	// 源自己带了密钥：以它为准，不问
 	asked = ""
-	put("manifest.json", `{"manifest_version":3,"name":"Dev Ext","version":"2.2.0","key":"`+base64.StdEncoding.EncodeToString(KeyOf(filepath.Join(lib, other.ExtID, "2.2.0")))+`"}`)
+	put("manifest.json", `{"manifest_version":3,"name":"Dev Ext","version":"2.2.0","key":"`+base64.StdEncoding.EncodeToString(KeyOf(Dir(lib, other.ExtID)))+`"}`)
 	own, err := InstallDir(lib, src, keyFor)
 	if err != nil || own.ExtID != other.ExtID || asked != "" {
 		t.Fatalf("源带密钥：%+v %v（不该问：%q）", own, err, asked)
@@ -212,7 +213,7 @@ func TestGuardChallenge(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(m), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ch, err := GuardDir(dir)
+	ch, err := Prepare(dir)
 	if err != nil || !ch {
 		t.Fatalf("应改动：%v %v", ch, err)
 	}
@@ -227,7 +228,86 @@ func TestGuardChallenge(t *testing.T) {
 		len(got.ContentScripts[1].Exclude) != 2 || got.ContentScripts[1].Exclude[1] != ChallengeOrigin {
 		t.Fatalf("exclude_matches 不对：%s", raw)
 	}
-	if ch, _ := GuardDir(dir); ch {
+	if ch, _ := Prepare(dir); ch {
 		t.Fatal("第二次不该再改")
+	}
+}
+
+// 重新加载的钩子（decisions EXT-2）：普通后台脚本、模块后台、没有后台、子目录里的后台、声明了 externally_connectable 的，各自的入口对不对；
+// 第二次不再改；换版本号也是原地换、目录不变。
+func TestReloadHook(t *testing.T) {
+	cases := []struct{ name, bg, ec, wantSW, wantImport string }{
+		{"classic", `"background":{"service_worker":"bg.js"}`, "", HookFile, "importScripts('./bg.js')"},
+		{"module", `"background":{"service_worker":"bg.js","type":"module"}`, "", HookFile, "import './bg.js'"},
+		{"none", "", "", HookFile, ""},
+		{"subdir", `"background":{"service_worker":"js/bg.js"}`, "", "js/" + HookFile, "importScripts('./bg.js')"},
+		{"ec", `"background":{"service_worker":"bg.js"}`, `,"externally_connectable":{"matches":["https://a.com/*"]}`, HookFile, "importScripts('./bg.js')"},
+	}
+	for _, c := range cases {
+		dir := t.TempDir()
+		m := `{"manifest_version":3,"name":"x","version":"1"`
+		if c.bg != "" {
+			m += "," + c.bg
+		}
+		m += c.ec + "}"
+		_ = os.MkdirAll(filepath.Join(dir, "js"), 0o755)
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(m), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if ch, err := Prepare(dir); err != nil || !ch {
+			t.Fatalf("%s：应改动：%v %v", c.name, ch, err)
+		}
+		raw, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
+		var got struct {
+			Background struct {
+				SW string `json:"service_worker"`
+			} `json:"background"`
+			EC struct {
+				IDs []string `json:"ids"`
+			} `json:"externally_connectable"`
+		}
+		_ = json.Unmarshal(raw, &got)
+		if got.Background.SW != c.wantSW {
+			t.Fatalf("%s：service_worker = %q", c.name, got.Background.SW)
+		}
+		code, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(c.wantSW)))
+		if err != nil || !strings.Contains(string(code), c.wantImport) {
+			t.Fatalf("%s：入口文件不对：%s %v", c.name, code, err)
+		}
+		if c.name != "module" && !strings.Contains(string(code), "chrome.runtime.reload()") {
+			t.Fatalf("%s：入口里没有钩子：%s", c.name, code)
+		}
+		if c.name == "module" {
+			if h, _ := os.ReadFile(filepath.Join(dir, "masktab-hook.js")); !strings.Contains(string(h), "chrome.runtime.reload()") {
+				t.Fatalf("模块：钩子文件不对：%s", h)
+			}
+		}
+		if c.name == "ec" && (len(got.EC.IDs) != 1 || got.EC.IDs[0] == "") {
+			t.Fatalf("externally_connectable 没加伴随扩展：%s", raw)
+		}
+		if ch, _ := Prepare(dir); ch {
+			t.Fatalf("%s：第二次不该再改", c.name)
+		}
+	}
+
+	// 换版本号：还是同一个目录，原地换，报 VersionChanged
+	lib, src := t.TempDir(), t.TempDir()
+	_ = os.WriteFile(filepath.Join(src, "manifest.json"), []byte(`{"manifest_version":3,"name":"v","version":"1.0","background":{"service_worker":"bg.js"}}`), 0o644)
+	_ = os.WriteFile(filepath.Join(src, "bg.js"), []byte("1"), 0o644)
+	a, err := InstallDir(lib, src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := KeyOf(Dir(lib, a.ExtID))
+	_ = os.WriteFile(filepath.Join(src, "manifest.json"), []byte(`{"manifest_version":3,"name":"v","version":"1.1","background":{"service_worker":"bg.js"}}`), 0o644)
+	b, err := InstallDir(lib, src, func(string) []byte { return key })
+	if err != nil || b.ExtID != a.ExtID || !b.Replaced || !b.VersionChanged || !b.ManifestChanged {
+		t.Fatalf("换版本号：%+v %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(lib, a.ExtID, "1.1")); err == nil {
+		t.Fatal("不该再按版本号建目录")
+	}
+	if m, _ := os.ReadFile(filepath.Join(Dir(lib, a.ExtID), HookFile)); !strings.Contains(string(m), "importScripts('./bg.js')") {
+		t.Fatalf("换版本后钩子入口不对：%s", m)
 	}
 }

@@ -127,6 +127,7 @@ function addonsPage() {
           row({ ic: 'ext', t: [x.name, h('span', { class: 'sub' }, x.version || '')], s: x.desc || x.id, trail: sw(x.enabled, x.enabled ? '停用' : '启用', () => op(x, x.enabled ? 'disable' : 'enable', x.enabled ? '已停用' : '已启用')) }),
           h('div', { style: { display: 'flex', gap: '4px', padding: '0 16px 8px 72px', flexWrap: 'wrap' } },
             x.action && h('button', { class: 'btn', onclick: () => op(x, 'action') }, '打开弹窗'), x.options && h('button', { class: 'btn', onclick: () => op(x, 'options') }, '设置'),
+            h('button', { class: 'btn', title: '向 Firefox 扩展商店要新版本，有就当场换上，不用重启', onclick: () => run(async () => { const m = await api('POST', `/api/addons/${encodeURIComponent(x.id)}/update`); await loadAddons(); toast(m || '已检查'); }) }, '检查更新'),
             h('button', { class: 'btn danger', onclick: async () => { if (await confirmDlg(`移除“${x.name}”？`, '', '移除', true)) op(x, 'remove', '已移除'); } }, '移除')))),
     row({ ic: 'add', t: '添加扩展', s: '打开 Firefox 扩展商店（全部实例共用）', onclick: store }),
     h('div', { class: 'foot' }, '手机内核是 GeckoView，只能装 addons.mozilla.org 上签过名的火狐扩展。')];

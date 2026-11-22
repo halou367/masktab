@@ -9,7 +9,7 @@ import (
 )
 
 // 扩展库里没人用的目录（换掉的旧版本、移除了的扩展、装到一半的临时目录）在核心服务启动时清掉；还在用的不动。
-// 换版本时有实例开着就不当场删旧版本（那个实例里的扩展正从这个目录读文件）。
+// 老版本按版本号分的目录搬成固定的 live。
 func TestSweepExtDirs(t *testing.T) {
 	dir := t.TempDir()
 	mk := func(parts ...string) string {
@@ -31,8 +31,13 @@ func TestSweepExtDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	has := func(p string) bool { _, e := os.Stat(p); return e == nil }
-	if !has(cur) || has(old) || has(gone) || has(tmp) || has(filepath.Dir(gone)) {
-		t.Fatalf("启动时该只留下在用的那个版本：在用 %v 旧版本 %v 已移除 %v 临时 %v", has(cur), has(old), has(gone), has(tmp))
+	// 在用的那个版本搬成固定目录 live（decisions EXT-2），其余清掉
+	live := filepath.Join(dir, "extensions", "aaa", "live")
+	if !has(filepath.Join(live, "manifest.json")) || has(cur) || has(old) || has(gone) || has(tmp) || has(filepath.Dir(gone)) {
+		t.Fatalf("启动时该只留下在用的那一份（搬到 live）：live %v 原目录 %v 旧版本 %v 已移除 %v 临时 %v", has(live), has(cur), has(old), has(gone), has(tmp))
+	}
+	if a.extDir(a.Exts[0]) != live {
+		t.Fatalf("代码目录应是 live：%s", a.extDir(a.Exts[0]))
 	}
 	// 清单读不出来（文件坏了）：不能凭空清单删文件
 	dir2 := t.TempDir()

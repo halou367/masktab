@@ -13,7 +13,7 @@ import { mailView } from './mail.js';
 // node 是本窗口这个实例的节点；node/<id> 是从实例管理点进来、改另一个实例的（它不用开着，决策 F-HEAL）。
 // 左边导航照定稿的演示（决策 UI-10）：上面一组是 MaskTab 自己的页，下面“浏览器”一组是基本设置和高级。
 // 没有“概览”：它只是把左边这几项再列一遍。“新标签页”的设置从“基本设置”里点进去。
-const NAV = [['', [['instances', 'layers', '实例'], ['usage', 'speed', '运行情况'], ['node', 'globe', '节点与出口'], ['exits', 'sub', '订阅与地址库'], ['fp', 'finger', '指纹与伪装'], ['extensions', 'ext', '扩展'], ['settings/about', 'update', '组件与更新'], ['diag', 'bug', '诊断']]],
+const NAV = [['', [['instances', 'layers', '实例'], ['usage', 'speed', '运行情况'], ['node', 'globe', '节点与出口'], ['exits', 'sub', '订阅与地址库'], ['fp', 'finger', '指纹与伪装'], ['extensions', 'ext', '共享扩展'], ['settings/about', 'update', '组件与更新'], ['diag', 'bug', '诊断']]],
   ['浏览器', [['settings', 'gear', '基本设置'], ['settings/adv', 'tune', '高级']]]];
 const TITLES = Object.fromEntries(NAV.flatMap(([, l]) => l.map(([r, , t]) => [r, t])));
 let st = null;
@@ -63,8 +63,8 @@ function extensions() {
     const x = await fn(); await load(true);
     const on = st.instances.some((i) => i.rt.running);
     toast({ added: `已加入全局库${on ? '；开着的实例重启后才有它' : ''}`,
-      hot: `“${x.name}”已重载${on ? '：开着的实例里马上生效，已经打开的网页刷新一下' : ''}`,
-      restart: `“${x.name}”已重载${on ? '；这次版本号或 manifest 变了，开着的实例要重启才生效' : ''}`,
+      hot: `“${x.name}”已重载${on ? '：开着的实例里马上生效，已经打开的网页刷新一下就用上新的' : ''}`,
+      restart: `“${x.name}”已重载${on ? '；开着的实例还在用老位置的文件，这次要重启一下，以后不用' : ''}`,
       same: `“${x.name}”和上次一样，没有变化` }[x.outcome] || '已更新');
   });
   // 重载（每个扩展都有）：从文件夹加的重新读那个文件夹；商店来的重新下载商店里现在的版本；以前加的没记文件夹，问一次路径，之后就记住了。
@@ -92,8 +92,18 @@ function extensions() {
   // 以前改完这里什么都不说，要到各个实例的“节点与出口”里才看得到“需重启”。先重启别的，自己所在的这个放最后（它一重启这一页就没了）。
   const stale = st.instances.filter((i) => i.rt.running && i.rt.needRestart?.includes('extensions'));
   const restartStale = () => act(async () => { for (const i of [...stale].sort((a, b) => (a.id === st.me?.id) - (b.id === st.me?.id))) await api('POST', `/api/instances/${i.id}/restart`); }, '正在重启…');
-  return [appBar(['扩展', h('span', { class: 'cnt' }, String(st.extensions.length))], null, h('button', { class: 'btn tonal', onclick: addExt }, icon('add', 18), '添加')),
-    stale.length > 0 && h('div', { class: 'warn need' }, icon('refresh', 20), h('span', { class: 'tx' }, `${stale.map((i) => '#' + i.no).join('、')} 开着，重启后才会用上这里的改动`),
+  // 全部重载：每个都重新读一遍（文件夹来的读文件夹，商店来的重新下载）；没记文件夹的跳过（要先单独点一次填路径）。
+  const canAll = st.extensions.filter((x) => x.enabled && (x.path || x.source === 'store'));
+  const reloadAll = () => run(async () => {
+    let n = 0; const bad = [];
+    for (const x of canAll) { try { await api('POST', `/api/extensions/${x.id}/reload`, {}); n++; } catch (e) { bad.push(`${x.name}：${e.message}`); } }
+    await load(true);
+    toast(bad.length ? `重载了 ${n} 个；${bad.join('；')}` : `已重载 ${n} 个扩展：开着的实例里马上生效，已经打开的网页刷新一下就用上新的`, bad.length > 0);
+  });
+  return [appBar(['共享扩展', h('span', { class: 'cnt' }, String(st.extensions.length))], null,
+    canAll.length > 1 && h('button', { class: 'btn out', title: '把每个启用中的扩展都重新读一遍（文件夹来的读文件夹，商店来的更新到商店里现在的版本）', onclick: reloadAll }, icon('refresh', 18), '全部重载'),
+    h('button', { class: 'btn tonal', onclick: addExt }, icon('add', 18), '添加')),
+    stale.length > 0 && h('div', { class: 'warn need' }, icon('refresh', 20), h('span', { class: 'tx' }, `${stale.map((i) => '#' + i.no).join('、')} 开着，新加的扩展重启后才会出现（改代码、换版本、停用都不用重启）`),
       h('button', { class: 'lk', onclick: restartStale }, stale.length > 1 ? '全部重启' : '立即重启')),
     st.extensions.map((x) => row({ ic: 'ext', t: [x.name, h('span', { class: 'sub' }, x.version)], s: [`${x.scope === 'all' ? '全部实例' : `${x.instanceIds.length} 个实例`} · 数据${x.data === 'shared' ? '共享' : '独立'}`, x.warn && h('span', { class: 'mid' }, ' · ' + x.warn),
       x.path ? h('span', { class: 'el src', style: { display: 'block' }, title: x.path }, '来自 ' + x.path) : x.source !== 'store' && h('span', { class: 'src', style: { display: 'block' } }, '还没记下文件夹：点“重载”填一次路径')],

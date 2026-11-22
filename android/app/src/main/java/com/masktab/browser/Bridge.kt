@@ -42,6 +42,7 @@ object Bridge {
             k == "GET /ext/state" -> ok(Core.extState())
             // ---------- 扩展 ----------
             k == "GET /api/addons" -> Addons.list { l -> ok(Addons.toJson(l)) }
+            seg.size == 4 && seg[1] == "addons" && m == "POST" && seg[3] == "update" -> Addons.update(seg[2]) { msg, e -> if (e == null) ok(msg) else fail(e) }
             seg.size == 4 && seg[1] == "addons" && m == "POST" -> Addons.act(seg[2], seg[3]) { e -> if (e == null) ok(null) else fail(e) }
             // ---------- 界面 ----------
             // 先回话、再换页面：这几个请求是页面自己发来的，如果在回话之前就把发请求的那个页面（会话）关掉，

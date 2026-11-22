@@ -61,7 +61,8 @@ type Runtime struct {
 	launchedSrc *model.IPInfo // 本次启动时定时区用的那一路出口（只取国家、时区）；运行中同一个国家里换出口不改时区（decisions A-12）
 	probePort   int
 	cmd         *exec.Cmd
-	extSetHash  string
+	extIDs      []string          // 本次启动交给浏览器加载的全局扩展（ID）
+	extStale    bool              // 有扩展在这个实例里没法当场换新（伴随扩展报的，或库目录换过），重启才行
 	pulled      map[string]string // 共享扩展：启动时拉入后的内容哈希
 	done        chan struct{}
 	startedAt   int64           // 本次启动时刻（毫秒），用来判断伴随扩展后台是否一直没起来
@@ -265,10 +266,11 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	var wx fileWrap[[]*model.GlobalExtension]
 	if readJSON(a.p("config", "extensions.json"), &wx) { // 读不出来（文件坏了 / 没有）就不清：清单都没有，不能凭它删文件
 		a.Exts = wx.Items
+		a.migrateExtDirs()
 		a.sweepExtDirs()
-		for _, x := range a.Exts { // 老版本装进库的扩展补上“内容脚本不进 Cloudflare 验证框”（decisions SI-1）；这时还没有实例在跑
-			if ch, err := extlib.GuardDir(a.p("extensions", x.ExtID, x.Version)); ch {
-				log.Printf("扩展 %s：内容脚本不再进入 Cloudflare 验证框", x.Name)
+		for _, x := range a.Exts { // 老版本装进库的扩展补上“内容脚本不进 Cloudflare 验证框”（SI-1）和重新加载的钩子（EXT-2）；这时还没有实例在跑
+			if ch, err := extlib.Prepare(a.extDir(x)); ch {
+				log.Printf("扩展 %s：已补上验证框保护和免重启重载", x.Name)
 			} else if err != nil && !os.IsNotExist(err) {
 				log.Printf("扩展 %s 的 manifest 读不了：%v", x.Name, err)
 			}

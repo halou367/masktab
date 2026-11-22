@@ -109,7 +109,8 @@ export function menuView(st, nav) {
     mi('globe', '节点与出口', nav.node, ex ? [flag(ex.country), h('span', { class: 'cn' }, cname(ex.country))] : on ? '' : '直连'),
     me.kind !== 'normal' && mi('finger', '指纹与伪装', nav.fp, dz.total ? `${dz.pass}/${dz.total}` : ''),
     nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : ''),
-    me.mail && mi('mail', '信箱', () => nav.open(`mail/${me.id}`), me.mail.unread ? h('span', { class: 'mdot n' }, String(me.mail.unread)) : ''))); // 设了卡密才有（decisions MB-1）
+    me.mail && mi('mail', '信箱', () => nav.open(`mail/${me.id}`), me.mail.unread ? h('span', { class: 'mdot n' }, String(me.mail.unread)) : ''), // 设了卡密才有（decisions MB-1）
+    me.mail && extItem(st, me, mi, nav))); // 紧挨信箱右边（两列刚好填满）；没设信箱的实例放到下面那排小图标里，弹窗不多占一行
 
   // 开着的排在前面（和实例页“运行中 / 休眠”两组一个次序），组内还是拖出来的次序：要切过去的多半是开着的。
   // 次序在菜单打开时定一次（决策 UI-32）：开着菜单点“打开”某一个，它不会从下面跳到最上面去，还在原处转进度；下次打开菜单才按新的排。
@@ -142,7 +143,8 @@ export function menuView(st, nav) {
   kids.push(h('div', { class: 'lbl' }, h('span', { title: MOBILE ? null : '直接打字就能搜索（编号 / 名称 / 邮箱），回车切换到第一个' }, `其它实例（${others.length}）`),
       h('span', { class: 'tools' },
         nav.translate && tool('lang', '翻译此页 / 显示原文（Alt+T）', nav.translate), // 决策 UI-27
-        tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), tool('gear', '设置', () => nav.open('settings')),
+        tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), !me.mail && !st.host && tool('ext', `共享扩展：本实例用着 ${extMine(st, me)} 个，在这里重载、停用、改范围${extStale(me) ? '（有新加的扩展，重启本实例后出现）' : ''}`, () => nav.open('extensions')),
+        tool('gear', '设置', () => nav.open('settings')),
         me.kind !== 'normal' && tool('power', '关闭这个实例', () => run(() => api('POST', `/api/instances/${me.id}/stop`))),
         h('button', { class: 'btn tonal sm', title: '新建实例' + (MOBILE ? '' : '（Ctrl+M）'), onclick: () => newWizard(st, () => nav.render()) }, icon('add', 16), h('span', { class: 'bt' }, '新建实例')))), // 新建走向导（决策 UI-25）
     showQ && h('div', { class: 'qs' }, icon('search', 18), search),
@@ -161,4 +163,15 @@ export function menuView(st, nav) {
     !list.length && h('div', { class: 'empty' }, others.length ? '没有匹配的实例' : '还没有别的实例'));
 
   return h('div', { class: 'amenu' }, kids);
+}
+
+// “共享扩展”入口（需求方 2026-11-23：放在信箱右边，方便重载插件）：直达客户端里管全局扩展的那一页（那里每个扩展都能重载、停用、改范围，还有“全部重载”）。
+// 右边写本实例用着几个；有新加的扩展要重启本实例才出现时数字标红。手机上工具栏本来就有“扩展程序”按钮，这里不再放。
+const extMine = (st, me) => (st.extensions || []).filter((x) => x.enabled && (x.scope === 'all' || (x.instanceIds || []).includes(me.id))).length;
+const extStale = (me) => !!(me.rt?.running && me.rt.needRestart?.includes('extensions'));
+function extItem(st, me, mi, nav) {
+  if (st.host) return null;
+  const mine = extMine(st, me);
+  const k = extStale(me) ? h('span', { class: 'bad', title: '有新加的扩展，重启本实例后出现' }, String(mine)) : mine ? String(mine) : ''; // 待重启时数字标红（上面那条“需重启”就是它）
+  return mi('ext', '共享扩展', () => nav.open('extensions'), k);
 }
