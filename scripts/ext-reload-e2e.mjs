@@ -103,8 +103,11 @@ try {
   const r2 = await api('POST', `/api/extensions/${x.id}/reload`);
   check(r2.outcome === 'hot' && r2.extId === x.extId, '改了代码点“重载”：核心服务说“马上生效”', JSON.stringify(r2));
   for (const [n, i] of [['一', a], ['二', b]]) {
-    const cs = await until(async () => { const m = await pageMarks(i.id); return /"cs":"v2"/.test(m) ? m : ''; });
-    const bg = await until(async () => { const t = await bgTag(i.id, x.extId); return t === 'bg2' ? t : ''; });
+    // 第一次重载时伴随扩展可能刚好在睡（浏览器收走了它的后台），要等状态推过来把它叫醒：多给点时间，并记下用了多久
+    const t0 = Date.now();
+    const cs = await until(async () => { const m = await pageMarks(i.id); return /"cs":"v2"/.test(m) ? m : ''; }, 25000);
+    const bg = await until(async () => { const t = await bgTag(i.id, x.extId); return t === 'bg2' ? t : ''; }, 25000);
+    console.log(`  实例${n}：${((Date.now() - t0) / 1000).toFixed(1)} 秒后用上第 2 版`);
     check(!!cs && bg === 'bg2', `实例${n}没重启：新开的网页里内容脚本是第 2 版，后台脚本也是第 2 版`, JSON.stringify({ cs: await pageMarks(i.id), bg: await bgTag(i.id, x.extId) }));
   }
   st = await api('GET', '/api/state');
