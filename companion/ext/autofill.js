@@ -194,7 +194,9 @@
     closePop(); mount();
     pop = el('div', 'pop');
     const b = el('button', 'it'); b.insertAdjacentHTML('afterbegin', KEY);
-    const tx = el('span', 'u'); tx.append(el('div', '', '使用默认密码'), el('div', 's', '注册新站时统一用它，MaskTab 会记住这个账号'));
+    // 实例选了“用自己的密码”（decisions M-8）：核心服务给的 default 就是它自己的密码，字也跟着换
+    const own = info?.pwMode === 'custom';
+    const tx = el('span', 'u'); tx.append(el('div', '', own ? '使用本实例的密码' : '使用默认密码'), el('div', 's', own ? '这个实例注册新站都用它，MaskTab 会记住这个账号' : '注册新站时统一用它，MaskTab 会记住这个账号'));
     b.append(tx);
     b.onmousedown = (ev) => {
       ev.preventDefault();
@@ -303,7 +305,7 @@
     }
     if (!done.length) return;
     const nE = done.filter((e) => e.type !== 'password').length, nP = done.length - nE;
-    const what = [nE && (SRCNAME[c0?.src] || '邮箱'), nP && '默认密码'].filter(Boolean).join('和');
+    const what = [nE && (SRCNAME[c0?.src] || '邮箱'), nP && (inf.pwMode === 'custom' ? '本实例的密码' : '默认密码')].filter(Boolean).join('和');
     done[done.length - 1].blur?.(); // 不把光标留在框里：免得弹出别的提示，也不像是替用户点了什么
     closePop(); // 填的时候我们自己让框获得过焦点：那时弹的下拉收起
     toast(`已填好${what}（没有提交）`, () => { for (const e of done) setVal(e, ''); done[0]?.blur?.(); });

@@ -142,26 +142,12 @@ func (a *App) resolveLocked(in *model.Instance) resolved {
 		return r
 	}
 	typ, val := a.pipValueLocked(in)
-	var server string
-	var port int
-	if in.Proxy.AddressMode == "same-as-exit" { // 旧数据：入口直接用所选反代的地址
-		if typ != "proxyip" {
-			return resolved{want: "REJECT", err: "\"同出口\"需要先选一个 proxyip 类型的出口"}
-		}
-		server, port = exits.SplitHostPort(val)
-		if port == 0 {
-			port = 443
-		}
-	} else {
-		n, ok := a.entryLocked(sub, in.Proxy.AddressID)
-		if !ok {
-			if len(a.nodesLocked(sub)) == 0 {
-				return resolved{want: "REJECT", err: "订阅“" + sub.Name + "”里没有可用的入口地址，刷新订阅或换一个"}
-			}
-			return resolved{want: "REJECT", err: "还没有选入口地址"}
-		}
-		server, port = n.Server, n.Port
+	// 入口：全局一个（decisions N-11），实例自己的入口设置（AddressID / AddressMode / EntryMode）不再看
+	n, ok := a.entryCurLocked()
+	if !ok {
+		return resolved{want: "REJECT", err: "入口池里还没有优选 IP：刷新订阅，或在“订阅与地址库”里加几个优选 IP"}
 	}
+	server, port := n.Server, n.Port
 	prof := profileOf(sub, in.Proxy.Profile, in.Proxy.Host)
 	host := in.Proxy.Host
 	if !contains(prof.Hosts, host) {
@@ -218,6 +204,12 @@ func profileOf(sub *model.Subscription, key, host string) model.Profile {
 	return ps[0]
 }
 
+// coreReload / coreSelect：让代理内核重读配置、切策略组（测试里换成假的）。
+var (
+	coreReload = func(a *App) error { return a.core.Reload() }
+	coreSelect = func(a *App, group, name string) error { return a.core.Select(group, name) }
+)
+
 // applyConfig 由状态整体生成 mihomo 配置；有变化才重载；然后逐个把策略组切到应有选项（计划 8.6）。
 func (a *App) applyConfig() error {
 	a.cfgMu.Lock()
@@ -271,28 +263,33 @@ func (a *App) applyConfig() error {
 			in.ScanMembers = append(in.ScanMembers, nodeName(sub, n.Key))
 		}
 	}
-	// edgetunnel：每个入口一条不带反代参数的出站（自动选线时经它实测）；
-	// socks5 / http 出口各一条"借用的入口 + 该出口"的出站（它们只能经隧道测；proxyip 是本机直接探测的，不需要）。
-	for _, sub := range a.Subs {
-		if sub.Kind != "edgetunnel" || sub.Template == nil {
-			continue
+	// edgetunnel（decisions N-11）：入口全局一个，代理内核里只放几个“候选入口”（每个订阅一条，不带出口，换入口前现测用），
+	// 外加每个全局出口（SOCKS5 / SSTP 等）一条“全局入口 + 该出口”（它们只能经隧道测；proxyip 是本机直接探测的，不需要）。
+	// 以前是“地址池 × 订阅”每个地址一条，再加“全局出口 × 订阅”，地址一多就是几百上千条（见 N-12 的测量）。
+	if et := a.firstETLocked(); et != nil {
+		cands := a.cfgEntriesLocked()
+		for _, sub := range a.etSubsLocked(et.ID) {
+			host := ""
+			if len(sub.Hosts) > 0 {
+				host = sub.Hosts[0]
+			}
+			for _, n := range cands {
+				name := entryOut(sub.ID, n.key())
+				in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(name, *sub.Template, n.Server, n.Port, host, sub.Template.BasePath))...)
+				in.ScanMembers = append(in.ScanMembers, name)
+			}
 		}
-		host := ""
-		if len(sub.Hosts) > 0 {
-			host = sub.Hosts[0]
-		}
-		nodes := a.nodesLocked(sub)
-		for _, n := range nodes {
-			in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(n.Name, *sub.Template, n.Server, n.Port, host, sub.Template.BasePath))...)
-			in.ScanMembers = append(in.ScanMembers, n.Name)
-		}
-		if via, ok := a.viaLocked(sub, nodes); ok {
-			for _, p := range a.pipsLocked(sub) {
+		if via, ok := a.entryCurLocked(); ok {
+			host := ""
+			if len(et.Hosts) > 0 {
+				host = et.Hosts[0]
+			}
+			for _, p := range a.exitPoolLocked() {
 				if p.Type == "proxyip" {
 					continue
 				}
-				path := exits.RewriteChain(sub.Template.BasePath, p.Type, p.Value, a.Settings.PathTemplate, chainKey(*sub.Template), a.Settings.ChainPath)
-				in.Proxies = append(in.Proxies, noECH(sub, subscription.BuildOutbound(p.Name, *sub.Template, via.Server, via.Port, host, path))...)
+				path := exits.RewriteChain(et.Template.BasePath, p.Type, p.Value, a.Settings.PathTemplate, chainKey(*et.Template), a.Settings.ChainPath)
+				in.Proxies = append(in.Proxies, noECH(et, subscription.BuildOutbound(p.Name, *et.Template, via.Server, via.Port, host, path))...)
 				in.ScanMembers = append(in.ScanMembers, p.Name)
 			}
 		}
@@ -311,13 +308,13 @@ func (a *App) applyConfig() error {
 	}
 	if changed {
 		a.cfgGen.Add(1)
-		if err := a.core.Reload(); err != nil {
+		if err := coreReload(a); err != nil {
 			return fmt.Errorf("mihomo 重载失败：%w", err)
 		}
 		a.cfgGen.Add(1)
 	}
 	for g, w := range wants {
-		if err := a.core.Select(g, w); err != nil {
+		if err := coreSelect(a, g, w); err != nil {
 			log.Printf("切换 %s → %s 失败：%v", g, w, err)
 		}
 	}
@@ -554,14 +551,9 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 			} else {
 				pr.Error = "代理不通"
 			}
-			if try < 2 { // 入口"自动"：整条线都不通，换下一个可用的入口再试，最多换两次（入口手动时 autoPick 不会动它）
-				a.mu.Lock()
-				tried[currentNode(in, a.subLocked(in.Proxy.SubscriptionID))] = true
-				a.mu.Unlock()
-				if a.autoPick(id, tried) {
-					a.refreshTry(id, tried, try+1)
-					return
-				}
+			if try < 2 && a.lineRescue(id, tried) { // 整条线都不通：换一换再试，最多换两次
+				a.refreshTry(id, tried, try+1)
+				return
 			}
 		} else if pr.Error == "" && state == "on" && pr.Direct != nil && pr.CF == nil && try < 2 {
 			// 普通网站通、Cloudflare 网站不通：反代坏了。出口"自动"时换同一个国家里的下一个（手动时不换，只提示）。
@@ -598,6 +590,38 @@ func (a *App) refreshTry(id string, tried map[string]bool, try int) {
 	a.bumpLocked("state", id)
 	a.mu.Unlock()
 	_ = a.applyConfig()
+}
+
+// lineRescue：实例整条线都不通时换一换（refreshTry、启动时都用）。返回 true = 换了什么，值得再试一次。
+//
+//	edgetunnel：入口是全局的（N-11）。先看是不是入口坏了——是就换全局入口（全部实例一起，热换）；
+//	            入口是通的，那就是这个实例的出口（SOCKS5 / SSTP 不通会让整条线都不通）：出口自动时换一个。
+//	通用订阅：当前节点记进“试过不通”，自动时换下一个。
+func (a *App) lineRescue(id string, tried map[string]bool) bool {
+	a.mu.Lock()
+	in := a.instLocked(id)
+	if in == nil {
+		a.mu.Unlock()
+		return false
+	}
+	sub := a.subLocked(in.Proxy.SubscriptionID)
+	isET := sub != nil && sub.Kind == "edgetunnel" && sub.Template != nil
+	pid, auto := pipID(in), in.Proxy.ExitAuto()
+	if !isET {
+		tried[currentNode(in, sub)] = true
+	}
+	a.mu.Unlock()
+	if !isET {
+		return a.autoPick(id, tried)
+	}
+	if a.entryRescue(tried) {
+		return true
+	}
+	if auto && pid != "" {
+		tried[pipKey(pid)] = true
+		return a.autoPick(id, tried)
+	}
+	return false
 }
 
 // judgeExit 按这次探到的出口决定实例是放行、断流还是“需重启”（调用方持有 a.mu）。
@@ -651,9 +675,10 @@ func (a *App) setErr(id, msg string) {
 }
 
 // statsLoop 每 2 秒按入站名把连接流量归到实例（V6 已在 Linux 上验证 metadata.inboundName 可用）。
+// 没有开着的实例时不去问（decisions N-12：以前程序开着就每 2 秒拉一次 mihomo 的全部连接、解一遍 JSON，哪怕一个实例都没开）。
 func (a *App) statsLoop() {
 	for range time.Tick(2 * time.Second) {
-		if !a.coreOK {
+		if !a.coreOK || !a.anyActive() {
 			continue
 		}
 		conns, err := a.core.Connections()
@@ -724,27 +749,22 @@ func (a *App) fillProxyLocked(in *model.Instance, sub *model.Subscription) {
 		}
 		var fbID, fbIP string
 	pick:
-		for _, e := range a.Exits {
-			ips := []string{""}
-			if expands(e) {
-				ips = e.Resolved
+		for _, p := range a.exitPoolLocked() { // 只在出口库里挑（地址库里当入口的不算，N-11）
+			id, ip := p.ID, ""
+			if i := strings.LastIndex(p.ID, "|"); i > 0 {
+				id, ip = p.ID[:i], p.ID[i+1:]
 			}
-			for _, ip := range ips {
-				if fbID == "" {
-					fbID, fbIP = e.ID, ip
-				}
-				if !used[e.ID+"|"+ip] {
-					in.Proxy.ExitID, in.Proxy.ExitIP = e.ID, ip
-					break pick
-				}
+			if fbID == "" {
+				fbID, fbIP = id, ip
+			}
+			if !used[id+"|"+ip] {
+				in.Proxy.ExitID, in.Proxy.ExitIP = id, ip
+				break pick
 			}
 		}
 		if in.Proxy.ExitID == "" {
 			in.Proxy.ExitID, in.Proxy.ExitIP = fbID, fbIP // 都被占用时也要有出口，取第一个
 		}
-	}
-	if _, ok := a.entryLocked(sub, in.Proxy.AddressID); !ok {
-		in.Proxy.AddressID = a.bestAddrLocked(sub.ID)
 	}
 	// 连接参数：用户选过的那一套还在就不动；否则在"和第一套同一种传输"的几套里按实例平分
 	// （ws 排在最前，是验证得最多的；xhttp 之类要用户自己切过去）。
@@ -804,19 +824,17 @@ func contains(s []string, v string) bool {
 	return false
 }
 
-// bestAddrLocked 返回订阅里延迟最低的优选 IP；都没测过时取第一个。
-func (a *App) bestAddrLocked(subID string) string {
-	sub := a.subLocked(subID)
-	if sub == nil {
-		return ""
+// anyActive：有没有写进了 mihomo 配置的实例。没有时把上一轮的连接记录清掉（下次从零算，不会把旧的累计量当成一次的增量）。
+func (a *App) anyActive() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, r := range a.rt {
+		if r.active {
+			return true
+		}
 	}
-	if id := a.bestNodeLocked(sub, nil); id != "" {
-		return id
-	}
-	if nodes := a.nodesLocked(sub); len(nodes) > 0 {
-		return nodes[0].ID
-	}
-	return ""
+	a.connSeen = map[string][2]int64{}
+	return false
 }
 
 // activeIDs 返回当前写入了 mihomo 配置的实例。

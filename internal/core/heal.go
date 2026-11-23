@@ -58,13 +58,7 @@ func (a *App) healLocked(in *model.Instance) (note string, changed bool) {
 				note = "所选节点已不在订阅里，请重新选一个" // 手动钉死的：不自动换节点，也不回落直连
 			}
 		} else {
-			if _, ok := a.entryLocked(sub, p.AddressID); !ok && p.AddressMode != "same-as-exit" {
-				had := p.AddressID != ""
-				p.AddressID = a.bestAddrLocked(sub.ID)
-				if had && !p.EntryAuto() && p.AddressID != "" {
-					note = "原来的入口地址已经没有了，已换成延迟最低的"
-				}
-			}
+			// 入口是全局的（decisions N-11）：实例自己的入口设置不再看，这里不用修
 			// 原来用的那套参数 / Host 不在了：按默认规则重新分配
 			if p.Profile != "" && profileOf(sub, p.Profile, "").Key != p.Profile {
 				p.Profile = ""
@@ -73,7 +67,14 @@ func (a *App) healLocked(in *model.Instance) (note string, changed bool) {
 				p.Host = ""
 			}
 			// 地址库里的出口被删了。以前留着这个 id，线路悄悄变成“服务端默认出口”，界面上还写着原来那个。
-			lost := p.ExitID != "" && !strings.HasPrefix(p.ExitID, "a:") && a.exitLocked(p.ExitID) == nil
+			// 被改成“当入口用”（优选 IP）的那一项也算丢了：入口池和出口库隔开（N-11）
+			e := a.exitLocked(p.ExitID)
+			lost := p.ExitID != "" && !strings.HasPrefix(p.ExitID, "a:") && e == nil
+			if e != nil {
+				if typ, val := exitRef(e, p.ExitIP); entryRole(e, typ, val) {
+					lost = true
+				}
+			}
 			if lost {
 				p.ExitID, p.ExitIP = "", ""
 			}

@@ -1,6 +1,23 @@
 // 新建实例向导（决策 UI-24、UI-25；两端共用，手机内置扩展也打包这个文件：scripts/check.sh 的 SHARED_EXT、build.gradle.kts 的 BuildExt）。
 import { api } from './api.js';
-import { h, icon, flag, toast, cname, overlay, reduced } from './ui.js';
+import { h, icon, flag, toast, cname, overlay, reduced, toggle, ask, run } from './ui.js';
+
+// ---------- 默认密码开关（decisions M-8；新建向导、导入邮箱、实例抽屉共用） ----------
+// 勾上 = 这个实例网站自动填写用全局默认密码（设置里那个，所有勾上的实例都一样）；不勾 = 用这个实例自己的密码（卡密里的 / 这行自带的 / 手填的）。
+// 只管网站自动填写；信箱收信一直用卡密自己的凭据。全局默认密码还没设时提示，并给“去设置”（就地弹框设，不用离开这一页）。
+/** 弹框设全局默认密码；设好了返回 true。 */
+export async function defPwPrompt() {
+  const v = await ask('设置默认密码', { type: 'password', note: '勾了“默认密码”的实例，网站自动填写都用它（所有这些实例一样）。只填不提交。以后在“设置 → 默认密码”里改。' });
+  if (!v) return false;
+  let ok = false;
+  await run(async () => { await api('PUT', '/api/vault/default', { password: v }); ok = true; }, '默认密码已保存');
+  return ok;
+}
+/** 没设全局默认密码时的那句提示 +“去设置”。after(true) 在设好以后调。 */
+export function noDefNote(after) {
+  return h('div', { class: 'pwnote bad', role: 'status' }, '全局默认密码还没设置：勾上的实例先只填邮箱、不填密码，设好后自动生效。',
+    h('button', { class: 'lk', type: 'button', onclick: async () => { if (await defPwPrompt()) after?.(true); } }, '去设置'));
+}
 
 // ---------- 新建实例向导（决策 UI-24、UI-25） ----------
 // 三步：1 备注（可空）→ 2 期望地区（自动 / 跳过 / 点一个国家）→ 3 确认创建。每一步都能“上一步”，换步时内容横向滑动、外框高度跟着变。
@@ -13,7 +30,7 @@ function wzRegions(st) {
   const subs = st.subscriptions || [], sub = subs.find((x) => x.id === st.settings?.defaultSubscriptionId) || subs[0];
   const m = new Map(), add = (k, d, exit) => { if (!k) return; k = k.toUpperCase(); const r = m.get(k) || m.set(k, { n: 0, best: 1e9 }).get(k); if (exit) r.n++; r.best = Math.min(r.best, d); };
   for (const p of sub?.pips || []) if (p.delay > 0) add(p.cf?.country || p.exit?.country, p.delay, true);
-  for (const n of sub?.nodes || []) if (n.delay > 0) add(n.exit?.country, n.delay, sub?.kind !== 'edgetunnel');
+  if (sub?.kind !== 'edgetunnel') for (const n of sub?.nodes || []) if (n.delay > 0) add(n.exit?.country, n.delay, true); // edgetunnel 的入口全局共用，不决定出口国家（决策 N-11）
   const list = [...m.entries()].sort((a, b) => a[1].best - b[1].best).map(([k, r]) => ({ cc: k, n: r.n, best: r.best }));
   return list.length ? { list, measured: true, sub } : { list: WZ_COMMON.map((cc) => ({ cc })), measured: false, sub };
 }
@@ -30,7 +47,7 @@ const SHOWN_WAIT = 2500; // 电脑：浏览器进程起来以后，最多再等�
 let wzPage = null; // 正开着的向导页（电脑的向导小窗口、手机的路由 new）：状态刷新重画时原样放回去，不丢输入、不重放动画
 /** 向导本体：返回 { el, focus }。opts = { st, onDone(结果), onCancel, sheet: 底部表单的样子（手机） }。 */
 function wizard({ st, onDone, onCancel, onHide, sheet: asSheet }) {
-  const S = { step: 0, name: '', region: '', auto: true, busy: false, stage: 'form', made: null, dead: false };
+  const S = { step: 0, name: '', region: '', auto: true, busy: false, stage: 'form', made: null, dead: false, useDef: true, pw: '', defSet: !!st.vault?.hasDefault };
   const R = wzRegions(st), no = nextNo(st), color = PAL[(no - 1) % PAL.length];
   const TITLES = ['备注', '期望地区', '确认创建'];
   const dots = h('div', { class: 'dots', 'aria-hidden': 'true' }, [0, 1, 2].map(() => h('i')));
@@ -58,8 +75,13 @@ function wizard({ st, onDone, onCancel, onHide, sheet: asSheet }) {
         !R.sub && h('div', { class: 'note' }, '还没有订阅：地区先记下，加了订阅、打开代理后按它选出口。')];
     }
     const r = (k, v, step) => h('div', { class: 'r' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v), h('button', { class: 'lk', onclick: () => go(step) }, '修改'));
+    // 网站密码（decisions M-8）：默认勾“默认密码”；不勾就在下面填这个实例自己的密码
+    const pwIn = !S.useDef && h('input', { class: 'field wzpw', type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: '这个实例自己的密码（可留空）', 'aria-label': '这个实例自己的密码', value: S.pw, maxlength: 200,
+      oninput: (e) => { S.pw = e.target.value; } });
     return [h('div', { class: 'sum' }, r('备注', S.name.trim() || h('span', { class: 'sub' }, '（不填）'), 0), r('期望地区', regionText(), 1),
-      h('div', { class: 'r' }, h('span', { class: 'k' }, '线路'), h('span', { class: 'v sub' }, R.sub ? R.sub.name || '默认订阅' : '还没有订阅（直连，网站看到真实 IP）'))),
+      h('div', { class: 'r' }, h('span', { class: 'k' }, '线路'), h('span', { class: 'v sub' }, R.sub ? R.sub.name || '默认订阅' : '还没有订阅（直连，网站看到真实 IP）')),
+      h('div', { class: 'r wzpwr' }, h('span', { class: 'k' }, '网站密码'), h('span', { class: 'v' }, toggle('默认密码', S.useDef, '勾上：网站自动填写用全局默认密码（勾上的实例都一样）；不勾：用这个实例自己的密码', (v) => { S.useDef = v; paint(0); if (!v) setTimeout(() => vp.querySelector('.wzpw')?.focus(), 30); })))),
+    pwIn, S.useDef && !S.defSet && noDefNote(() => { S.defSet = true; paint(0); }),
     h('div', { class: 'note' }, '点“创建”后马上打开这个实例。')];
   };
   const foot = () => {
@@ -188,7 +210,7 @@ function wizard({ st, onDone, onCancel, onHide, sheet: asSheet }) {
     S.busy = true;
     openStage(); // 一点就换屏，不等接口回话
     let r;
-    try { r = await api('POST', '/api/instances', { name: S.name.trim(), region: S.region, auto: !S.region && S.auto }); } catch (e) {
+    try { r = await api('POST', '/api/instances', { name: S.name.trim(), region: S.region, auto: !S.region && S.auto, useDefault: S.useDef, ...(S.useDef ? {} : { password: S.pw }) }); } catch (e) {
       stop(); S.busy = false; S.stage = 'form'; el.classList.remove('busy'); delete el.dataset.stage; paint(-1); toast(e.message || String(e), true); return;
     }
     if (S.dead) return;

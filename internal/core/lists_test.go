@@ -143,8 +143,26 @@ func TestListExpands(t *testing.T) {
 	if _, ok := got["L"]; ok {
 		t.Error("列表本身（网址）不是出口")
 	}
+	if len(entries) != 0 {
+		t.Errorf("反代列表不该进入口池（decisions N-11）：%v", entries)
+	}
+	// 手动标成“优选 IP”：整个列表当入口，出口里就没有这几项了（全局出口永远是出口）
+	a.mu.Lock()
+	yes := true
+	a.exitLocked("L").UsableAsEntry = &yes
+	for _, n := range a.nodesLocked(a.Subs[0]) {
+		if n.From == "pip" {
+			entries[n.ID] = n.Label
+		}
+	}
+	left := a.pipsLocked(a.Subs[0])
+	a.exitLocked("L").UsableAsEntry = nil
+	a.mu.Unlock()
 	if len(entries) != 3 || entries["x:203.0.113.5:8443"] != "HK" {
-		t.Errorf("当入口用的应当是三个 ProxyIP 项（全局出口不算）：%v", entries)
+		t.Errorf("标成优选 IP 后当入口用的应当是三个 ProxyIP 项（全局出口不算）：%v", entries)
+	}
+	if len(left) != 1 || left[0].Type != "socks5" {
+		t.Errorf("标成优选 IP 后出口里只剩全局出口：%+v", left)
 	}
 	// 选中一项再取值
 	in := a.testInst(t)

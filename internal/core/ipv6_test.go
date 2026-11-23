@@ -67,9 +67,9 @@ func TestIPv6InLists(t *testing.T) {
 		}
 		nodes = append(nodes, n.key())
 	}
+	// 入口池只收 Cloudflare 官方 IP（这两个 2606:4700::/32）；不是官方 IP 的是 ProxyIP，只当出口（decisions N-11）
 	wantNodes := []string{
 		"[2606:4700:5a:8e48:1c8d:85bf:712a:164f]:443", "[2606:4700:57:2cb1:ff4b:741d:d9d:864]:443",
-		"203.0.113.7:8443", "[2001:db8::7]:8443", "203.0.113.9:2053", "[2001:db8::9]:2053",
 	}
 	if !reflect.DeepEqual(nodes, wantNodes) {
 		t.Fatalf("入口列表不对：\n got %v\nwant %v", nodes, wantNodes)

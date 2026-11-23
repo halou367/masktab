@@ -54,6 +54,17 @@ type data struct {
 	Icons   []*Icon `json:"icons,omitempty"` // 记住了账号的站点的网页图标（界面上画在实例卡片下面）
 	// 实例的信箱（decisions MB-1）：实例 id → 卡密 + 取件地址。卡密只在这个加密的库里，不进明文配置、不进日志。
 	Mail map[string]*Mail `json:"mail,omitempty"`
+	// 实例自动填写用哪个密码（decisions M-8）：实例 id → 用全局默认密码 / 用本实例自己的密码。没有记录的老实例照老规矩（见 PassModeOf）。
+	PwMode map[string]*PassMode `json:"pwMode,omitempty"`
+}
+
+// PassMode 是一个实例“网站自动填写用哪个密码”的选择（decisions M-8）。
+// Default = true：用全局默认密码（设置里那个，所有勾选的实例都一样）；false：用 Pass（卡密里的、导入时这行自带的、或手填的）。
+// 选“默认”时 Pass 也留着：切回“自定义”不用重新填。
+type PassMode struct {
+	Default bool   `json:"default"`
+	Pass    string `json:"pass,omitempty"`
+	At      int64  `json:"at"`
 }
 
 // Mail 是一个实例的信箱设置：卡密（Outlook 四段 / iCloud 只有邮箱）+ 取件地址。
@@ -296,6 +307,95 @@ func (v *Vault) DelMail(inst string) error {
 	return v.saveLocked()
 }
 
+// SetPassMode 记下一个实例用默认密码还是自己的密码（decisions M-8）。pass = nil：自己的密码不变。
+func (v *Vault) SetPassMode(inst string, useDefault bool, pass *string) error {
+	if inst == "" {
+		return errors.New("实例为空")
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.d.PwMode == nil {
+		v.d.PwMode = map[string]*PassMode{}
+	}
+	m := v.d.PwMode[inst]
+	if m == nil {
+		m = &PassMode{}
+		if it := v.starLocked(inst); it != nil { // 老实例第一次切换：导入时记的密码就是它自己的密码
+			m.Pass = it.Pass
+		}
+		v.d.PwMode[inst] = m
+	}
+	m.Default, m.At = useDefault, time.Now().UnixMilli()
+	if pass != nil {
+		m.Pass = *pass
+	}
+	return v.saveLocked()
+}
+
+// starLocked 是实例导入时记的那条“不限站点”账号（没有返回 nil）。
+func (v *Vault) starLocked(inst string) *Item {
+	var best *Item
+	for _, x := range v.d.Items {
+		if x.Inst == inst && x.Site == "*" && (best == nil || x.At > best.At) {
+			best = x
+		}
+	}
+	return best
+}
+
+// PassModeOf 返回实例的密码选择和有没有明确选过（explicit）。没选过的老实例按导入时记的密码推断：
+// 没有“不限站点”账号、或它的密码就是全局默认密码 → 默认；否则 → 自定义（Pass = 那个密码）。
+func (v *Vault) PassModeOf(inst string) (m PassMode, explicit bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if x := v.d.PwMode[inst]; x != nil {
+		return *x, true
+	}
+	it := v.starLocked(inst)
+	if it == nil || it.Pass == "" || it.Pass == v.d.Default {
+		m = PassMode{Default: true}
+		if it != nil {
+			m.Pass = it.Pass
+		}
+		return m, false
+	}
+	return PassMode{Default: false, Pass: it.Pass}, false
+}
+
+// Fill 按实例的密码选择（decisions M-8）改写自动填写要用的密码：items 是 Match 给的本实例记录，返回改写后的记录和
+// “注册页 / 没记住账号的登录页”要填的密码（def），以及 mode：default | custom | ""（老实例没选过：一切照旧）。
+//   - 选了默认：导入的“不限站点”账号的密码换成全局默认密码，def = 全局默认密码。全局默认密码没设时不换（还用它自己的），def 为空。
+//   - 选了自定义：“不限站点”账号的密码换成本实例的密码，def = 本实例的密码（空时退回全局默认密码）。
+//   - 在某个网站上记住的账号（登录 / 注册时抓到的）不换：那是这个网站上真正在用的密码。
+func (v *Vault) Fill(inst string, items []Item) (out []Item, def, mode string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	def = v.d.Default
+	m := v.d.PwMode[inst]
+	if m == nil {
+		return items, def, ""
+	}
+	pass := v.d.Default
+	mode = "default"
+	if !m.Default {
+		mode = "custom"
+		pass = m.Pass
+		if pass != "" {
+			def = pass
+		}
+	}
+	out = make([]Item, len(items))
+	copy(out, items)
+	if pass != "" {
+		for i := range out {
+			if out[i].Site == "*" {
+				out[i].Pass = pass
+			}
+		}
+	}
+	return out, def, mode
+}
+
 // MailInsts 列出设了信箱的实例 id。
 func (v *Vault) MailInsts() []string {
 	v.mu.Lock()
@@ -312,8 +412,9 @@ func (v *Vault) MailInsts() []string {
 func (v *Vault) DeleteInst(inst string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.d.Mail[inst] != nil {
+	if v.d.Mail[inst] != nil || v.d.PwMode[inst] != nil {
 		delete(v.d.Mail, inst)
+		delete(v.d.PwMode, inst)
 		_ = v.saveLocked()
 	}
 	out := v.d.Items[:0]

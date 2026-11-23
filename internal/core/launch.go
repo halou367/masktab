@@ -272,10 +272,7 @@ func (a *App) Launch(id string) error {
 					break
 				}
 				why = friendlyErr(a.core.LastError(proxy.Group("p"+short(id)), start), nil)
-				a.mu.Lock()
-				tried[currentNode(in, a.subLocked(in.Proxy.SubscriptionID))] = true
-				a.mu.Unlock()
-				if !a.autoPick(id, tried) { // 没开"自动"，或没有别的可用节点：原节点再试一次
+				if !a.lineRescue(id, tried) { // 没开"自动"，或没有别的可用的：原样再试一次
 					if try > 0 {
 						break
 					}

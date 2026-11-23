@@ -235,3 +235,81 @@ func TestMailCard(t *testing.T) {
 		t.Fatal("实例为空要报错")
 	}
 }
+
+// 默认密码开关（decisions M-8）：选了默认 → 导入的账号填全局默认密码；自定义 → 填本实例的密码；网站上记住的账号不换；
+// 没选过的老实例照旧并能推断；落盘加密；删实例一起删。
+func TestPassMode(t *testing.T) {
+	dir := t.TempDir()
+	v, _ := Open(dir)
+	_ = v.SetDefault("Global-Def-1")
+	_, _ = v.Upsert(Item{Inst: "a", Site: "*", User: "a@x.test", Pass: "own-a", Src: "import"})
+	_, _ = v.Upsert(Item{Inst: "a", Site: "https://site.test", User: "a@x.test", Pass: "site-pw", Src: "saved"})
+	_, _ = v.Upsert(Item{Inst: "b", Site: "*", User: "b@x.test", Pass: "Global-Def-1", Src: "import"})
+	pick := func(items []Item, site string) string {
+		for _, x := range items {
+			if x.Site == site {
+				return x.Pass
+			}
+		}
+		return "?"
+	}
+	// 老实例没选过：一切照旧
+	out, def, mode := v.Fill("a", v.Match("a", "https://site.test"))
+	if mode != "" || def != "Global-Def-1" || pick(out, "*") != "own-a" || pick(out, "https://site.test") != "site-pw" {
+		t.Fatalf("老实例：%q %q %+v", mode, def, out)
+	}
+	if m, ex := v.PassModeOf("a"); ex || m.Default || m.Pass != "own-a" {
+		t.Fatalf("推断 a：%+v %v", m, ex)
+	}
+	if m, ex := v.PassModeOf("b"); ex || !m.Default {
+		t.Fatalf("推断 b（密码就是默认密码）：%+v %v", m, ex)
+	}
+	if m, _ := v.PassModeOf("nobody"); !m.Default {
+		t.Fatal("没有导入账号的实例算默认")
+	}
+	// 选默认：自己的密码留着（第一次切换时从导入的账号里取）
+	if err := v.SetPassMode("a", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	out, def, mode = v.Fill("a", v.Match("a", "https://site.test"))
+	if mode != "default" || def != "Global-Def-1" || pick(out, "*") != "Global-Def-1" || pick(out, "https://site.test") != "site-pw" {
+		t.Fatalf("选默认：%q %q %+v", mode, def, out)
+	}
+	if m, ex := v.PassModeOf("a"); !ex || !m.Default || m.Pass != "own-a" {
+		t.Fatalf("选默认后：%+v", m)
+	}
+	// Match 本身不被改（Fill 改的是副本）
+	if pick(v.Match("a", "https://site.test"), "*") != "own-a" {
+		t.Fatal("Fill 不能改库里的记录")
+	}
+	// 自定义 + 手填
+	p := "Hand-Typed-2"
+	_ = v.SetPassMode("a", false, &p)
+	out, def, mode = v.Fill("a", v.Match("a", "https://other.test"))
+	if mode != "custom" || def != "Hand-Typed-2" || pick(out, "*") != "Hand-Typed-2" {
+		t.Fatalf("自定义：%q %q %+v", mode, def, out)
+	}
+	// 全局默认密码没设：选默认的不换（还用导入时记的），def 为空
+	_ = v.SetDefault("")
+	_ = v.SetPassMode("b", true, nil)
+	out, def, _ = v.Fill("b", v.Match("b", "https://other.test"))
+	if def != "" || pick(out, "*") != "Global-Def-1" {
+		t.Fatalf("默认密码没设：%q %+v", def, out)
+	}
+	// 落盘加密、读回一样
+	b, _ := os.ReadFile(filepath.Join(dir, "vault.bin"))
+	if containsStr(b, "Hand-Typed-2") {
+		t.Fatal("自己的密码落盘要加密")
+	}
+	v2, _ := Open(dir)
+	if m, ex := v2.PassModeOf("a"); !ex || m.Default || m.Pass != "Hand-Typed-2" {
+		t.Fatalf("读回：%+v", m)
+	}
+	v2.DeleteInst("a")
+	if _, ex := v2.PassModeOf("a"); ex {
+		t.Fatal("删实例要连密码选择一起删")
+	}
+	if v2.SetPassMode("", true, nil) == nil {
+		t.Fatal("实例为空要报错")
+	}
+}

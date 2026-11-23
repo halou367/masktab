@@ -176,7 +176,7 @@ func TestHealDeletedExit(t *testing.T) {
 	}
 }
 
-// 入口地址没了（自定义地址被删、订阅刷新掉了）：换成还在的。
+// 入口是全局的（decisions N-11）：实例自己留着的老入口设置（手动、指向已经没了的地址）不再看，照样接到入口池里的入口上。
 func TestHealMissingEntry(t *testing.T) {
 	a := healApp(t)
 	a.Subs = []*model.Subscription{etSub(a, "et", "ET", "198.51.100.1")}
@@ -185,11 +185,9 @@ func TestHealMissingEntry(t *testing.T) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.healAllLocked()
-	if in.Proxy.AddressID != "et-198.51.100.1" {
-		t.Fatalf("入口应换成还在的地址：%+v", in.Proxy)
-	}
-	if a.resolveLocked(in).want == "REJECT" {
-		t.Fatal("换了入口以后应该能用")
+	res := a.resolveLocked(in)
+	if res.want == "REJECT" || len(res.proxies) != 1 || res.proxies[0]["server"] != "198.51.100.1" {
+		t.Fatalf("应接到全局入口上：%+v", res)
 	}
 }
 

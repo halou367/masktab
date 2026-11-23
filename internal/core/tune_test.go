@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -233,28 +234,41 @@ func fakeEntry(t *testing.T, colo string, perChunk time.Duration) (string, int) 
 	return h, port
 }
 
-// 整轮：测延迟 → 测下载（受流量上限约束）→ 按小时记下 → 入口自动的实例在同一个国家里换到明显更快的入口，不断流。
+// 整轮：测延迟 → 测下载（受流量上限约束）→ 按小时记下 → 全局入口换到明显更快的那个，全部实例一起换、不断流（decisions N-6、N-11）。
 func TestTuneRound(t *testing.T) {
 	a := healApp(t)
 	slowH, slowP := fakeEntry(t, "NRT", 60*time.Millisecond) // 约 8 Mbps
 	fastH, fastP := fakeEntry(t, "NRT", 0)
-	sub := &model.Subscription{ID: "s1", Name: "et", Kind: "edgetunnel", Hosts: []string{"h.example"},
-		Template: &model.Template{Base: map[string]any{"type": "vless"}, BasePath: "/"}}
-	a.Subs = append(a.Subs, sub)
+	tpl := func() *model.Template { return &model.Template{Base: map[string]any{"type": "vless"}, BasePath: "/"} }
+	s1 := &model.Subscription{ID: "s1", Name: "et", Kind: "edgetunnel", Hosts: []string{"h.example"}, Template: tpl()}
+	s2 := &model.Subscription{ID: "s2", Name: "et2", Kind: "edgetunnel", Hosts: []string{"h2.example"}, Template: tpl()}
+	a.Subs = append(a.Subs, s1, s2)
 	a.Addresses = append(a.Addresses,
 		&model.Address{ID: "slow", Server: slowH, Port: slowP, Source: "subscription", SubscriptionID: "s1"},
-		&model.Address{ID: "fast", Server: fastH, Port: fastP, Source: "subscription", SubscriptionID: "s1"})
-	in := a.testInst(t)
+		&model.Address{ID: "fast", Server: fastH, Port: fastP, Source: "subscription", SubscriptionID: "s2"})
+	slowK, fastK := hostPort(slowH, slowP), hostPort(fastH, fastP)
+	var ins []*model.Instance
+	var rs []*Runtime
+	for _, sid := range []string{"s1", "s2"} { // 两个实例用两个不同的订阅：入口照样是同一个
+		in := a.testInst(t)
+		a.mu.Lock()
+		in.Proxy.State, in.Proxy.SubscriptionID = "on", sid
+		r := a.rtLocked(in.ID)
+		r.active, r.Running, r.probePort = true, true, 1
+		r.Probe = &model.ExitProbe{CF: &model.IPInfo{IP: "203.0.113.1", Country: "JP"}, Direct: &model.IPInfo{IP: "104.28.0.1", Country: "JP"}}
+		a.mu.Unlock()
+		ins, rs = append(ins, in), append(rs, r)
+	}
 	a.mu.Lock()
-	in.Proxy.State, in.Proxy.SubscriptionID, in.Proxy.AddressID, in.Proxy.AddressMode, in.Proxy.EntryMode = "on", "s1", "slow", "custom", "auto"
-	r := a.rtLocked(in.ID)
-	r.active, r.Running = true, true
-	r.Probe = &model.ExitProbe{CF: &model.IPInfo{IP: "203.0.113.1", Country: "JP"}, Direct: &model.IPInfo{IP: "104.28.0.1", Country: "JP"}}
+	a.tune.Cur = slowK
 	a.mu.Unlock()
+	var pmu sync.Mutex
 	probed := 0
 	tuneProbe = func(int, []string) model.ExitProbe {
+		pmu.Lock()
 		probed++
-		return model.ExitProbe{At: now(), CF: &model.IPInfo{IP: "203.0.113.1", Country: "JP"}, Direct: &model.IPInfo{IP: "104.28.0.2", Country: "JP"}}
+		pmu.Unlock()
+		return model.ExitProbe{At: now(), CF: &model.IPInfo{IP: "203.0.113.1", Country: "JP"}, Direct: &model.IPInfo{IP: "104.28.0.2", Country: "KR"}} // 普通网站那一路换了机房：不算
 	}
 	defer func() { tuneProbe = defaultTuneProbe }()
 
@@ -263,7 +277,7 @@ func TestTuneRound(t *testing.T) {
 	}
 	a.mu.Lock()
 	hour := time.Now().Hour()
-	hs, hf := a.tune.Hist[hostPort(slowH, slowP)], a.tune.Hist[hostPort(fastH, fastP)]
+	hs, hf := a.tune.Hist[slowK], a.tune.Hist[fastK]
 	if hs == nil || hf == nil || hs.Hours[hour].N != 1 || hf.Hours[hour].N != 1 {
 		a.mu.Unlock()
 		t.Fatalf("两个入口都该按当前小时记一次：%+v %+v", hs, hf)
@@ -276,28 +290,38 @@ func TestTuneRound(t *testing.T) {
 		a.mu.Unlock()
 		t.Fatalf("用量应在上限内：%d", a.tune.Used)
 	}
-	if in.Proxy.AddressID != "fast" || r.Notice != "tuned" || probed != 1 {
+	if a.tune.Cur != fastK || probed != 2 {
 		a.mu.Unlock()
-		t.Fatalf("应换到快的入口并确认一次：%s %q %d", in.Proxy.AddressID, r.Notice, probed)
+		t.Fatalf("全局入口应换到快的，两个实例各确认一次：%s %d", a.tune.Cur, probed)
 	}
-	if r.Cut != "" {
-		a.mu.Unlock()
-		t.Fatal("换入口不该断流")
+	for i, in := range ins {
+		if res := a.resolveLocked(in); len(res.proxies) != 1 || res.proxies[0]["server"] != fastH {
+			a.mu.Unlock()
+			t.Fatalf("实例 %d 的出站应接到同一个新入口：%+v", i, res.proxies)
+		}
+		if rs[i].Notice != "tuned" || rs[i].Cut != "" {
+			a.mu.Unlock()
+			t.Fatalf("实例 %d 应提示换过、不断流：%q %q", i, rs[i].Notice, rs[i].Cut)
+		}
 	}
-	v := a.tuneViewLocked(sub)
+	v := a.tuneViewLocked(s1)
 	if v == nil || v.Best == nil || v.Best.ID != "fast" || v.Best.Reason == "" || v.Scores["fast"] <= v.Scores["slow"] {
 		a.mu.Unlock()
 		t.Fatalf("界面应显示当前时段最佳是 fast：%+v", v)
 	}
+	if ev := a.entryViewLocked(); ev.Key != fastK || !ev.Auto || ev.Users != 2 {
+		a.mu.Unlock()
+		t.Fatalf("状态里的全局入口不对：%+v", ev)
+	}
 	a.mu.Unlock()
 
-	// 记录落盘，重开还在
+	// 记录和当前入口落盘，重开还在
 	b, err := Open(a.Dir, "", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.tune.Hist[hostPort(fastH, fastP)] == nil {
-		t.Fatal("记录应落盘")
+	if b.tune.Hist[fastK] == nil || b.tune.Cur != fastK {
+		t.Fatal("记录和当前入口应落盘")
 	}
 
 	// 今天的流量用完了：只测延迟，不测下载
@@ -308,21 +332,34 @@ func TestTuneRound(t *testing.T) {
 		t.Fatalf("用量到上限后不该再测下载：%d", n)
 	}
 
-	// 确认没通过（出口国家变了）：换回去
+	// 确认没通过（Cloudflare 网站那一路的出口国家变了）：全部一起换回去
 	a.mu.Lock()
 	a.tune.Used = 0
-	in.Proxy.AddressID = "slow"
+	a.tune.Cur = slowK
 	a.mu.Unlock()
 	tuneProbe = func(int, []string) model.ExitProbe {
 		return model.ExitProbe{At: now(), CF: &model.IPInfo{Country: "US"}, Direct: &model.IPInfo{Country: "US"}}
 	}
-	a.tuneApply("s1")
-	if in.Proxy.AddressID != "slow" {
-		t.Fatal("出口国家变了应换回去")
+	a.tuneApply()
+	if a.tune.Cur != slowK {
+		t.Fatal("CF 那一路的出口国家变了应换回去")
+	}
+	// 钉死：不换
+	a.mu.Lock()
+	a.Settings.EntryPin = slowK
+	a.mu.Unlock()
+	tuneProbe = func(int, []string) model.ExitProbe {
+		return model.ExitProbe{At: now(), CF: &model.IPInfo{Country: "JP"}}
+	}
+	a.tuneApply()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if cur, _ := a.entryCurLocked(); cur.key() != slowK {
+		t.Fatal("钉死的入口不该被优选换掉")
 	}
 }
 
-// 手动入口的实例不测、不换（不花流量）。
+// 全局入口钉死时不测、不换（不花流量）；没有开着的 edgetunnel 实例也不测。
 func TestTuneOnlyAutoEntries(t *testing.T) {
 	a := healApp(t)
 	sub := etSub(a, "s1", "et", "192.0.2.10")
@@ -330,16 +367,20 @@ func TestTuneOnlyAutoEntries(t *testing.T) {
 	in := a.testInst(t)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	in.Proxy.State, in.Proxy.SubscriptionID, in.Proxy.EntryMode = "on", "s1", "manual"
+	in.Proxy.State, in.Proxy.SubscriptionID = "on", "s1"
+	if len(a.tuneUsersLocked()) != 0 {
+		t.Fatal("没开着的实例不该算")
+	}
 	a.rtLocked(in.ID).active = true
-	if len(a.tuneUsersLocked("s1")) != 0 {
-		t.Fatal("入口手动的不该算")
+	a.Settings.EntryPin = "192.0.2.10:443"
+	if len(a.tuneUsersLocked()) != 0 {
+		t.Fatal("入口钉死时不该测")
 	}
 	if v := a.tuneViewLocked(sub); v == nil || v.Next != 0 {
-		t.Fatalf("没有要测的实例时 next 应为 0：%+v", v)
+		t.Fatalf("没有要测的时 next 应为 0：%+v", v)
 	}
-	in.Proxy.EntryMode = "auto"
-	if len(a.tuneUsersLocked("s1")) != 1 {
+	a.Settings.EntryPin = ""
+	if len(a.tuneUsersLocked()) != 1 {
 		t.Fatal("入口自动、开着的应算")
 	}
 }

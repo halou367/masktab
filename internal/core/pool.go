@@ -9,57 +9,44 @@ import (
 	"github.com/halou367/masktab/internal/model"
 )
 
-// 共用地址池（decisions N-10）：edgetunnel 订阅只当“入口模板”（host、uuid、路径、ECH、alpn 这些连接参数），
-// 它带来的地址和自己加的、地址库里的一起进一个池子，各订阅共用。直接探测的结果和用哪个订阅的模板无关
-// （/cdn-cgi/trace 是 Cloudflare 自己应答的，站点名只要发得出去），所以一个 地址:端口 一轮只测一遍，
-// 结果写进每个订阅里它的那几条记录（记录仍按订阅分，因为代理内核里的出站是“订阅模板 + 地址”各一条）。
+// 共用地址池（decisions N-10、N-11）：edgetunnel 订阅只当“入口模板”（host、uuid、路径、ECH、alpn 这些连接参数），
+// 入口池（优选 IP）和出口库（ProxyIP、全局出口）都是全局的。直接探测的结果和用哪个订阅的模板无关
+// （/cdn-cgi/trace 是 Cloudflare 自己应答的，站点名只要发得出去），所以一个地址一轮只测一遍、只有一条记录。
 
 // directBatch 是一批用同一组站点名、同一种连接方式探测的地址。
 type directBatch struct {
 	hosts  []string
 	useTLS bool
-	ts     []target            // 每个地址一个代表（只用 key、server、port）
-	recs   map[string][]target // key → 各订阅里这个地址的记录（作为入口、作为反代）
+	ts     []target            // 每个地址一个
+	recs   map[string][]target // key → 这个地址的记录（N-11 起只有一个）
 }
 
-// directPoolLocked 把全部 edgetunnel 订阅要直接探测的地址按 地址:端口（和 TLS 与否）合并。
-// 站点名用最先列出它的那个订阅的（first 排最前）。want 不为空时只要这些 key。
+// directPoolLocked 把要直接探测的地址排成一批：站点名用 first 那个订阅的（没有就用第一个 edgetunnel 订阅的）。
+// want 不为空时只要这些 key。
 func (a *App) directPoolLocked(first string, want map[string]bool) []*directBatch {
-	var out []*directBatch
-	byHost := map[string]*directBatch{}
-	owner := map[string]*directBatch{} // key|tls → 归哪一批测
-	for _, sub := range a.etSubsLocked(first) {
-		host, useTLS := directOf(sub)
-		if host == "" {
-			continue
-		}
-		hosts := probeHosts(host)
-		bk := strings.Join(hosts, ",")
-		if useTLS {
-			bk += "|tls"
-		}
-		for _, t := range a.targetsLocked(sub) {
-			if want != nil && !want[t.key] {
-				continue
-			}
-			gk := t.key
-			if useTLS {
-				gk += "|tls"
-			}
-			b := owner[gk]
-			if b == nil {
-				if b = byHost[bk]; b == nil {
-					b = &directBatch{hosts: hosts, useTLS: useTLS, recs: map[string][]target{}}
-					byHost[bk] = b
-					out = append(out, b)
-				}
-				owner[gk] = b
-				b.ts = append(b.ts, target{key: t.key, server: t.server, port: t.port})
-			}
-			b.recs[t.key] = append(b.recs[t.key], t)
+	subs := a.etSubsLocked(first)
+	var host string
+	var useTLS bool
+	for _, s := range subs {
+		if host, useTLS = directOf(s); host != "" {
+			break
 		}
 	}
-	return out
+	if host == "" {
+		return nil
+	}
+	b := &directBatch{hosts: probeHosts(host), useTLS: useTLS, recs: map[string][]target{}}
+	for _, t := range a.targetsLocked() {
+		if want != nil && !want[t.key] {
+			continue
+		}
+		b.ts = append(b.ts, t)
+		b.recs[t.key] = []target{t}
+	}
+	if len(b.ts) == 0 {
+		return nil
+	}
+	return []*directBatch{b}
 }
 
 // allRecs 返回几批里的全部记录。
@@ -73,7 +60,7 @@ func allRecs(bs []*directBatch) []target {
 	return out
 }
 
-// runPool 测几批地址（各批同时跑，共用全局上限），每个地址的结果写进它的全部记录，然后调 after（持 a.mu）。
+// runPool 测几批地址（各批同时跑，共用全局上限），每个地址的结果写进它的记录，然后调 after（持 a.mu）。
 func (a *App) runPool(bs []*directBatch, interactive bool, prev map[string]int, after func(recs []target, r cfprobe.Result, err error)) {
 	var wg sync.WaitGroup
 	for _, b := range bs {
@@ -107,87 +94,103 @@ func cloneScan(s *model.NodeScan) *model.NodeScan {
 	return &v
 }
 
-// shareScanLocked：一个订阅里还没有记录的地址，照抄别的订阅里同一个地址最新的那条。
-// 升级上来的老数据（以前各订阅只看自己的地址）、刚加的订阅、刚同步进来的地址，界面上不用等下一轮测完。
+// shareScanLocked：升级上来的老数据（N-11 以前测速记录按订阅分：hname("a-"/"p-", 订阅, 地址)）搬成全局一条：
+// 新记录还没有的，取各订阅里同一个地址最新的那条；老记录随后删掉（scan.json 不再按订阅数翻倍）。
+// 入口记录只从老的入口记录搬，出口记录只从老的反代记录搬（以前一个地址两种都写，N-11 起各管各的）。
 func (a *App) shareScanLocked() {
-	type slot struct{ k, name string }
-	var all []slot
-	best := map[string]*model.NodeScan{}
-	note := func(k, name string) {
-		all = append(all, slot{k, name})
-		if s := a.scan[name]; s != nil && s.At > 0 && (best[k] == nil || s.At > best[k].At) {
-			best[k] = s
+	if len(a.scan) == 0 {
+		return
+	}
+	var subIDs []string
+	for _, s := range a.Subs {
+		if s.Kind == "edgetunnel" {
+			subIDs = append(subIDs, s.ID)
 		}
 	}
-	for _, sub := range a.etSubsLocked("") {
-		for _, t := range a.targetsLocked(sub) {
-			if t.entry != "" {
-				note("a|"+t.key, t.entry)
-			}
-			if t.pip != "" {
-				note("p|"+t.key, t.pip)
+	move := func(prefix, key, name string) {
+		var best *model.NodeScan
+		for _, id := range subIDs {
+			old := hname(prefix, id, key)
+			if s := a.scan[old]; s != nil {
+				if best == nil || s.At > best.At {
+					best = s
+				}
+				delete(a.scan, old)
 			}
 		}
-		for _, p := range a.pipsLocked(sub) {
-			if p.Type != "proxyip" {
-				note("g|"+p.key(), p.Name)
-			}
+		if best != nil && a.scan[name] == nil {
+			a.scan[name] = best
 		}
 	}
-	for _, x := range all {
-		if a.scan[x.name] == nil && best[x.k] != nil {
-			a.scan[x.name] = cloneScan(best[x.k])
+	for _, t := range a.targetsLocked() {
+		if t.entry != "" {
+			move("a-", t.key, t.entry)
+		}
+		if t.pip != "" {
+			move("p-", t.key, t.pip)
+		}
+	}
+	for _, p := range a.exitPoolLocked() {
+		if p.Type != "proxyip" {
+			move("p-", p.key(), p.Name)
+		}
+	}
+	// 已经不在入口池 / 出口库里的地址的记录（含搬不到的老记录）：删掉。通用订阅的节点记录（s-…）不动。
+	keep := map[string]bool{}
+	for _, t := range a.targetsLocked() {
+		keep[t.entry], keep[t.pip] = true, true
+	}
+	for _, e := range a.Exits { // 地址库里的每一项都留（被认出是 Cloudflare 官方 IP、暂时不在出口库里的也留，免得下一轮又测一遍）
+		for _, it := range exitItems(e) {
+			k := it.key()
+			keep[pipName(k)], keep[entryName(k)] = true, true
+		}
+	}
+	for name := range a.scan {
+		if (strings.HasPrefix(name, "a-") || strings.HasPrefix(name, "p-")) && !keep[name] {
+			delete(a.scan, name)
 		}
 	}
 }
 
-// sameKeyNamesLocked 返回各订阅里同一个地址（地址:端口，全局出口是 类型|值）的全部记录名。
+// sameKeyNamesLocked 返回同一个地址（地址:端口，全局出口是 类型|值）的记录名（入口、出口各至多一条）。
 func (a *App) sameKeyNamesLocked(key string) []string {
 	var out []string
-	for _, sub := range a.etSubsLocked("") {
-		for _, t := range a.targetsLocked(sub) {
-			if t.key == key {
-				for _, n := range []string{t.entry, t.pip} {
-					if n != "" {
-						out = append(out, n)
-					}
+	for _, t := range a.targetsLocked() {
+		if t.key == key {
+			for _, n := range []string{t.entry, t.pip} {
+				if n != "" {
+					out = append(out, n)
 				}
 			}
 		}
-		for _, p := range a.pipsLocked(sub) {
-			if p.Type != "proxyip" && p.key() == key {
-				out = append(out, p.Name)
-			}
+	}
+	for _, p := range a.exitPoolLocked() {
+		if p.Type != "proxyip" && p.key() == key {
+			out = append(out, p.Name)
 		}
 	}
 	return out
 }
 
-// pipGroup 是一个全局出口（SSTP / SOCKS5 等）：只经 p（最先列出它的那个订阅）测一次，结果写进 names（各订阅里它的记录）。
+// pipGroup 是一个全局出口（SSTP / SOCKS5 等）：经全局入口测一次，结果写进 names（N-11 起只有一条）。
 type pipGroup struct {
 	p     pipRef
 	names []string
 }
 
-// pipGroupsLocked 把各 edgetunnel 订阅的全局出口按 类型|值 合并（decisions N-10）。want 不为空时只要这些 key。
-// 顺带给每个订阅定好借用的入口（写代理配置时要用）。
+// pipGroupsLocked 列出要经隧道测的全局出口。want 不为空时只要这些 key。first 不再有意义（入口是全局的），留着给调用方。
 func (a *App) pipGroupsLocked(first string, want map[string]bool) []pipGroup {
 	var out []pipGroup
-	at := map[string]int{}
-	for _, sub := range a.etSubsLocked(first) {
-		a.viaLocked(sub, a.nodesLocked(sub))
-		for _, p := range a.pipsLocked(sub) {
-			k := p.key()
-			if p.Type == "proxyip" || (want != nil && !want[k]) {
-				continue
-			}
-			if i, ok := at[k]; ok {
-				out[i].names = append(out[i].names, p.Name)
-				continue
-			}
-			at[k] = len(out)
-			out = append(out, pipGroup{p: p, names: []string{p.Name}})
+	if a.firstETLocked() == nil {
+		return nil
+	}
+	for _, p := range a.exitPoolLocked() {
+		k := p.key()
+		if p.Type == "proxyip" || (want != nil && !want[k]) {
+			continue
 		}
+		out = append(out, pipGroup{p: p, names: []string{p.Name}})
 	}
 	return out
 }
@@ -222,11 +225,12 @@ func (a *App) scanET(first string) {
 		a.bumpLocked("state", "")
 		var auto []string
 		for _, in := range a.Instances {
-			if r := a.rt[in.ID]; r != nil && r.active && (in.Proxy.ExitAuto() || in.Proxy.EntryAuto()) && in.Proxy.State == "on" && ids[in.Proxy.SubscriptionID] {
+			if r := a.rt[in.ID]; r != nil && r.active && in.Proxy.ExitAuto() && in.Proxy.State == "on" && ids[in.Proxy.SubscriptionID] {
 				auto = append(auto, in.ID)
 			}
 		}
 		a.mu.Unlock()
+		a.entryCheck() // 全局入口判了不通：先换入口（全部实例一起），再让各实例按新结果确认出口
 		_ = a.applyConfig()
 		for _, id := range auto {
 			if a.autoPick(id, nil) {

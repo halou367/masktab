@@ -46,8 +46,8 @@ func TestPoolSharedAddresses(t *testing.T) {
 	if n := got["203.0.113.1:443"]; n.From != "sub" || n.Sub != "A" {
 		t.Fatalf("甲带来的地址应标来自甲：%+v", n)
 	}
-	if n := got["203.0.113.2:443"]; n.Sub != "B" {
-		t.Fatalf("两个订阅都有的地址，在乙里算乙自己的：%+v", n)
+	if n := got["203.0.113.2:443"]; n.Sub != "A" {
+		t.Fatalf("两个订阅都有的地址，算排在前面的订阅带来的（入口池是全局的一份）：%+v", n)
 	}
 	if n := got["198.51.100.9:443"]; n.From != "custom" {
 		t.Fatalf("自己加的仍是自己加的：%+v", n)
@@ -59,7 +59,7 @@ func TestPoolSharedAddresses(t *testing.T) {
 	}
 }
 
-// 一轮只测一遍：几个订阅里的同一个地址合成一个，测一次，结果写进每个订阅里它的记录。
+// 一轮只测一遍：几个订阅里的同一个地址合成一个，测一次；N-11 起一个地址只有一条记录（入口池的写入口记录，出口库的写出口记录）。
 func TestPoolProbesOnce(t *testing.T) {
 	old := traceFn
 	defer func() { traceFn = old }()
@@ -93,44 +93,61 @@ func TestPoolProbesOnce(t *testing.T) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for _, sub := range a.Subs {
-		for _, tg := range a.targetsLocked(sub) {
-			if tg.entry != "" && a.scanLocked(tg.entry).Delay != 60 {
-				t.Fatalf("订阅 %s 的入口记录 %s 没写上", sub.ID, tg.key)
-			}
-			if tg.pip != "" && a.scanLocked(tg.pip).Delay != 60 {
-				t.Fatalf("订阅 %s 的反代记录 %s 没写上", sub.ID, tg.key)
-			}
+	for _, tg := range a.targetsLocked() {
+		if tg.entry != "" && a.scanLocked(tg.entry).Delay != 60 {
+			t.Fatalf("入口记录 %s 没写上", tg.key)
+		}
+		if tg.pip != "" && a.scanLocked(tg.pip).Delay != 60 {
+			t.Fatalf("出口记录 %s 没写上", tg.key)
+		}
+		if (tg.entry != "") == (tg.pip != "") {
+			t.Fatalf("%s 应只写一种记录（入口池的写入口、出口库的写出口）：%+v", tg.key, tg)
 		}
 	}
 	// 只测指定的（点延迟 / 入口优选）
 	bs = a.directPoolLocked("B", map[string]bool{"203.0.113.2:443": true})
-	if len(bs) != 1 || len(bs[0].ts) != 1 || len(bs[0].recs["203.0.113.2:443"]) != 2 {
-		t.Fatalf("指定一个地址时应只有它，带着两个订阅的记录：%+v", bs)
+	if len(bs) != 1 || len(bs[0].ts) != 1 || len(bs[0].recs["203.0.113.2:443"]) != 1 {
+		t.Fatalf("指定一个地址时应只有它、只有一条记录：%+v", bs)
 	}
 }
 
-// 升级上来的老数据：以前各订阅只测自己的地址，现在共用——没有记录的照抄别的订阅里同一个地址的，各自一份。
+// 升级上来的老数据：N-11 以前测速记录按订阅分，现在搬成全局一条（取最新的），老的删掉；入口记录只从老入口记录搬，出口只从老反代记录搬。
 func TestShareScanMigration(t *testing.T) {
 	a := healApp(t)
 	a.Subs = []*model.Subscription{etSub(a, "A", "甲", "203.0.113.1"), etSub(a, "B", "乙", "203.0.113.3")}
-	ea, eb := hname("a-", "A", "203.0.113.1:443"), hname("a-", "B", "203.0.113.1:443")
+	a.Exits = []*model.ExitEntry{{ID: "x1", Type: "proxyip", Value: "192.0.2.50:443"}}
+	k := "203.0.113.1:443"
+	ea, eb := hname("a-", "A", k), hname("a-", "B", k)
 	a.scan[ea] = &model.NodeScan{Delay: 88, At: 1000, Exit: &model.IPInfo{Country: "US"}}
+	a.scan[eb] = &model.NodeScan{Delay: 77, At: 2000, Exit: &model.IPInfo{Country: "JP"}}
+	a.scan[hname("p-", "A", k)] = &model.NodeScan{Delay: 66, At: 3000}                // 老数据里入口顺带写的反代记录：不该搬进入口
+	a.scan[hname("p-", "B", "192.0.2.50:443")] = &model.NodeScan{Delay: 55, At: 1000} // 反代：搬进出口记录
+	a.scan["s-generic-node"] = &model.NodeScan{Delay: 44}                             // 通用订阅的节点记录不动
 	a.mu.Lock()
 	a.shareScanLocked()
 	a.mu.Unlock()
-	s := a.scan[eb]
-	if s == nil || s.Delay != 88 || s.Exit == nil || s.Exit.Country != "US" {
-		t.Fatalf("乙里甲带来的地址应照抄甲测过的：%+v", s)
+	if s := a.scan[entryName(k)]; s == nil || s.Delay != 77 || s.Exit.Country != "JP" {
+		t.Fatalf("入口应搬成全局一条、取最新的：%+v", s)
 	}
-	if s.Exit == a.scan[ea].Exit {
-		t.Fatal("应各自一份，不能共用同一个指针")
+	if s := a.scan[pipName("192.0.2.50:443")]; s == nil || s.Delay != 55 {
+		t.Fatalf("反代应搬进出口记录：%+v", s)
 	}
-	a.scan[ea].Delay = 99
+	for _, old := range []string{ea, eb, hname("p-", "A", k), hname("p-", "B", "192.0.2.50:443")} {
+		if a.scan[old] != nil {
+			t.Fatalf("老的按订阅分的记录应删掉：%s", old)
+		}
+	}
+	if a.scan[pipName(k)] != nil {
+		t.Fatal("入口池里的地址不该有出口记录（不再双写）")
+	}
+	if a.scan["s-generic-node"] == nil {
+		t.Fatal("通用订阅的节点记录不该动")
+	}
+	a.scan[entryName(k)].Delay = 99
 	a.mu.Lock()
 	a.shareScanLocked()
 	a.mu.Unlock()
-	if a.scan[eb].Delay != 88 {
+	if a.scan[entryName(k)].Delay != 99 {
 		t.Fatal("已有的记录不该被覆盖")
 	}
 }
@@ -180,7 +197,7 @@ func TestSubSyncAddresses(t *testing.T) {
 		t.Fatal("自己加的地址不该被同步动到")
 	}
 	// 测过不通的已失效地址：测完清掉；别的订阅（乙）带来的、正在乙里的不受甲影响
-	a.scan[hname("a-", "A", "203.0.113.1:443")] = &model.NodeScan{Delay: -1}
+	a.scan[entryName("203.0.113.1:443")] = &model.NodeScan{Delay: -1}
 	a.pruneGoneLocked(s)
 	if own()["203.0.113.1"] != nil {
 		t.Fatal("已不在订阅里、又不通的应清掉")

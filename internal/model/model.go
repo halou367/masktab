@@ -38,17 +38,19 @@ type InstProxy struct {
 	SubscriptionID string `json:"subscriptionId,omitempty"`
 	ExitID         string `json:"exitId,omitempty"`
 	ExitIP         string `json:"exitIp,omitempty"`
-	Auto           bool   `json:"auto"`                  // 旧字段（一个开关管入口和出口）。现在只在升级时读一次，之后跟着 ExitMode 写
-	ExitMode       string `json:"exitMode,omitempty"`    // 出口：auto = 只定国家，程序在这个国家里挑，不通自动换 | manual = 钉死 ExitID，不通也不换
-	EntryMode      string `json:"entryMode,omitempty"`   // 入口：auto = 跟着出口（同一台机器能当入口就用它，否则挑延迟最低的）| manual = 钉死 AddressID
-	Region         string `json:"region,omitempty"`      // 出口自动时限定的国家（国家代码，如 KR）；空 = 不限
-	ExitType       string `json:"exitType,omitempty"`    // 出口自动时限定的类型：proxyip | sstp | socks5 | http | https | turn；空 = 全部
-	EntryRegion    string `json:"entryRegion,omitempty"` // 入口自动时先在哪个国家里挑（国家代码）；空 = 跟随出口。只对 edgetunnel 有意义
-	Profile        string `json:"profile,omitempty"`     // 用订阅里的哪一套连接参数（Subscription.Profiles 的 key）；空 = 自动分配
-	AddressMode    string `json:"addressMode"`           // same-as-exit | custom
-	AddressID      string `json:"addressId,omitempty"`
-	Host           string `json:"host,omitempty"`
-	NodeKey        string `json:"nodeKey,omitempty"`
+	Auto           bool   `json:"auto"`               // 旧字段（一个开关管入口和出口）。现在只在升级时读一次，之后跟着 ExitMode 写
+	ExitMode       string `json:"exitMode,omitempty"` // 出口：auto = 只定国家，程序在这个国家里挑，不通自动换 | manual = 钉死 ExitID，不通也不换
+	// EntryMode / EntryRegion / AddressID / AddressMode：edgetunnel 的入口以前是每个实例各选各的。2026-11-23 起入口全局统一（decisions N-11），
+	// 这几个字段只为读老数据保留，edgetunnel 实例不再用它们；通用订阅仍用 NodeKey。
+	EntryMode   string `json:"entryMode,omitempty"`
+	Region      string `json:"region,omitempty"`      // 出口自动时限定的国家（国家代码，如 KR）；空 = 不限
+	ExitType    string `json:"exitType,omitempty"`    // 出口自动时限定的类型：proxyip | sstp | socks5 | http | https | turn；空 = 全部
+	EntryRegion string `json:"entryRegion,omitempty"` // 老数据，见上
+	Profile     string `json:"profile,omitempty"`     // 用订阅里的哪一套连接参数（Subscription.Profiles 的 key）；空 = 自动分配
+	AddressMode string `json:"addressMode"`           // same-as-exit | custom
+	AddressID   string `json:"addressId,omitempty"`
+	Host        string `json:"host,omitempty"`
+	NodeKey     string `json:"nodeKey,omitempty"`
 }
 
 // ExitAuto / EntryAuto：没写过的（空）按自动算，这是默认值。
@@ -147,8 +149,13 @@ type ExitEntry struct {
 	Resolved     []string `json:"resolved"`
 	ResolvedAt   int64    `json:"resolvedAt,omitempty"`
 	// ResolveError：最近一次解析失败的原因；成功后清空。失败时 Resolved 保留上一次的结果。
-	ResolveError  string `json:"resolveError,omitempty"`
-	UsableAsEntry *bool  `json:"usableAsEntry,omitempty"`
+	ResolveError string `json:"resolveError,omitempty"`
+	// UsableAsEntry：这一条（列表的话是整个列表）当入口还是当出口（decisions N-11：入口池和出口库完全隔开）。
+	// true = 优选 IP，只当入口；false = ProxyIP，只当出口；nil = 自动：地址落在 Cloudflare 官方网段里的当入口，其余当出口。
+	// 全局出口（SOCKS5 / SSTP 等）永远是出口。
+	UsableAsEntry *bool `json:"usableAsEntry,omitempty"`
+	// Sub：从哪个 edgetunnel 订阅的节点 path 里带出来的（proxyip= / socks5:// / /video/…）。更新订阅时同步：新的加、没了的删（有实例用着的留着）。
+	Sub string `json:"sub,omitempty"`
 	// Source：不是一个地址，而是一个“源”。vpngate = VPN Gate 的公共 SSTP 服务器列表（Type 是 sstp、Value 是 "vpngate"）：
 	// 像域名展开成 IP 一样，按 RefreshHours 从 vpngate.net 拉一次列表，Resolved 里是每台的“主机:端口”，Servers 是对应的说明。
 	//
@@ -290,6 +297,8 @@ type Settings struct {
 	FPOff []string `json:"fpOff,omitempty"`
 	// 信箱（decisions MB-1）：后台收信的间隔（分钟）；0 = 默认 2 分钟
 	MailPollMin int `json:"mailPollMin,omitempty"`
+	// 全局入口（decisions N-11）：全部 edgetunnel 实例共用一个入口（优选 IP）。空 = 自动（按时段优选）；“地址:端口” = 钉死这一个。
+	EntryPin string `json:"entryPin,omitempty"`
 	// 信箱：邮件里的远程图片。"" = 总是加载（默认，需求方 2026-11-19：“就像真的邮件一样”）；"ask" = 先不加载，点了才加载
 	MailImages string `json:"mailImages,omitempty"`
 }

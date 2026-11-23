@@ -32,7 +32,7 @@ func TestVPNGateExpandsToSSTP(t *testing.T) {
 		t.Fatal("第一次应当加上、第二次不重复加")
 	}
 	e := a.exitLocked(id)
-	if p := a.pipsLocked(a.Subs[0]); len(p) != 1 || p[0].Type != "proxyip" { // 还没拉到列表：只有入口地址派生的那一个
+	if p := a.pipsLocked(a.Subs[0]); len(p) != 0 { // 还没拉到列表：什么都没有（入口地址不再顺带当反代，N-11）
 		t.Fatalf("没拉列表之前不该有 SSTP 出口：%+v", p)
 	}
 	e.Resolved = []string{"vpn1.opengw.net:1835", "vpn2.opengw.net:443"}

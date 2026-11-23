@@ -50,8 +50,6 @@ type target struct {
 	pip    string // 作为反代时的记录名；空 = 不可能当反代（Cloudflare 官方 IP）
 }
 
-func pipName(subID, key string) string { return hname("p-", subID, key) }
-
 // inCF 判断一个 IP 是不是 Cloudflare 自己公布的地址。
 func inCF(s string) bool {
 	ip := net.ParseIP(strings.Trim(s, "[]"))
@@ -81,25 +79,23 @@ func directOf(sub *model.Subscription) (host string, useTLS bool) {
 	return host, useTLS
 }
 
-// targetsLocked 列出一个 edgetunnel 订阅要直接探测的全部地址（入口和 proxyip 类型的反代按 地址:端口 合并）。
-func (a *App) targetsLocked(sub *model.Subscription) []target {
+// targetsLocked 列出要直接探测的全部地址：入口池里的只写入口记录，出口库里 proxyip 的只写出口记录（decisions N-11：
+// 不再把每个地址按“入口 + 反代”双写给对方用）。同一个地址两边都有（用户自己两边都加了）时合成一个、两条记录都写。
+func (a *App) targetsLocked() []target {
 	var out []target
 	idx := map[string]int{}
-	for _, n := range a.nodesLocked(sub) {
+	for _, n := range a.entryPoolLocked() {
 		k := n.key()
-		t := target{key: k, server: n.Server, port: n.Port, entry: n.Name}
-		if !inCF(n.Server) {
-			t.pip = pipName(sub.ID, k)
-		}
 		idx[k] = len(out)
-		out = append(out, t)
+		out = append(out, target{key: k, server: n.Server, port: n.Port, entry: n.Name})
 	}
-	for _, p := range a.pipsLocked(sub) {
+	for _, p := range a.exitPoolLocked() {
 		if p.Type != "proxyip" {
 			continue
 		}
 		k := p.key()
-		if _, ok := idx[k]; ok {
+		if i, ok := idx[k]; ok {
+			out[i].pip = p.Name
 			continue
 		}
 		h, port := exits.SplitHostPort(p.Value)
@@ -356,13 +352,11 @@ func (a *App) echCheck(subID string) {
 		a.mu.Unlock()
 		return
 	}
-	nodes := a.nodesLocked(sub)
-	sort.SliceStable(nodes, func(i, j int) bool {
-		return rankDelay(a.scanLocked(nodes[i].Name).Delay) < rankDelay(a.scanLocked(nodes[j].Name).Delay)
-	})
+	// 候选入口（代理内核里只有这几个的出站，N-11）里最快的几个，经这个订阅的连接参数真连
 	var top []nodeRef
-	for _, n := range nodes {
+	for _, n := range a.cfgEntriesLocked() {
 		if a.scanLocked(n.Name).Delay > 0 && len(top) < 3 {
+			n.Name = entryOut(sub.ID, n.key())
 			top = append(top, n)
 		}
 	}
@@ -478,7 +472,7 @@ func (a *App) speedRun(ctx context.Context, subID string, job *speedJob) {
 		job.queue, job.cur, job.now = job.queue[1:], key, 0
 		_, useTLS := directOf(sub)
 		var t *target
-		for _, x := range a.targetsLocked(sub) {
+		for _, x := range a.targetsLocked() {
 			if x.key == key {
 				x := x
 				t = &x
@@ -494,9 +488,6 @@ func (a *App) speedRun(ctx context.Context, subID string, job *speedJob) {
 					t = &target{key: key, pip: p.Name}
 					break
 				}
-			}
-			if g != nil {
-				a.viaLocked(sub, a.nodesLocked(sub))
 			}
 		}
 		a.bumpLocked("state", "")

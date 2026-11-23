@@ -143,7 +143,13 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		if !vt(w) {
 			return
 		}
-		reply(w, map[string]any{"items": a.vault.List(r.URL.Query().Get("inst")), "hasDefault": a.vault.Default() != ""}, nil)
+		inst := r.URL.Query().Get("inst")
+		out := map[string]any{"items": a.vault.List(inst), "hasDefault": a.vault.Default() != ""}
+		if inst != "" { // 抽屉里“自动填写的密码”那一行（decisions M-8）
+			pm, explicit := a.vault.PassModeOf(inst)
+			out["pwMode"] = map[string]any{"useDefault": pm.Default, "pass": pm.Pass, "explicit": explicit}
+		}
+		reply(w, out, nil)
 	})
 	// 填充用：本实例能填进这个站点的记录 + 默认密码 + 本实例“自己的邮箱”候选。只给本实例的东西，别的实例的账号一律不给（decisions M-7）。
 	mux.HandleFunc("GET /api/vault/match", func(w http.ResponseWriter, r *http.Request) {
@@ -166,8 +172,10 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		}
 		site := r.URL.Query().Get("site")
 		items := []m{}
+		// 密码按实例的选择换（decisions M-8）：选了默认密码的，导入的账号填全局默认密码；选了自定义的，填本实例自己的密码
+		own, def, pwMode := a.vault.Fill(id, a.vault.Match(id, site))
 		if in != nil {
-			for _, it := range a.vault.Match(id, site) {
+			for _, it := range own {
 				items = append(items, m{it, no, true, ""})
 			}
 			for _, it := range a.vault.Near(id, site) {
@@ -178,10 +186,14 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		if mb, ok := a.vault.MailOf(id); ok && in != nil {
 			mail = mb.Email
 		}
-		cands := ownEmails(mail, a.vault.Match(id, site), email, a.vault.DefaultEmail())
+		cands := ownEmails(mail, own, email, a.vault.DefaultEmail())
 		// email：本实例自己的邮箱（导入的实例以邮箱命名）；defEmail：设置里的默认邮箱；mailEmail：实例信箱的邮箱；
 		// cands：按优先级排好、去过重的“本实例自己的邮箱”（信箱 > 本站记住的账号 > 实例自己的邮箱 > 默认邮箱，decisions M-7）
-		reply(w, map[string]any{"items": items, "default": a.vault.Default(), "email": email, "defEmail": a.vault.DefaultEmail(), "mailEmail": mail,
+		if in == nil {
+			def = a.vault.Default()
+		}
+		// default：注册页、没记住账号的登录页要填的密码——选了自定义密码的实例这里是它自己的密码；pwMode：default | custom | ""（老实例没选过）
+		reply(w, map[string]any{"items": items, "default": def, "pwMode": pwMode, "email": email, "defEmail": a.vault.DefaultEmail(), "mailEmail": mail,
 			"cands": cands, "no": no, "rule": a.vault.RuleOf(site), "needIcon": !a.vault.HasIcon(site)}, nil)
 	})
 	// 站点的网页图标：内容脚本在登录页取下来交上来（只收已经记住账号的站点的）；界面一次取全部。
@@ -282,6 +294,31 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		a.bump("state", "")
 		reply(w, nil, err)
 	})
+	// 一个实例自动填写用默认密码还是自己的密码（decisions M-8）：抽屉里切换。password 可选：交了就改本实例自己的密码。
+	mux.HandleFunc("PUT /api/vault/pwmode", func(w http.ResponseWriter, r *http.Request) {
+		if !vt(w) {
+			return
+		}
+		var b struct {
+			Inst       string
+			UseDefault *bool
+			Password   *string
+		}
+		if err := body(r, &b); err != nil || b.UseDefault == nil {
+			reply(w, nil, errors.New("请求格式不对"))
+			return
+		}
+		a.mu.Lock()
+		ok := a.instLocked(b.Inst) != nil
+		a.mu.Unlock()
+		if !ok {
+			reply(w, nil, errors.New("实例不存在"))
+			return
+		}
+		err := a.vault.SetPassMode(b.Inst, *b.UseDefault, b.Password)
+		a.bump("state", b.Inst)
+		reply(w, nil, err)
+	})
 	// 伴随扩展上报本实例的 Cookie 汇总（只有域名和数量）。
 	mux.HandleFunc("POST /api/cookies", func(w http.ResponseWriter, r *http.Request) {
 		var b struct{ Domains []CookieSum }
@@ -323,8 +360,11 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		}
 		var b struct {
 			Text     string
-			Password string // 本批的默认密码；空 = 用全局默认密码
-			Save     bool   // 把本批的默认密码存为全局默认
+			Password string // 本批的密码（没写密码的邮箱用它）；空 = 用全局默认密码
+			Save     bool   // 把本批的密码存为全局默认（老页面；交了 useDefault 时不看）
+			// 默认密码开关（decisions M-8）：true = 这批实例网站自动填写用全局默认密码；false = 用各自的密码（这行自带的 / 卡密里的 / 上面的 password）。
+			// 不交 = 老规矩（不记选择，账号里记各自的密码或这批的密码）。
+			UseDefault *bool
 		}
 		if err := body(r, &b); err != nil {
 			reply(w, nil, err)
@@ -335,9 +375,11 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 		cards, rest := mailbox.SplitCards(b.Text)
 		pairs, bad := vault.ParseEmails(rest)
 		def := b.Password
-		if def == "" {
+		if b.UseDefault != nil && *b.UseDefault {
+			def = a.vault.Default() // 用默认密码：这批不带密码的邮箱也记全局默认密码；输入框里的不算
+		} else if def == "" {
 			def = a.vault.Default()
-		} else if b.Save || a.vault.Default() == "" {
+		} else if b.UseDefault == nil && (b.Save || a.vault.Default() == "") {
 			_ = a.vault.SetDefault(def)
 		}
 		a.mu.Lock()
@@ -347,7 +389,7 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 				exist[strings.ToLower(e)] = true
 			}
 		}
-		type made struct{ id, email, pass string }
+		type made struct{ id, email, pass, own string }
 		var news []made
 		skipped := 0
 		for _, p := range pairs {
@@ -361,7 +403,11 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 			}
 			in := a.newInstanceLocked("persistent")
 			in.Name = p[0]
-			news = append(news, made{in.ID, p[0], pass})
+			own := p[1]
+			if own == "" && (b.UseDefault == nil || !*b.UseDefault) {
+				own = def
+			}
+			news = append(news, made{in.ID, p[0], pass, own})
 		}
 		a.saveLocked("instances")
 		a.bumpLocked("state", "")
@@ -372,11 +418,21 @@ func (a *App) accountRoutes(mux *http.ServeMux) {
 				noPass++
 			}
 			if _, err := a.vault.Upsert(vault.Item{Inst: n.id, Site: "*", User: n.email, Pass: n.pass, Src: "import"}); err != nil {
-				log.Printf("导入邮箱 %s：%v", n.email, err)
+				log.Printf("导入邮箱：%v", err) // 不写邮箱（日志里不留账号）
+			}
+			if b.UseDefault != nil {
+				own := n.own
+				if err := a.vault.SetPassMode(n.id, *b.UseDefault, &own); err != nil {
+					log.Printf("导入邮箱：记密码选择：%v", err)
+				}
 			}
 		}
-		cn, ca := a.importCards(cards, def)
-		reply(w, map[string]any{"created": len(news) + cn, "skipped": skipped, "bad": bad, "noPass": noPass, "cards": cn + ca, "attached": ca}, nil)
+		cn, ca := a.importCards(cards, def, b.UseDefault)
+		out := map[string]any{"created": len(news) + cn, "skipped": skipped, "bad": bad, "noPass": noPass, "cards": cn + ca, "attached": ca}
+		if b.UseDefault != nil && *b.UseDefault && a.vault.Default() == "" {
+			out["noDefault"] = true // 选了用默认密码、但全局默认密码还没设：页面提示去设置
+		}
+		reply(w, out, nil)
 	})
 }
 

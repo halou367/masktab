@@ -14,7 +14,7 @@ const [dir, out, desk] = process.argv.slice(2).filter((a) => !a.startsWith('--')
 // 分段跑（--only=段名,段名）：整套要两分多钟，改哪一块就只跑哪一段；scripts/check.sh pages 会把各段分给几个进程同时跑。
 // 段名见下面每一段开头的 want('…')；不带 --only 就全跑。新加的检查放进合适的段，或者新开一段（记得写进 scripts/check.sh 的 PAGE_SECTIONS）。
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean);
-const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads', 'mail', 'jank', 'instbar'];
+const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads', 'mail', 'jank', 'instbar', 'entry', 'pw'];
 for (const s of ONLY) if (!SECTIONS.includes(s)) { console.error(`没有这一段：${s}（有：${SECTIONS.join(' ')}）`); process.exit(2); }
 const took = []; let cur = null;
 const want = (name) => { const t = Date.now(); if (cur) took.push(`${cur.name} ${((t - cur.t) / 1000).toFixed(0)}s`); cur = null; const ok = !ONLY.length || ONLY.includes(name); if (ok) cur = { name, t }; return ok; };
@@ -46,6 +46,20 @@ const ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9h
   fixture.vault.icons = 7;
   fixture.__icons = { 'login.shop.test': ICON };
 }
+// 全局入口（决策 N-11）：抓来的夹具里还没有 state.entry。按“本窗口实例”老的入口选择现算一份（自动 / 钉死、正在用哪个、当前时段最佳），
+// 假接口 PUT /api/entry 改的也是这几个字段，所以各段里手改 me.proxy 的老写法照样能摆出想要的样子。state.__entry 给了就原样用。
+function syncEntry(state) {
+  if (state.__entry) { state.entry = state.__entry; return; }
+  const me = state.me, sub = me && state.subscriptions.find((x) => x.id === me.proxy.subscriptionId);
+  if (!sub || sub.kind !== 'edgetunnel') { state.entry = { auto: true, pool: 0, alive: 0, users: 0 }; return; }
+  const n = sub.nodes.find((x) => x.id === me.proxy.addressId) || sub.nodes[0];
+  const key = n ? `${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port || 443}` : '';
+  const auto = me.proxy.entryMode !== 'manual';
+  state.entry = { key, id: n?.id, server: n?.server, port: n?.port, label: n?.label, from: n?.from, auto, pin: auto ? '' : key, delay: n?.delay || 0, exit: n?.exit,
+    pool: sub.nodes.length, alive: sub.nodes.filter((x) => x.delay > 0).length, users: state.instances.filter((i) => i.proxy?.state === 'on' && (i.rt?.running || i.rt?.starting)).length, tune: auto ? me.tune : undefined };
+  state.exitRoles = state.exitRoles || Object.fromEntries((state.exits || []).filter((e) => e.type === 'proxyip').map((e) => [e.id, e.usableAsEntry === true ? 'entry' : 'exit']));
+}
+fixture.__syncSrc = syncEntry.toString();
 const light = JSON.parse(JSON.stringify(fixture)); light.settings.theme = 'light';
 // 两路出口不同国家的样子（黄色提示）
 const split = JSON.parse(JSON.stringify(fixture)); { const m = split.instances.find((x) => x.id === split.me.id); m.rt.probe.direct = { ...m.rt.probe.direct, country: 'HK', city: 'Hong Kong', timezone: 'Asia/Hong_Kong' }; split.me = m; }
@@ -76,8 +90,10 @@ const accForm = (pg2) => pg2.evaluate(() => { const f = document.querySelector('
   const ins = [...f.querySelectorAll('input')].map((x) => x.getBoundingClientRect()), bt = [...f.querySelectorAll('.btn')].map((x) => x.getBoundingClientRect());
   return { ins: ins.map((x) => Math.round(x.width)), h: ins.map((x) => Math.round(x.height)), inside: [...ins, ...bt].every((x) => x.left >= d.left && x.right <= d.right + 1), btn: bt.length }; });
 const mock = (state) => {
+  const syncEntry = new Function('return ' + state.__syncSrc)(); // 见文件头部的 syncEntry（页面里拿不到 Node 这边的函数，夹具带着它的源码）
   const vault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
-    { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol.very.long.mailbox.name30827@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
+    { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol.very.long.mailbox.name30827@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true,
+  pwMode: state.__pwMode || { useDefault: true, pass: 'Passw0rd!', explicit: false } }; // 抽屉里“默认密码”那一行（decisions M-8）
   const addons = [{ id: 'ublock0@raymondhill.net', name: 'uBlock Origin', version: '1.62.0', enabled: true, desc: '高效的广告拦截器', action: true, options: true }];
   const recent = [{ url: 'https://github.com/halou367/masktab', title: 'halou367/masktab', at: Date.now() - 180e3 }, { url: 'https://ippure.com/', title: 'IPPure · 浏览器指纹检测', at: Date.now() - 720e3 }, { url: 'https://mail.google.com/mail/u/0/', title: 'Gmail - 收件箱', at: Date.now() - 3600e3 }];
   // 下载内容页（决策 A-14）：一个正在下的、一张图片、一个名字很长的文件、一个没下成的
@@ -95,6 +111,13 @@ const mock = (state) => {
       if (q.nodeId != null) px.addressId = q.nodeId;
       const it = state.instances.find((x) => x.id === state.me.id); if (it) it.proxy = px;
     }
+    // 全局入口（决策 N-11）：钉死 / 改回自动，照着记到“本窗口实例”的老字段里（syncEntry 按它们现算 state.entry）
+    if (k === 'PUT /api/entry' && b) {
+      const px = state.me.proxy, sub = state.subscriptions.find((x) => x.id === px.subscriptionId);
+      if (b.pin) { const n = sub?.nodes.find((x) => `${x.server.includes(':') ? '[' + x.server + ']' : x.server}:${x.port || 443}` === b.pin); if (n) px.addressId = n.id; px.entryMode = 'manual'; } else px.entryMode = 'auto';
+      const it = state.instances.find((x) => x.id === state.me.id); if (it) it.proxy = px;
+      return { ok: true };
+    }
     // 新建向导（决策 UI-31）：建好以后页面来问启动进度——8 步一步一步走，然后“开起来了”；state.__newFail 时走到第 2 步报错，重试就好
     if (k === 'POST /api/instances') { state.__prog = 0; return { id: state.__newFail ? 'bad1' : 'new1', no: 9, note: '' }; }
     if (m === 'POST' && /^\/api\/instances\/(new1|bad1)\/launch$/.test(p)) { state.__prog = 0; state.__newFail = false; return { ok: true }; }
@@ -109,7 +132,12 @@ const mock = (state) => {
     if (m === 'GET' && /^\/api\/mail\/[^/]+$/.test(k.slice(4))) { const id = k.slice(14); return (state.__mailbox && state.__mailbox[id]) || { set: false, base: 'https://email.nloop.cc/', every: 2, mails: [] }; }
     if (k === 'GET /api/mail/p2/msg') { const key = new URLSearchParams(p.split('?')[1] || '').get('key'); return { key, mail: (state.__mailMsgs || {})[key] }; }
     if (m === 'POST' && /^\/api\/mail\/[^/]+\/fetch$/.test(p)) return { ...(state.__mailbox || {}).p2, added: 1 };
-    if (k === 'GET /api/state') return state;
+    // 卡密分字段原文（decisions MB-2）：编出来的假卡密
+    if (m === 'POST' && /^\/api\/mail\/[^/]+\/reveal$/.test(p)) return state.__reveal || { kind: 'outlook', email: 'carol.demo@outlook.com', password: 'FAKE-pw-123', clientId: '00000000-1111-2222-3333-444444444444', refresh: 'M.C5_FAKE-REFRESH-FOR-PAGE-CHECK-' + 'x'.repeat(240) };
+    // 默认密码开关（decisions M-8）：照着记到抽屉读的那份里；设了全局默认密码就记成“已设置”
+    if (k === 'PUT /api/vault/pwmode' && b) { vault.pwMode = { useDefault: !!b.useDefault, pass: b.password != null ? b.password : vault.pwMode.pass, explicit: true }; return { ok: true }; }
+    if (k === 'PUT /api/vault/default' && b && b.password) { state.vault.hasDefault = true; return { ok: true }; }
+    if (k === 'GET /api/state') { syncEntry(state); return state; }
     if (k === 'GET /api/vault') return vault;
     if (k === 'GET /api/vault/icons') return { icons: state.__icons };
     if (k === 'GET /api/addons') return addons;
@@ -303,26 +331,21 @@ if (want('flow')) {
   i = await info();
   const shown = await pg.locator('button.row[aria-label="出口国家"] .trail').innerText();
   check('下拉栏里点一个国家：发出切换请求，行上换成这个国家', !i.scrim && px?.region === 'US' && px?.exitMode === 'auto' && px?.state === 'on' && /美国/.test(shown), { ...i, px, shown });
-  await pg.locator('button.row[aria-label="入口国家"]').click();
-  await pg.waitForTimeout(300);
-  d = await dd();
-  check('入口国家也是下拉栏：第一项“跟随出口”是默认', d?.n >= 3 && d.on.length === 1 && /跟随出口/.test(d.on[0]) && d.inside, { d });
-  await pg.locator('.ddm .opt', { hasText: '香港' }).click();
-  await pg.waitForTimeout(400);
-  px = await lastPx();
-  check('点一个入口国家：发出 entryRegion', px?.entryRegion === 'HK' && px?.entryMode === 'auto', { px });
+  // 入口全部实例共用（决策 N-11）：没有“入口国家”了；分组标题旁有“共用”的小图标，悬停写明换的时候所有实例一起换
+  const sh = await pg.evaluate(() => { const e = [...document.querySelectorAll('#root .sec')].find((x) => /入口/.test(x.textContent))?.querySelector('.shared'); return e && { tip: e.title }; });
+  check('入口：没有“入口国家”；分组标题旁标着全部实例共用（悬停说明）', await pg.locator('button.row[aria-label="入口国家"]').count() === 0 && !!sh && /全部实例共用/.test(sh.tip) && /一起换/.test(sh.tip), { sh });
   // 首页不重复：没有“当前出口 / 当前入口”两行；自动时没有“从列表里选”
   const rowsNow = () => pg.evaluate(() => [...document.querySelectorAll('#root .row')].map((e) => ({ t: e.querySelector('.t')?.innerText.trim(), on: e.classList.contains('on') })));
   let rr = await rowsNow();
-  check('自动选择开着：只有国家那一行，没有“当前出口 / 当前入口”、没有“从列表里选”', !rr.some((r) => /当前(出口|入口)|从列表里选|自定义/.test(r.t)) && rr.filter((r) => /国家$/.test(r.t)).length === 2, { rr });
+  check('自动选择开着：只有出口国家那一行，没有“当前出口 / 当前入口”、没有“从列表里选”', !rr.some((r) => /当前(出口|入口)|从列表里选|自定义/.test(r.t)) && rr.filter((r) => /国家$/.test(r.t)).length === 1, { rr });
   await pg.locator('button.sw[aria-label="出口自动选择"]').click();
   await pg.waitForTimeout(300);
   px = (await calls()).filter((c) => c.m === 'PATCH').pop()?.b?.proxy;
   check('出口的自动开关：发出 exitMode=manual', px?.exitMode === 'manual', { px });
-  await pg.locator('button.sw[aria-label="入口自动选择"]').click();
-  await pg.waitForTimeout(300);
-  px = (await calls()).filter((c) => c.m === 'PATCH').pop()?.b?.proxy;
-  check('入口的自动开关：发出 entryMode=manual', px?.entryMode === 'manual', { px });
+  await pg.locator('button.sw[aria-label="入口自动选择（全部实例共用）"]').click();
+  await pg.waitForTimeout(400);
+  const cs1 = await calls(), ent = cs1.filter((c) => c.m === 'PUT' && c.p === '/api/entry').pop()?.b;
+  check('入口的自动开关：改的是全局入口（PUT /api/entry 钉死正在用的那个），不再改实例的 entryMode', !!ent?.pin && !ent.auto && cs1.filter((c) => c.m === 'PATCH').every((c) => c.b?.proxy?.entryMode == null), { ent });
   rr = await rowsNow();
   check('自动选择关掉：换成“从列表里选”和“自定义”，正在用的那一行换底色', rr.filter((r) => r.t === '从列表里选').length === 2 && rr.filter((r) => /^自定义/.test(r.t)).length === 2 && rr.filter((r) => r.on).length === 2 && !rr.some((r) => /国家$/.test(r.t)), { rr });
   await pg.screenshot({ path: path.join(out, 'flow-manual.png'), fullPage: true });
@@ -542,7 +565,7 @@ if (want('newtab')) {
 if (desk && want('desk')) {
   let deskTheme = fixture.settings?.theme, deskMany = false, deskUpd = null, deskNeed = false, deskExts = null, deskOutcome = 'hot', deskExits = null, deskMail = null;
   const deskVault = { items: [{ id: 'v1', inst: 'p2', site: '*', user: 'carol.very.long.mailbox.name30827@proton.me', pass: 'Passw0rd!', src: 'import' }, { id: 'v2', inst: 'p2', site: 'https://github.com', user: 'carol', pass: 'gh-secret', src: 'saved' },
-    { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true };
+    { id: 'v3', inst: 'p2', site: 'https://accounts.google.com', user: 'carol@gmail.com', pass: 'g-secret-123456', src: '' }], hasDefault: true, pwMode: { useDefault: true, pass: 'Passw0rd!', explicit: false } };
   const deskCalls = [];
   let deskProg = 0, deskProgHold = 0; // 新建向导的启动进度走到第几次问了；deskProgHold = 停在第几步不往下走（截图用）
   // 运行情况（UI-28）：p2 最占内存、两个窗口五个标签页（一个休眠、一个标题很长）；p1 伴随扩展还没报；p3 一个窗口；第一次问没有处理器占用
@@ -579,7 +602,7 @@ if (desk && want('desk')) {
       const xr = /^\/api\/extensions\/([^/]+)\/reload$/.exec(u.pathname); // 扩展“重载”：回那个扩展，加上这一次的结果
       if (xr && deskExts) { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ ...deskExts.find((x) => x.id === xr[1]), outcome: deskOutcome })); return; }
       const st = { ...fixture, ...(deskExts ? { extensions: deskExts } : {}), ...(deskExits ? { exits: deskExits } : {}), me: need(deskMail ? { ...fixture.me, mail: deskMail } : fixture.me), instances: many.map(need), ...(deskUpd ? { update: deskUpd } : {}), settings: { ...fixture.settings, theme: deskTheme }, host: '', kernel: { ...fixture.kernel, name: 'fingerprint-chromium', version: '142.0', caps: { fingerprint: true, timezone: true, platform: true, spoof: true, extLib: true, live: false } } };
-      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : u.pathname === '/api/usage' ? deskUsage() : { ok: true })); return;
+      r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? (syncEntry(st), st) : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: fixture.__icons } : u.pathname === '/api/vault' ? deskVault : u.pathname === '/api/usage' ? deskUsage() : { ok: true })); return;
     }
     const f = path.join(desk, decodeURIComponent(u.pathname));
     if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); r.end(); return; }
@@ -834,8 +857,9 @@ if (desk && want('desk')) {
     check('电脑账号抽屉：编辑表单三个输入框都够宽、不出抽屉，有“取消 / 保存”', !!fm && fm.ins.length === 3 && fm.ins.every((w) => w >= 150) && fm.h.every((x) => x <= 48) && fm.inside && fm.btn === 2, fm);
     await ip.screenshot({ path: path.join(out, 'desk-drawer-edit.png') });
     await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#instances/import'); await ip.waitForTimeout(600);
+    await ip.click('.modal .frow .tg'); await ip.waitForTimeout(200); // “默认密码”开关默认勾着（decisions M-8）：关掉才有这批的密码输入框
     const im = await ip.evaluate(() => { const m = document.querySelector('.modal'), x = m?.querySelector('input[type="text"]'); return m ? { w: Math.round(x.getBoundingClientRect().width), bg: getComputedStyle(x.parentElement).backgroundColor } : null; });
-    check('电脑导入邮箱：默认密码输入框够宽', !!im && im.w >= 300, im);
+    check('电脑导入邮箱：不勾“默认密码”时，这批的密码输入框够宽', !!im && im.w >= 300, im);
     await ip.screenshot({ path: path.join(out, 'desk-import.png') });
     // 电脑：实例页“新建”弹居中的向导（不是底部表单）；Ctrl+M / 合并窗口“＋”打开的小窗口是整页向导（路由 new，决策 UI-25）
     await ip.goto('about:blank'); await ip.goto(dbase + 'app.html#instances'); await ip.waitForTimeout(800);
@@ -1036,7 +1060,7 @@ if (want('tune')) for (const w of [412, 320]) {
   await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(700);
   const tb = await pg.evaluate(() => { const e = document.querySelector('.row.tbr'); return e ? { t: e.innerText, tip: e.title, ip6: !!e.querySelector('.ip6'), flag: !!e.querySelector('.flag') } : null; });
   check(`节点页（${w} 宽）：入口自动时有“当前时段最佳”，写出 IPv6 地址、国旗和理由（下载、延迟、比现在快多少）`, !!tb && tb.ip6 && tb.flag && /IPv6 · 21 点下载 62 Mbps · 延迟 120 ms · 比现在用的快 340%/.test(tb.t), tb);
-  check(`节点页（${w} 宽）：悬停说明后台什么时候测、流量上限、不断开`, !!tb && /只在入口自动、实例开着时测/.test(tb.tip) && /今天用了 23\.0 MB/.test(tb.tip) && /不断开已有的连接/.test(tb.tip), tb?.tip);
+  check(`节点页（${w} 宽）：悬停说明后台什么时候测、流量上限、不断开`, !!tb && /入口自动、有实例开着时测/.test(tb.tip) && /全部实例一起换/.test(tb.tip) && /今天用了 23\.0 MB/.test(tb.tip) && /不断开已有的连接/.test(tb.tip), tb?.tip);
   check(`节点页（${w} 宽）：“当前时段最佳”这一行不横向溢出`, (await wide()).length === 0, await wide());
   await pg.screenshot({ path: path.join(out, `tune-node-${w}.png`), fullPage: true });
   // 点这一行 = 看全部入口：默认按“本时段”排，最佳那一行在最上面、带“本时段最佳”标签
@@ -1058,6 +1082,57 @@ if (want('tune')) {
   const pg = await c.newPage(); watch(pg, 'tune-man');
   await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(700);
   check('节点页：入口手动时不显示“当前时段最佳”', await pg.locator('.row.tbr').count() === 0, {});
+  await c.close();
+}
+// 全局入口、入口 / 出口隔开（决策 N-11）：节点页的入口是全部实例共用的那一个（悬停说明、在用的实例数），两种宽度都不溢出；
+// 入口列表点一行 = 全局钉死（PUT /api/entry），“+” 加的是优选 IP（进入口池）；地址库每条标着当入口还是当出口，可以整条改。
+if (want('entry')) for (const w of [412, 320]) {
+  const g = JSON.parse(JSON.stringify(fixture));
+  g.exits = [{ id: 'B1', updatedAt: 1, type: 'proxyip', value: 'https://list.example.com/bestcf.txt', label: 'bestcf', source: 'list', expand: true, refreshHours: 3, resolved: ['104.16.1.1', '104.16.1.2'], resolvedAt: 1, goodAt: 1 },
+    { id: 'P1', updatedAt: 1, type: 'proxyip', value: 'https://list.example.com/proxyip.txt', label: 'proxyip', source: 'list', expand: true, refreshHours: 3, resolved: ['203.0.113.80:443'], resolvedAt: 1, goodAt: 1 }];
+  g.exitRoles = { B1: 'entry', P1: 'exit' };
+  const c = await br.newContext({ viewport: { width: w, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, g);
+  const pg = await c.newPage(); watch(pg, 'entry-' + w);
+  const wide = () => pg.evaluate(() => { const W = innerWidth; return [...document.querySelectorAll('#root *')].filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.right > W + 1 || r.left < -1); }).map((e) => e.className || e.tagName).slice(0, 3); });
+  const calls = () => pg.evaluate(() => window.__calls.splice(0).filter((x) => x.m && x.m !== 'GET').map((x) => ({ m: x.m, p: x.p, b: x.b })));
+  await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(700);
+  const sec = await pg.evaluate(() => { const s = [...document.querySelectorAll('#root .sec')].find((x) => /入口/.test(x.textContent)), sh = s?.querySelector('.shared'), r = document.querySelector('[data-k="entryAuto"]');
+    return s && { sh: sh?.title || '', n: sh?.innerText.trim(), auto: r?.innerText || '', rtip: r?.title || '', sw: !!r?.querySelector('.sw[aria-label="入口自动选择（全部实例共用）"]') }; });
+  check(`节点页（${w} 宽）：入口一栏标着全部实例共用（图标 + 在用的实例数，说明在悬停提示里），开关也写明是全局的`, !!sec && /全部实例共用/.test(sec.sh) && /\d/.test(sec.n) && /一起换/.test(sec.rtip) && sec.sw && /104\.18\.32\.47/.test(sec.auto), sec);
+  check(`节点页（${w} 宽）：没有每实例的“入口国家”，不横向溢出`, await pg.locator('[data-k="entryRegion"]').count() === 0 && (await wide()).length === 0, await wide());
+  await pg.screenshot({ path: path.join(out, `entry-node-${w}.png`), fullPage: true });
+  await pg.locator('.row.tbr').click(); await pg.waitForTimeout(500);
+  const hd = await pg.evaluate(() => ({ t: document.querySelector('.appbar')?.innerText || '', sh: document.querySelector('.appbar .tipq')?.title || '' }));
+  check(`入口列表（${w} 宽）：顶栏有“全部实例共用”的说明`, /入口/.test(hd.t) && /全部实例共用/.test(hd.sh), hd);
+  await calls();
+  await pg.locator('.ls .iprow').nth(1).click(); await pg.waitForTimeout(400);
+  let cs = await calls(), put = cs.find((x) => x.m === 'PUT' && x.p === '/api/entry');
+  check(`入口列表（${w} 宽）：点一行 = 全部实例钉死这个入口（PUT /api/entry），不改实例自己的设置`, !!put?.b?.pin && /:\d+$/.test(put.b.pin) && !cs.some((x) => x.m === 'PATCH'), cs);
+  await pg.goto(base + 'app.html#node'); await pg.waitForTimeout(600);
+  const man = await pg.evaluate(() => [...document.querySelectorAll('#root .row')].map((e) => e.getAttribute('data-k')).filter(Boolean));
+  check(`节点页（${w} 宽）：钉死以后入口一栏是“从列表里选 / 自定义入口地址”，没有“当前时段最佳”`, man.includes('entryList') && man.includes('entryCustom') && !man.includes('tuneBest'), man);
+  await pg.locator('.sw[aria-label="入口自动选择（全部实例共用）"]').click(); await pg.waitForTimeout(400);
+  cs = await calls(); put = cs.find((x) => x.m === 'PUT' && x.p === '/api/entry');
+  check(`节点页（${w} 宽）：入口开关打开 = 全部实例改回自动（PUT /api/entry auto）`, put?.b?.auto === true, cs);
+  // 入口列表的“+”：加的是优选 IP，进入口池（POST /api/addresses），不进地址库
+  await pg.locator('.row.tbr').click(); await pg.waitForTimeout(500);
+  await pg.locator('.fab').click(); await pg.waitForTimeout(300);
+  const dlg = await pg.evaluate(() => document.querySelector('.dlg h3')?.textContent || '');
+  await pg.locator('.dlg textarea').fill('104.16.2.2\n104.16.2.3:2053'); await pg.locator('.dlg .btn.fill, .dlg button.pri, .dlg .acts button:last-child').last().click(); await pg.waitForTimeout(500);
+  cs = await calls();
+  check(`入口列表（${w} 宽）：“+”是添加优选 IP，一行一个进入口池（POST /api/addresses），不进地址库`, /优选 IP/.test(dlg) && cs.filter((x) => x.m === 'POST' && x.p === '/api/addresses').length === 2 && !cs.some((x) => x.p === '/api/exits'), { dlg, cs });
+  // 地址库：每条标着当入口还是当出口，菜单里可以整条改
+  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(700);
+  const tags = await pg.evaluate(() => [...document.querySelectorAll('.librow')].map((r) => ({ t: r.querySelector('.t')?.innerText || '', role: r.querySelector('.tag.role')?.innerText.trim() || '', tip: r.querySelector('.tag.role')?.title || '' })));
+  const bt = tags.find((x) => /bestcf/.test(x.t)), pt = tags.find((x) => /proxyip/.test(x.t));
+  check(`地址库（${w} 宽）：优选列表标“入口”，反代列表标“出口”，悬停说明`, bt?.role === '入口' && pt?.role === '出口' && /全部实例共用/.test(bt.tip) && /不会被当成入口/.test(pt.tip), tags);
+  check(`地址库（${w} 宽）：不横向溢出`, (await wide()).length === 0, await wide());
+  await pg.screenshot({ path: path.join(out, `entry-lib-${w}.png`), fullPage: true });
+  await pg.locator('.librow', { hasText: 'proxyip' }).first().click(); await pg.waitForTimeout(300);
+  await pg.locator('.scrim .opt, .ddm .opt', { hasText: '当入口还是当出口' }).first().click(); await pg.waitForTimeout(300);
+  await pg.locator('.scrim .opt, .ddm .opt', { hasText: '当入口（优选 IP）' }).first().click(); await pg.waitForTimeout(400);
+  cs = await calls();
+  check(`地址库（${w} 宽）：菜单“当入口还是当出口”改成当入口：PATCH role=entry`, cs.some((x) => x.m === 'PATCH' && x.p === '/api/exits/P1' && x.b?.role === 'entry'), cs);
   await c.close();
 }
 // 在线更新（决策 N-3）：“组件与更新”页按 st.update 的各个阶段画；新标签页和设置首页有提示
@@ -1169,8 +1244,9 @@ if (want('import')) {
   for (const x of await roundScroll(pg)) check('矮屏导入邮箱：没有圆角滚动容器', false, x);
   // 窄屏（360）：默认密码那一格不被挤成半句提示（2026-11-16：这一行借了设置页的 .row，被压得很窄）
   await pg.setViewportSize({ width: 360, height: 720 }); await pg.waitForTimeout(200);
+  await pg.click('.modal .frow .tg'); await pg.waitForTimeout(200); // “默认密码”开关默认勾着（decisions M-8）：关掉才有这批的密码输入框
   const iw = await pg.evaluate(() => { const m = document.querySelector('.modal').getBoundingClientRect(), x = document.querySelector('.modal input[type="text"]').getBoundingClientRect(); return { w: Math.round(x.width), inside: x.right <= m.right && x.left >= m.left }; });
-  check('窄屏导入邮箱：默认密码输入框至少 200 宽、在弹框里面', iw.w >= 200 && iw.inside, iw);
+  check('窄屏导入邮箱：不勾“默认密码”时，这批的密码输入框至少 200 宽、在弹框里面', iw.w >= 200 && iw.inside, iw);
   await pg.screenshot({ path: path.join(out, 'import-narrow.png') });
   await pg.screenshot({ path: path.join(out, 'import-short.png') });
   await c.close();
@@ -1333,7 +1409,7 @@ if (want('heal')) {
       if (u.pathname.startsWith('/api/')) {
         if (u.pathname === '/api/events') { setTimeout(() => { r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ seq: st.seq })); }, 20000).unref(); return; } // 长轮询：没有新事件就挂着，页面不会一直重画
         let b = ''; q.on('data', (d) => { b += d; }); q.on('end', () => { if (q.method !== 'GET') log.push(`${q.method} ${u.pathname}${b ? ' ' + b : ''}`);
-          r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? st : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: {} } : u.pathname === '/api/vault' ? { items: [], hasDefault: false } : { ok: true })); });
+          r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(u.pathname === '/api/state' ? (syncEntry(st), st) : u.pathname === '/api/events' ? { seq: st.seq + 1e6 } : u.pathname === '/api/vault/icons' ? { icons: {} } : u.pathname === '/api/vault' ? { items: [], hasDefault: false } : { ok: true })); });
         return;
       }
       const f = path.join(desk, decodeURIComponent(u.pathname));
@@ -1569,7 +1645,7 @@ if (want('groups')) for (const w of [412, 320]) {
   check(`独立 IP（${w} 宽）：“删掉不通的”只去掉探测不通的那个（没测过的留着）`, opts.includes('批量编辑') && cs.length === 1 && cs[0] === `PUT /api/exits/loose ${JSON.stringify({ text: `104.16.9.9:443 #手写的\n${V6}` })}`, { opts, cs });
   await pg.locator('.librow', { hasText: '104.16.9.9' }).click(); await pg.waitForTimeout(350);
   opts = await pg.evaluate(() => [...document.querySelectorAll('.ddm .opt, .scrim .opt')].map((e) => e.innerText.trim()));
-  check(`独立 IP（${w} 宽）：单个 IP 的菜单只有改备注和删除（没有域名才有的“展开”“解析”）`, opts.join() === '修改备注,删除', opts);
+  check(`独立 IP（${w} 宽）：单个 IP 的菜单只有改备注、当入口还是当出口、删除（没有域名才有的“展开”“解析”）`, opts.join() === '修改备注,当入口还是当出口,删除', opts);
   await pg.keyboard.press('Escape'); await pg.waitForTimeout(200);
   // 导入：说清楚加了几个列表、多少个地址，原来零散的并进去了几个
   await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(500);
@@ -2087,6 +2163,93 @@ if (want('instbar')) {
   }
 }
 if (flow.length > il0) console.log(flow.slice(il0).join('\n'));
+// ---------- 默认密码开关（decisions M-8）+ 卡密分字段（decisions MB-2）：320 / 412 两宽 ----------
+const pl0 = flow.length;
+if (want('pw')) for (const w of [320, 412]) {
+  const g = mailFixture(); g.vault.hasDefault = false; // 先看“全局默认密码还没设置”的样子
+  const c = await br.newContext({ viewport: { width: w, height: 760 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, g);
+  await c.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+  const pg = await c.newPage(); watch(pg, 'pw-' + w);
+  const calls = () => pg.evaluate(() => window.__calls.splice(0).filter((x) => x.m && x.m !== 'GET').map((x) => ({ m: x.m, p: x.p, b: x.b })));
+  const wide = (sel) => pg.evaluate((sel) => { const W = innerWidth, box = document.querySelector(sel)?.getBoundingClientRect(); return [...document.querySelectorAll(sel + ' *')].filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.right > Math.min(W, box.right) + 1 || r.left < Math.max(0, box.left) - 1); }).map((e) => (e.className || e.tagName) + ':' + Math.round(e.getBoundingClientRect().right)); }, sel);
+  // 1 导入邮箱：“默认密码”开关默认勾上；没设全局默认密码时提示 +“去设置”
+  await pg.goto(base + 'app.html#instances/import'); await pg.waitForSelector('.modal textarea'); await pg.waitForTimeout(300);
+  let im = await pg.evaluate(() => { const t = document.querySelector('.modal .frow .tg'); return { tg: t?.textContent, on: t?.getAttribute('aria-checked'), input: !!document.querySelector('.modal input[type="text"]'), note: document.querySelector('.modal .pwnote')?.textContent || '', go: !!document.querySelector('.modal .pwnote .lk') }; });
+  check(`导入邮箱（${w} 宽）：密码后面有“默认密码”开关、默认勾上；没设全局默认密码时提示并给“去设置”`, im.tg === '默认密码' && im.on === 'true' && !im.input && /还没设置/.test(im.note) && im.go, im);
+  check(`导入邮箱（${w} 宽）：弹框里没有东西横向出界`, (await wide('.modal')).length === 0, await wide('.modal'));
+  await pg.screenshot({ path: path.join(out, `pw-import-${w}.png`) });
+  await calls();
+  await pg.click('.modal .pwnote .lk'); await pg.waitForSelector('.scrim .dlg input'); await pg.fill('.scrim .dlg input', 'Def-Page-1'); await pg.keyboard.press('Enter'); await pg.waitForTimeout(400);
+  let cs = await calls();
+  check(`导入邮箱（${w} 宽）：“去设置”就地弹框，保存发 PUT /api/vault/default`, cs.some((x) => x.p === '/api/vault/default' && x.b?.password === 'Def-Page-1'), cs);
+  await pg.fill('.modal textarea', 'pw.one@example.test\npw.two@example.test----own-2'); await pg.waitForTimeout(150);
+  await pg.click('.modal .btn.pri'); await pg.waitForTimeout(400);
+  cs = await calls();
+  let ib = cs.find((x) => x.p === '/api/import/emails')?.b;
+  check(`导入邮箱（${w} 宽）：勾着时发 useDefault:true，不带这批的密码`, ib?.useDefault === true && ib.password === '', ib);
+  await pg.goto(base + 'app.html#instances'); await pg.goto(base + 'app.html#instances/import'); await pg.waitForSelector('.modal textarea'); await pg.waitForTimeout(200);
+  await pg.click('.modal .frow .tg'); await pg.waitForTimeout(200);
+  im = await pg.evaluate(() => { const x = document.querySelector('.modal input[type="text"]'), m = document.querySelector('.modal').getBoundingClientRect(), r = x?.getBoundingClientRect(); return { on: document.querySelector('.modal .frow .tg')?.getAttribute('aria-checked'), w: r ? Math.round(r.width) : 0, inside: !!r && r.right <= m.right && r.left >= m.left, focus: document.activeElement === x }; });
+  check(`导入邮箱（${w} 宽）：不勾就出来“这批的密码”输入框（在弹框里、够宽、光标进去）`, im.on === 'false' && im.w >= 120 && im.inside && im.focus, im);
+  await pg.fill('.modal input[type="text"]', 'Batch-Own'); await pg.fill('.modal textarea', 'pw.three@example.test'); await pg.waitForTimeout(150);
+  await pg.screenshot({ path: path.join(out, `pw-import-off-${w}.png`) });
+  await pg.click('.modal .btn.pri'); await pg.waitForTimeout(400);
+  ib = (await calls()).find((x) => x.p === '/api/import/emails')?.b;
+  check(`导入邮箱（${w} 宽）：不勾时发 useDefault:false 和这批的密码`, ib?.useDefault === false && ib.password === 'Batch-Own', ib);
+  // 2 新建向导第 3 步：“网站密码 · 默认密码”开关；不勾填自己的密码，随新建请求交出去
+  await pg.goto('about:blank'); await pg.goto(base + 'app.html#instances'); await pg.waitForTimeout(600); // 重新载入：假状态回到“没设全局默认密码”
+  await pg.locator('.appbar button[title="新建伪装实例"]').click(); await pg.waitForSelector('.wz');
+  await pg.locator('.wz .acts .btn.fill').click(); await pg.waitForTimeout(450);
+  await pg.locator('.wz .acts .btn', { hasText: '跳过' }).click(); await pg.waitForTimeout(500);
+  let wz = await pg.evaluate(() => { const t = document.querySelector('.wz .wzpwr .tg'); return { k: document.querySelector('.wz .wzpwr .k')?.textContent, on: t?.getAttribute('aria-checked'), note: document.querySelector('.wz .pwnote')?.textContent || '', input: !!document.querySelector('.wz .wzpw') }; });
+  check(`新建向导（${w} 宽）：确认页有“网站密码 · 默认密码”开关、默认勾上；没设全局默认密码时提示`, wz.k === '网站密码' && wz.on === 'true' && /还没设置/.test(wz.note) && !wz.input, wz);
+  await pg.screenshot({ path: path.join(out, `pw-wizard-${w}.png`) });
+  await pg.click('.wz .wzpwr .tg'); await pg.waitForTimeout(350);
+  wz = await pg.evaluate(() => ({ on: document.querySelector('.wz .wzpwr .tg')?.getAttribute('aria-checked'), input: !!document.querySelector('.wz .wzpw'), note: !!document.querySelector('.wz .pwnote') }));
+  check(`新建向导（${w} 宽）：不勾就出来“这个实例自己的密码”，提示收起`, wz.on === 'false' && wz.input && !wz.note, wz);
+  await pg.fill('.wz .wzpw', 'Own-Wizard-1');
+  check(`新建向导（${w} 宽）：没有东西横向出界`, (await wide('.wz')).length === 0, await wide('.wz'));
+  await pg.screenshot({ path: path.join(out, `pw-wizard-off-${w}.png`) });
+  await calls();
+  await pg.locator('.wz .acts .btn.fill').click(); await pg.waitForTimeout(400);
+  const nb = (await calls()).find((x) => x.m === 'POST' && x.p === '/api/instances')?.b;
+  check(`新建向导（${w} 宽）：创建请求带 useDefault:false 和自己的密码`, nb?.useDefault === false && nb.password === 'Own-Wizard-1', nb);
+  await pg.waitForFunction(() => !document.querySelector('.wz') || document.querySelector('.wz').dataset.stage === 'done', null, { timeout: 8000 }).catch(() => {});
+  await pg.waitForTimeout(900);
+  // 3 实例抽屉：“默认密码”一行可切换
+  await pg.evaluate(() => { location.hash = '#instances/p2'; }); await pg.waitForSelector('.drawer'); await pg.waitForTimeout(500);
+  const dr = () => pg.evaluate(() => { const r = [...document.querySelectorAll('.drawer .row')].find((x) => x.querySelector('.t')?.textContent === '默认密码' || /^默认密码/.test(x.textContent)); const s = r?.querySelector('.sw'); return r ? { t: r.textContent, on: s?.getAttribute('aria-checked') } : null; });
+  let d = await dr();
+  check(`实例抽屉（${w} 宽）：有“默认密码”开关（勾着 = 用全局默认密码）`, !!d && d.on === 'true', d);
+  await calls();
+  await pg.evaluate(() => [...document.querySelectorAll('.drawer .row')].find((x) => /^默认密码/.test(x.textContent))?.querySelector('.sw').click()); await pg.waitForTimeout(500);
+  cs = await calls(); d = await dr();
+  check(`实例抽屉（${w} 宽）：关掉开关发 PUT /api/vault/pwmode {useDefault:false}，改成写“用这个实例自己的密码”（遮住）`, cs.some((x) => x.p === '/api/vault/pwmode' && x.b?.inst === 'p2' && x.b.useDefault === false) && d?.on === 'false' && /自己的密码/.test(d.t) && !/Passw0rd/.test(d.t), { cs, d });
+  check(`实例抽屉（${w} 宽）：没有东西横向出界`, (await wide('.drawer')).length === 0, await wide('.drawer'));
+  await pg.screenshot({ path: path.join(out, `pw-drawer-${w}.png`) });
+  // 4 信箱对话框：卡密分四行，默认遮住；点眼睛才向核心服务要原文（只要一次），复制
+  await pg.evaluate(() => { location.hash = '#mail/p2'; }); await pg.waitForSelector('.mhead');
+  await pg.click('.appbar .ib[aria-label="设置卡密和取件地址"]'); await pg.waitForSelector('.mset .mf');
+  const mf = () => pg.evaluate(() => [...document.querySelectorAll('.mset .mf')].map((r) => ({ k: r.dataset.k, lab: r.querySelector('.k').textContent, v: r.querySelector('.v').textContent, masked: r.querySelector('.v').classList.contains('masked') })));
+  let f = await mf(); await calls();
+  check(`信箱对话框（${w} 宽）：卡密分四行（邮箱 / 密码 / client_id / refresh_token），默认都遮住，页面上没有原文`, f.map((x) => x.lab).join() === '邮箱,密码,client_id,refresh_token' && f.every((x) => x.masked) && !f.some((x) => /FAKE-pw|FAKE-REFRESH|carol\.demo@/.test(x.v)), f);
+  check(`信箱对话框（${w} 宽）：没有东西横向出界`, (await wide('.mset')).length === 0, await wide('.mset'));
+  await pg.screenshot({ path: path.join(out, `pw-card-${w}.png`) });
+  await pg.click('.mset .mf[data-k="password"] .ib[aria-label="显示密码"]'); await pg.waitForTimeout(250);
+  f = await mf(); cs = await calls();
+  check(`信箱对话框（${w} 宽）：点眼睛发一次 POST /api/mail/p2/reveal，只显示这一行`, cs.filter((x) => x.p === '/api/mail/p2/reveal').length === 1 && f.find((x) => x.k === 'password').v === 'FAKE-pw-123' && f.filter((x) => !x.masked).length === 1, { cs, f });
+  await pg.click('.mset .mf[data-k="refresh"] .ib[aria-label="复制refresh_token"]'); await pg.waitForTimeout(250);
+  const clip = await pg.evaluate(() => navigator.clipboard.readText().catch(() => 'ERR'));
+  cs = await calls();
+  check(`信箱对话框（${w} 宽）：复制拿到原文，不再重复要（同一个对话框里只要一次）`, /^M\.C5_FAKE-REFRESH-FOR-PAGE-CHECK-x+$/.test(clip) && !cs.some((x) => x.p === '/api/mail/p2/reveal'), { n: cs.length });
+  await pg.click('.mset .mf[data-k="refresh"] .ib[aria-label="显示refresh_token"]'); await pg.waitForTimeout(200);
+  check(`信箱对话框（${w} 宽）：长 refresh_token 显示出来也在格子里折行，不撑宽对话框`, (await wide('.mset')).length === 0, await wide('.mset'));
+  await pg.screenshot({ path: path.join(out, `pw-card-shown-${w}.png`) });
+  await pg.click('.mset .mf[data-k="password"] .ib[aria-label="遮住密码"]'); await pg.waitForTimeout(150);
+  check(`信箱对话框（${w} 宽）：再点眼睛遮回去`, (await mf()).find((x) => x.k === 'password').masked, await mf());
+  await c.close();
+}
+if (flow.length > pl0) console.log(flow.slice(pl0).join('\n'));
 want('');
 if (took.length) console.log('用时：' + took.join('，'));
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');

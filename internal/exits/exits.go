@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -294,4 +295,103 @@ func SplitHostPort(v string) (string, int) {
 		return h, n
 	}
 	return strings.Trim(v, "[]"), 0
+}
+
+// prefixType：path 里出口参数的写法 → 出口类型（edgetunnel 认的那些；g 开头的是“全局”写法，我们的类型里 SOCKS5 等本来就是全局出口）。
+var prefixType = map[string]string{"proxyip=": "proxyip", "pyip=": "proxyip", "ip=": "proxyip",
+	"socks5=": "socks5", "s5=": "socks5", "gs5=": "socks5", "http=": "http", "ghttp=": "http", "https=": "https", "ghttps=": "https",
+	"turn=": "turn", "gturn=": "turn", "sstp=": "sstp", "gsstp=": "sstp"}
+
+// FromPath 从 edgetunnel 节点的 path 里取出它带的出口（decisions N-11：订阅链接里带的出口自动进出口库）。认这些写法：
+//
+//	?proxyip=1.2.3.4:443 ｜ ?socks5=u:p@h:1080 ｜ /proxyip=1.2.3.4 ｜ /proxyip.example.com（整段就是 ProxyIP 域名）｜ /s5=… /gs5=…
+//	/socks5://u:p@h:1080 ｜ /sstp://u:p@h ｜ /video/<加密串>（secret 是节点的 uuid，trojan 是 password）
+//
+// 认不出来、或者值不像地址的丢掉。返回的 Value 和导入时的写法一样（全局出口是 [用户:密码@]主机[:端口]）。
+func FromPath(base, secret string) []Parsed {
+	if u, err := url.PathUnescape(base); err == nil {
+		base = u
+	}
+	var out []Parsed
+	seen := map[string]bool{}
+	add := func(typ, v string) {
+		v = strings.TrimSpace(v)
+		if typ == "" || v == "" || !valid(typ, v) || seen[typ+"|"+v] {
+			return
+		}
+		seen[typ+"|"+v] = true
+		out = append(out, Parsed{Type: typ, Value: v, IsDomain: typ == "proxyip" && net.ParseIP(strings.Trim(hostOnly(v), "[]")) == nil})
+	}
+	path, query := split(base)
+	for _, mk := range tailMarkers {
+		i := strings.Index(path, mk)
+		if i < 0 {
+			continue
+		}
+		rest := path[i+len(mk):]
+		if mk == "/video/" {
+			enc := rest
+			if j := strings.Index(enc, "/"); j >= 0 {
+				enc = enc[:j]
+			}
+			if secret != "" {
+				if js, err := DecodeChain(enc, secret); err == nil {
+					var m struct {
+						Type, Hostname, Username, Password string
+						Port                               int
+					}
+					if json.Unmarshal([]byte(js), &m) == nil && m.Type != "" && m.Hostname != "" {
+						v := m.Hostname
+						if m.Port > 0 {
+							v = net.JoinHostPort(strings.Trim(m.Hostname, "[]"), strconv.Itoa(m.Port))
+						}
+						if m.Username != "" {
+							v = m.Username + ":" + m.Password + "@" + v
+						}
+						typ := strings.ToLower(m.Type)
+						if typ == "socks" {
+							typ = "socks5"
+						}
+						add(typ, v)
+					}
+				}
+			}
+		} else {
+			typ := strings.TrimSuffix(strings.TrimPrefix(mk, "/"), "://")
+			if typ == "socks" {
+				typ = "socks5"
+			}
+			add(typ, strings.TrimSuffix(rest, "/"))
+		}
+		path = path[:i]
+	}
+	for _, seg := range strings.Split(path, "/") {
+		low := strings.ToLower(seg)
+		for p, typ := range prefixType {
+			if strings.HasPrefix(low, p) {
+				add(typ, seg[len(p):])
+			}
+		}
+		if strings.HasPrefix(low, "proxyip.") { // edgetunnel：路径里一整段 proxyip.xxx.com 就是 ProxyIP 域名
+			add("proxyip", seg)
+		}
+	}
+	for _, kv := range strings.Split(query, "&") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if typ := prefixType[strings.ToLower(k)+"="]; typ != "" && queryKeys[strings.ToLower(k)] {
+			add(typ, v)
+		}
+	}
+	return out
+}
+
+func hostOnly(v string) string {
+	if i := strings.LastIndex(v, "@"); i >= 0 {
+		v = v[i+1:]
+	}
+	h, _ := SplitHostPort(v)
+	return h
 }

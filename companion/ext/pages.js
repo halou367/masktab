@@ -298,14 +298,24 @@ export function exitsView(c) {
       h('button', { class: 'ld mono ' + delayCls(b ? b.delay : one.delay), title: (b ? `延迟 ${b.delay} ms` : one.err || '还没测') + '。点击重测延迟', onclick: stopEv(() => pingXs(xs)) }, delayText(b ? b.delay : one.delay))];
     return row({ ic: lead, t: ipSpan(o.type === 'proxyip' ? o.value : o.value.replace(/^.*@/, ''), isV6(o.value) ? 'mono' : 'mono el'), s: sub2, trail, chev: true, cls: 'librow' + (dead ? ' dead' : '') + (o.on ? ' on' : ''), onclick: o.menu });
   };
+  // 入口 / 出口（决策 N-11）：地址库里每一条要么当入口（优选 IP，进全部实例共用的入口池），要么当出口（ProxyIP），不混用。
+  // 默认自动：Cloudflare 官方 IP 当入口，其余当出口；可以整条改。
+  const ROLE = { entry: ['enter', '入口', '当入口用（优选 IP）：进入口池，全部实例共用，不会被当成出口'], exit: ['swap', '出口', '当出口用（ProxyIP）：不会被当成入口'], mixed: ['swap', '入口 + 出口', '自动：里面的 Cloudflare 官方 IP 当入口，其余当出口'] };
+  const roleTag = (e) => { const r = e.type === 'proxyip' && ROLE[st.exitRoles?.[e.id]]; return r && h('span', { class: 'tag g role', title: r[2] + (e.usableAsEntry == null ? '（自动识别）' : '（手动指定）') }, icon(r[0], 12), r[1]); };
+  const pickRole = async (e) => {
+    const cur = e.usableAsEntry === true ? 'entry' : e.usableAsEntry === false ? 'exit' : 'auto';
+    const v = await choose('当入口还是当出口', [['auto', '自动识别（Cloudflare 官方 IP 当入口）'], ['entry', '当入口（优选 IP）'], ['exit', '当出口（ProxyIP）']], cur);
+    if (v != null && v !== cur) act(async () => { await api('PATCH', `/api/exits/${e.id}`, { role: v }); toast(v === 'entry' ? '已改成入口：全部实例共用的入口池里多了它' : v === 'exit' ? '已改成出口' : '已改回自动识别'); });
+  };
   const delEntry = (e, then) => act(async () => { const r = await api('DELETE', `/api/exits/${e.id}`); if (r?.changed) toast(`有 ${r.changed} 个实例在用它，已换成别的，详情见各实例的提示`); then?.(); });
   // 单条（独立 IP、域名、全局代理）的菜单
   const entryMenu = async (e, inPage) => {
     const dom = e.type === 'proxyip' && !isLoose(e);
-    const opts = [dom && e.expand && !inPage && e.resolved.length > 0 && ['view', `查看 ${e.resolved.length} 个地址`], ['label', '修改备注'], dom && ['expand', e.expand ? '不展开（原样交给服务端）' : '展开为 IP 列表'], dom && e.expand && ['hours', '重新解析的间隔'], dom && e.expand && ['resolve', '立即解析'], ['del', '删除']].filter(Boolean);
+    const opts = [dom && e.expand && !inPage && e.resolved.length > 0 && ['view', `查看 ${e.resolved.length} 个地址`], ['label', '修改备注'], e.type === 'proxyip' && ['role', '当入口还是当出口'], dom && ['expand', e.expand ? '不展开（原样交给服务端）' : '展开为 IP 列表'], dom && e.expand && ['hours', '重新解析的间隔'], dom && e.expand && ['resolve', '立即解析'], ['del', '删除']].filter(Boolean);
     const v = await choose(e.value, opts, null);
     if (v === 'view') c.open('exits/g-' + e.id);
     else if (v === 'label') { const t = await ask('备注', { value: e.label || '' }); if (t != null) act(() => api('PATCH', `/api/exits/${e.id}`, { label: t })); }
+    else if (v === 'role') pickRole(e);
     else if (v === 'expand') act(async () => { await api('PATCH', `/api/exits/${e.id}`, { expand: !e.expand }); if (inPage) backLib(); });
     else if (v === 'hours') { const n = await choose('重新解析的间隔', [0, 1, 3, 6, 12, 24].map((x) => [x, x ? `${x} 小时` : '不刷新']), e.refreshHours); if (n != null) act(() => api('PATCH', `/api/exits/${e.id}`, { refreshHours: n })); }
     else if (v === 'resolve') act(async () => { const r = await api('POST', `/api/exits/${e.id}/resolve`); toast(r?.error ? `解析失败：${r.error}` : `解析出 ${r?.count ?? 0} 个地址`); });
@@ -318,9 +328,10 @@ export function exitsView(c) {
     if (u != null && u.trim()) act(async () => { const r = await api('PATCH', `/api/exits/${e.id}`, { url: u.trim() }); toast(`已更新：${r?.count ?? 0} 个地址，正在探测…`); });
   };
   const listMenu = async (e, inPage) => {
-    const v = await choose(listName(e), [!inPage && ['view', `查看 ${e.resolved.length} 个地址`], ['refresh', '立即更新'], ['url', '修改网址'], ['label', '改名'], ['hours', '自动更新的间隔'], ['del', '删除这个列表']].filter(Boolean), null);
+    const v = await choose(listName(e), [!inPage && ['view', `查看 ${e.resolved.length} 个地址`], ['refresh', '立即更新'], ['role', '当入口还是当出口'], ['url', '修改网址'], ['label', '改名'], ['hours', '自动更新的间隔'], ['del', '删除这个列表']].filter(Boolean), null);
     if (v === 'view') c.open('exits/g-' + e.id);
     else if (v === 'refresh') refreshList(e);
+    else if (v === 'role') pickRole(e);
     else if (v === 'url') editListURL(e);
     else if (v === 'label') { const t = await ask('列表的名字', { value: e.label || '' }); if (t != null) act(() => api('PATCH', `/api/exits/${e.id}`, { label: t.trim() })); }
     else if (v === 'hours') { const n = await choose('自动更新的间隔', HOURS, e.refreshHours); if (n != null) act(() => api('PATCH', `/api/exits/${e.id}`, { refreshHours: n })); }
@@ -341,7 +352,7 @@ export function exitsView(c) {
   const listRow = (e) => {
     const its = itemsOf(e), sm = sumOf(its), n = its.length, upd = updText(e);
     return row({ ic: sm.lead('link'), t: h('span', { class: 'el' }, listName(e)), cls: 'librow grp' + (n > 0 && sm.d < 0 ? ' dead' : ''), chev: true, title: e.value,
-      s: [h('span', { class: 'tag g', title: '一个列表网址：里面的地址整组更新' }, '列表'), sm.where(), h('span', { class: 'brk' }),
+      s: [h('span', { class: 'tag g', title: '一个列表网址：里面的地址整组更新' }, '列表'), roleTag(e), sm.where(), h('span', { class: 'brk' }),
         h('span', {}, [`${n} 个地址`, sm.all.length > 0 && `${sm.alive.length} 个通`, upd, e.refreshHours ? `每 ${e.refreshHours} 小时更新` : '不自动更新'].filter(Boolean).join(' · ')),
         e.resolveError && h('span', { class: 'bad' }, `更新失败：${e.resolveError}${n ? `（还在用上一次的 ${n} 个）` : ''}`)],
       trail: groupTrail(sm), onclick: () => listMenu(e) });
@@ -350,12 +361,12 @@ export function exitsView(c) {
     if (e.source === 'vpngate') return vgLibRow(e);
     if (isList(e)) return listRow(e);
     const xs = probes(e), dom = e.type === 'proxyip' && e.expand, alive = dom ? itemsOf(e).filter((x) => x.delay > 0).length : 0, upd = dom ? updText(e) : '';
-    return addrRow({ type: e.type, value: e.value, label: e.label, xs, menu: () => entryMenu(e), more: [
+    return addrRow({ type: e.type, value: e.value, label: e.label, xs, menu: () => entryMenu(e), more: [!isLoose(e) && roleTag(e), e.sub && h('span', { class: 'tag g', title: '从订阅节点的 path 里带出来的出口；更新订阅时自动同步' }, '来自订阅'),
       dom && h('span', {}, `展开 ${e.resolved.length} 个地址${v6Count(e) ? `（IPv6 ${v6Count(e)} 个）` : ''}${e.resolved.length && xs.length ? ` · ${alive} 个通` : ''}${upd ? ` · ${upd}` : ''}${e.refreshHours ? ` · 每 ${e.refreshHours} 小时解析` : ''}`),
       e.resolveError && h('span', { class: 'bad' }, `解析失败：${e.resolveError}`)] });
   };
   const importAddr = async () => {
-    const v = await ask('导入地址', { multiline: true, ok: '导入', note: '是优选还是反代不用区分，探测后自动识别。列表网址（接口返回的 txt / csv / json）整个算一条，每 3 小时自动更新；域名展开为 IP，每 3 小时重新解析；单个 IP 归到“独立 IP”。只写 vpngate：加 VPN Gate 的公共 SSTP 服务器（一整个源）。',
+    const v = await ask('导入地址', { multiline: true, ok: '导入', note: 'Cloudflare 官方 IP 自动当入口（优选 IP，全部实例共用），其余当出口（ProxyIP）；导入后可以整条改。列表网址（接口返回的 txt / csv / json）整个算一条，每 3 小时自动更新；域名展开为 IP，每 3 小时重新解析；单个 IP 归到“独立 IP”。只写 vpngate：加 VPN Gate 的公共 SSTP 服务器（一整个源）。',
       placeholder: '每行一条，可多行粘贴（CSV 也行）：\nhttps://example.com/ip.txt（列表）\n7.cf.3666888.xyz\n104.16.1.1:443 #备注\nsocks5://user:pass@1.2.3.4:1080\nsstp://user:pass@host:443（全局出口：所有网站都从它出去）\nvpngate（VPN Gate 源）' });
     if (v && v.trim()) act(async () => {
       const r = await api('POST', '/api/exits', { text: v }), one = (r.added || 0) - (r.lists || 0);
@@ -428,7 +439,7 @@ export function exitsView(c) {
       h('button', { class: 'ib', title: '测全部延迟', 'aria-label': '测全部延迟', disabled: !sm.all.length, onclick: () => pingXs(sm.all) }, icon('bolt', 22)),
       ibtn('refresh', '立即更新订阅', () => act(() => api('POST', `/api/subscriptions/${ssub.id}/refresh?force=1`), '已刷新'))),
       aliveChip(sm.alive.length),
-      shown.map((x) => addrRow({ type: 'proxyip', value: x.value, label: x.n.label, xs: x.xs, on: x.id === me?.proxy?.addressId, more: x.n.gone && goneTag(), menu: () => itemMenu(x) })),
+      shown.map((x) => addrRow({ type: 'proxyip', value: x.value, label: x.n.label, xs: x.xs, on: x.id === st.entry?.id, more: x.n.gone && goneTag(), menu: () => itemMenu(x) })),
       !rows.length && h('div', { class: 'empty' }, '这个订阅没有带地址'),
       rows.length > 0 && !shown.length && h('div', { class: 'empty' }, '没有'),
       h('div', { class: 'foot noic' }, '订阅只取连接参数（域名、uuid、路径、ECH、alpn 等），里面的地址并进地址库，所有 edgetunnel 订阅共用、一轮只测一遍。每次更新订阅自动同步：新的加进来，没了的标“已不在订阅里”（还通的暂时留用，不通的测完清掉）。自己加的地址不受影响。')];

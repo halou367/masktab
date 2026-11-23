@@ -127,7 +127,7 @@ type instView struct {
 	Info   *fpInfo   `json:"fpInfo,omitempty"`
 	Acct   *acctView `json:"acct"`
 	Checks *checkSum `json:"checks,omitempty"` // 伪装一致性检查（checks.go）
-	Tune   *tuneBest `json:"tune,omitempty"`   // 入口优选：它这个出口国家里当前时段最好的入口和理由（decisions N-6）
+	Tune   *tuneBest `json:"tune,omitempty"`   // 入口优选：当前时段最好的入口和理由（decisions N-6；N-11 起全局一个）
 	Mail   *mailSum  `json:"mail,omitempty"`   // 信箱（设了卡密才有）：未读数、最新几封未读（decisions MB-1）
 }
 
@@ -238,6 +238,7 @@ func (a *App) State(me string) map[string]any {
 	insts := []instView{}
 	var mine *instView
 	accts := a.acctViewsLocked()
+	ev := a.entryViewLocked() // 全局入口（decisions N-11）
 	for _, in := range a.Instances {
 		r := *a.rtLocked(in.ID)
 		v := instView{Instance: in, RT: &r, Acct: accts[in.ID], Mail: mails[in.ID]}
@@ -265,8 +266,8 @@ func (a *App) State(me string) map[string]any {
 			}
 			v.Checks = a.checksLocked(in, &r, v.Info)
 		}
-		if in.Proxy.EntryAuto() {
-			v.Tune = a.instTuneLocked(in)
+		if ev.Tune != nil && in.Proxy.State == "on" && a.isETLocked(in.Proxy.SubscriptionID) {
+			v.Tune = ev.Tune // 入口是全局的：每个 edgetunnel 实例看到的是同一个“当前时段最佳”
 		}
 		insts = append(insts, v)
 		if in.ID == me {
@@ -328,6 +329,8 @@ func (a *App) State(me string) map[string]any {
 	return map[string]any{
 		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts, "ipq": a.ipqViewLocked(),
 		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version, "update": a.updateStateLocked(),
+		"entry":       ev,
+		"exitRoles":   a.exitRolesLocked(),
 		"host":        a.Host.Name,
 		"os":          runtime.GOOS,
 		"kernel":      map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": a.kernelVersion(), "path": a.kernelExe},
@@ -616,9 +619,19 @@ func (a *App) routes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/instances", func(w http.ResponseWriter, r *http.Request) {
 		// 新建向导（decisions UI-25）：名称、期望地区随这一个请求交来，启动之前就写好，不再建好后再改
-		var b newOpts
+		// 默认密码开关（decisions M-8）：useDefault / password 只进加密的密码库，不进实例配置
+		var b struct {
+			newOpts
+			UseDefault *bool   `json:"useDefault"`
+			Password   *string `json:"password"`
+		}
 		_ = body(r, &b)
-		id, no, note := a.CreateInstance(b)
+		id, no, note := a.CreateInstance(b.newOpts)
+		if b.UseDefault != nil && a.vault != nil && a.vaultErr == "" {
+			if err := a.vault.SetPassMode(id, *b.UseDefault, b.Password); err != nil {
+				log.Printf("新实例：记密码选择：%v", err)
+			}
+		}
 		go func() {
 			if err := a.Launch(id); err != nil {
 				log.Printf("启动新实例失败：%v", err)
@@ -734,7 +747,7 @@ func (a *App) routes(mux *http.ServeMux) {
 		case "test":
 			go a.Scan(id)
 			reply(w, nil, nil)
-		case "tune": // 入口优选：现在就做一轮（同样受每天的流量上限约束，decisions N-6）
+		case "tune": // 入口优选：现在就做一轮（全局，同样受每天的流量上限约束，decisions N-6、N-11）
 			go a.TuneRound(id)
 			reply(w, nil, nil)
 		case "ping": // 只测这几个地址的延迟：{keys: ["地址:端口" 或 "类型|值", …]}（界面上点延迟）
@@ -821,6 +834,8 @@ func (a *App) routes(mux *http.ServeMux) {
 			Expand       *bool
 			RefreshHours *int
 			URL          *string // 列表源：换网址（先拉新的，拉到了才换）
+			// Role：这一条当入口还是当出口（decisions N-11）："entry" 优选 IP | "exit" ProxyIP | "auto" 自动（Cloudflare 官方 IP 当入口）
+			Role *string
 		}
 		if err := body(r, &b); err != nil {
 			reply(w, nil, err)
@@ -846,11 +861,30 @@ func (a *App) routes(mux *http.ServeMux) {
 			if b.RefreshHours != nil {
 				e.RefreshHours = *b.RefreshHours
 			}
+			if b.Role != nil && e.Type == "proxyip" {
+				yes, no := true, false
+				switch *b.Role {
+				case "entry":
+					e.UsableAsEntry = &yes
+				case "exit":
+					e.UsableAsEntry = &no
+				default:
+					e.UsableAsEntry = nil
+				}
+			}
 			e.UpdatedAt = now()
 			a.saveLocked("exits")
 			a.bumpLocked("state", "")
 		}
+		var changed []string
+		if b.Role != nil && e != nil { // 角色变了：选着它当出口的实例要换（heal），入口池变了全局入口可能要换
+			changed = a.healAllLocked()
+		}
 		a.mu.Unlock()
+		if b.Role != nil {
+			a.healed(changed)
+			go a.rescanET()
+		}
 		if b.URL == nil && (b.Expand != nil || b.RefreshHours != nil) { // 只改备注不用重新解析
 			go a.ResolveExit(id)
 		}
@@ -885,6 +919,18 @@ func (a *App) routes(mux *http.ServeMux) {
 		a.mu.Unlock()
 		a.healed(changed)
 		reply(w, map[string]any{"changed": len(changed)}, nil)
+	})
+	// 全局入口（decisions N-11）：{pin: "地址:端口"} 钉死这一个；{auto: true} 改回自动。全部 edgetunnel 实例一起热换。
+	mux.HandleFunc("PUT /api/entry", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Pin  string `json:"pin"`
+			Auto bool   `json:"auto"`
+		}
+		if err := body(r, &b); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		reply(w, nil, a.SetEntry(b.Pin, b.Auto || b.Pin == ""))
 	})
 	mux.HandleFunc("POST /api/addresses", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {

@@ -10,7 +10,7 @@ import { openInst, launching } from './menu.js';
 //   host.open(页)  打开另一页（管理页等）   host.back()    顶栏左上角的返回（面板首页时）
 // 2026-11-15 起照已确认的 Chrome 风格演示排版（决策 UI-1）：Chrome 设置页那样一行一件事，分组标题 + 图标 + 标题 + 副标题 + 开关 / “>”。
 //   出口 = 反代（ProxyIP）：自动 = 只定国家，程序在这个国家里挑、不通自动换；手动 = 钉死一个 IP。
-//   入口 = 优选 IP：自动 = 跟着出口（同一台机器能当入口就用它，否则挑延迟最低的）；手动 = 钉死一个。
+//   入口 = 优选 IP：2026-11-23 起全部实例共用一个（决策 N-11）。自动 = 按时段优选、一起换；钉死 = 全局固定一个。实例上不再有入口设置。
 // 模式只由开关改。在列表里选东西时把模式一起明说给核心服务，不靠它猜。
 // 2026-11 起按需求方定的四条（决策 UI-9）：国家用下拉栏选（不再单开一页）；选中 = 整行换底色，行尾不放单选圈、不写“当前”；
 //   有图标就不再写字（住宅 / 机房只画图标）；IP 写全，同一件事一页只出现一次（首页不再有“当前出口 / 当前入口”两行）。
@@ -143,12 +143,22 @@ function filtered(items, countryOf, ipOf) {
   sorted.forEach((x, k) => { if (!frozen.pos.has(x.id)) frozen.pos.set(x.id, base + k); });
   return sorted.slice().sort((a, b) => frozen.pos.get(a.id) - frozen.pos.get(b.id));
 }
-// 添加地址（edgetunnel 的地址库）：右下角的“+”。
+// 添加地址（edgetunnel 的地址库）：出口列表右下角的“+”。
 const addAddr = async () => {
-  const v = await ask('添加地址', { multiline: true, placeholder: '每行一个：IP、IP:端口、域名，可加 #备注\n或列表网址 https://…/ip.txt\nsocks5://用户:密码@主机:端口', note: '优选还是反代不用区分，探测后自动识别。', ok: '添加' });
+  const v = await ask('添加出口', { multiline: true, placeholder: '每行一个：ProxyIP（IP、IP:端口、域名，可加 #备注）\n或列表网址 https://…/proxyip.txt\nsocks5://用户:密码@主机:端口、sstp://…', note: '进地址库。Cloudflare 官方 IP 自动归到入口（优选 IP），其余当出口。', ok: '添加' });
   if (!v || !v.trim()) return;
   run(async () => { const r = await api('POST', '/api/exits', { text: v }); toast(r.added ? `已添加 ${r.added} 条` : '没有新地址'); await load(); });
 };
+// 添加优选 IP（入口列表右下角的“+”）：进入口池（全部实例共用，决策 N-11），不会被当成出口。
+const addEntry = async () => {
+  const v = await ask('添加优选 IP', { multiline: true, placeholder: '每行一个：IP、IP:端口、域名（优选域名也行）', note: '进入口池：只当入口用，全部实例共用。ProxyIP 请加到出口。', ok: '添加' });
+  const lines = (v || '').split(/[\s,]+/).map((x) => x.replace(/#.*$/, '').trim()).filter(Boolean);
+  if (!lines.length) return;
+  run(async () => { for (const server of lines.slice(0, 50)) await api('POST', '/api/addresses', { server }); toast(`已添加 ${Math.min(lines.length, 50)} 个`); await load(); });
+};
+// 全局入口（决策 N-11）：钉死一个 / 改回自动。全部实例一起换，不断开已有连接。
+const setEntry = (body, msg) => run(async () => { await api('PUT', '/api/entry', body); await load(); }, msg);
+const ENTRY_TIP = '入口（优选 IP）全部实例共用一个：换的时候所有实例一起换，不断开已有的连接。\n每个实例只有出口不同（ProxyIP / SSTP / SOCKS5），网站看到的是出口。';
 // 列表头：返回、标题、数量，右边是“测下载”（edgetunnel）和“测延迟”。
 function head(sub, title, n, rows, key, extra) {
   const pr = sub.progress;
@@ -164,7 +174,7 @@ function head(sub, title, n, rows, key, extra) {
 function regionRows(sub, typ = '') {
   const reg = new Map(), get = (k) => reg.get(k) || reg.set(k, { n: 0, res: 0, ent: 0, best: 1e9 }).get(k);
   for (const p of sub.pips || []) { if (!(p.delay > 0) || (typ && p.type !== typ)) continue; const k = pcc(p); if (!k) continue; const r = get(k); r.n++; r.best = Math.min(r.best, p.delay); if (ipq(p.cf?.ip || p.exit?.ip)?.type === 'res') r.res++; }
-  if (!typ) for (const n of sub.nodes) { if (!(n.delay > 0)) continue; const k = ecc(n); if (!k) continue; const r = get(k); r.ent++; if (!r.n) r.best = Math.min(r.best, n.delay); }
+  if (!typ && !isET(sub)) for (const n of sub.nodes) { if (!(n.delay > 0)) continue; const k = ecc(n); if (!k) continue; const r = get(k); r.ent++; if (!r.n) r.best = Math.min(r.best, n.delay); } // edgetunnel 的入口是全局的，不决定出口国家（N-11）
   return [...reg.entries()].sort((a, b) => a[1].best - b[1].best);
 }
 // 出口列表里有哪几类、各几个能用的（下拉顶上的分段、出口列表的筛选芯片用）。ProxyIP、SSTP、SOCKS5 一直在；HTTP 之类有才出现。
@@ -184,40 +194,28 @@ async function pickRegion(anchor, me, sub) {
   let typ = curT;
   for (;;) {
     const rows = regionRows(sub, typ), alive = sub.nodes.filter((n) => n.delay > 0), pool = (sub.pips || []).filter((p) => p.delay > 0 && (!typ || p.type === typ));
-    const best = typ ? (pool.length ? Math.min(...pool.map((p) => p.delay)) : 0) : alive.length ? Math.min(...alive.map((n) => n.delay)) : 0;
+    const best = typ || et ? (pool.length ? Math.min(...pool.map((p) => p.delay)) : 0) : alive.length ? Math.min(...alive.map((n) => n.delay)) : 0;
     const tc = typeCounts(sub), all = (sub.pips || []).filter((p) => p.delay > 0).length;
     const head = et && ((pick) => [h('div', { class: 'mhd' }, '出口类型'),
       h('div', { class: 'seg xt', role: 'tablist' }, [['', '全部', all], ...tc.map(([t, n]) => [t, XT_NAME[t] || t, n])].map(([t, name, n]) =>
         h('button', { class: typ === t ? 'on' : '', role: 'tab', 'aria-selected': typ === t ? 'true' : 'false', title: t ? `只用 ${name} 出口（${n} 个能用）` : '不限类型', onclick: (ev) => { ev.stopPropagation(); if (t !== typ) pick({ t }); } }, name, h('i', {}, n)))),
       h('div', { class: 'mhd' }, '国家')]);
-    const v = await dropdown(anchor, [['', '不限', typ ? [cntEl('swap', pool.length, '出口'), dEl(best)] : [cntEl('enter', alive.length, '入口'), dEl(best)], anyFlag()],
+    const v = await dropdown(anchor, [['', '不限', typ || et ? [cntEl('swap', pool.length, '出口'), dEl(best)] : [cntEl('enter', alive.length, '入口'), dEl(best)], anyFlag()],
       ...rows.map(([k, r]) => [k, cname(k), [et && r.n ? cntEl('home', r.res, '住宅出口') : null, et && r.n ? cntEl('swap', r.n, '出口') : cntEl('enter', r.ent, '入口'), dEl(r.best)], flag(k)])], typ === curT ? cur : null, { head });
     if (v && typeof v === 'object') { typ = v.t; continue; } // 换了类型：按这一类重画
     if (v != null && (v !== cur || typ !== curT)) patch({ proxy: { region: v, exitType: typ, exitMode: 'auto', state: 'on' } });
     return;
   }
 }
-// 入口国家的下拉栏（只有 edgetunnel）：第一项“跟随出口”（默认）；其余是有可用入口的国家。
-function entryRegions(sub) {
-  const m = new Map();
-  for (const n of sub.nodes) { if (!(n.delay > 0)) continue; const k = ecc(n); if (!k) continue; const r = m.get(k) || m.set(k, { n: 0, best: 1e9 }).get(k); r.n++; r.best = Math.min(r.best, n.delay); }
-  return [...m.entries()].sort((a, b) => a[1].best - b[1].best);
-}
-async function pickEntryRegion(anchor, me, sub) {
-  const cur = (me.proxy.entryRegion || '').toUpperCase();
-  const v = await dropdown(anchor, [['', '跟随出口', null, h('span', { class: 'flag q' }, icon('swap', 16))],
-    ...entryRegions(sub).map(([k, r]) => [k, cname(k), [cntEl('enter', r.n, '入口'), dEl(r.best)], flag(k)])], cur);
-  if (v != null && v !== cur) patch({ proxy: { entryRegion: v, entryMode: 'auto', state: 'on' } });
-}
 // 自定义 ProxyIP / 自定义入口地址：填一个，加进地址库并立刻用上（手动）。域名要先解析、探测，之后在列表里选。
 async function customAddr(me, sub, what) {
   const exit = what === 'exit';
   const v = await ask(exit ? '自定义 ProxyIP' : '自定义入口地址', { placeholder: exit ? '1.2.3.4、1.2.3.4:443、域名、socks5://…' : '1.2.3.4、1.2.3.4:443、域名',
-    note: exit ? 'CF 网站从它出去。会加进地址库，探测后显示国家和纯净度。' : '连到服务端用的地址（优选 IP）。会加进地址库。', ok: '使用' });
+    note: exit ? 'CF 网站从它出去。会加进地址库，探测后显示国家和纯净度。' : '连到服务端用的地址（优选 IP）。进入口池，全部实例一起换过去。', ok: '使用' });
   const text = (v || '').trim().split(/\s+/)[0];
   if (!text) return;
   run(async () => {
-    await api('POST', '/api/exits', { text });
+    await api('POST', exit ? '/api/exits' : '/api/addresses', exit ? { text } : { server: text }); // 入口进入口池（自己加的优选 IP），不进地址库：免得被当成出口
     await load();
     const bare = text.replace(/^[a-z0-9]+:\/\//i, '').replace(/#.*$/, ''), same = (x) => x === bare || x === bare + ':443' || x.replace(/^.*@/, '') === bare;
     const s2 = st.subscriptions.find((x) => x.id === sub.id) || sub;
@@ -226,7 +224,7 @@ async function customAddr(me, sub, what) {
       if (e && (p || !e.expand)) { await api('PATCH', `/api/instances/${me.id}`, { proxy: { pipId: p ? p.id : e.id, exitMode: 'manual', state: 'on' } }); await load(); toast('已使用'); return; }
     } else {
       const n = s2.nodes.find((x) => x.from !== 'sub' && (same(addrText(x)) || same(keyOf(x))));
-      if (n) { await api('PATCH', `/api/instances/${me.id}`, { proxy: { nodeId: n.id, entryMode: 'manual', state: 'on' } }); await load(); toast('已使用'); return; }
+      if (n) { await api('PUT', '/api/entry', { pin: keyOf(n) }); await load(); toast('全部实例已换到这个入口'); return; }
     }
     toast('已加进地址库，探测完后在列表里选');
   });
@@ -243,7 +241,7 @@ function exitView(me, sub) {
     p.cf?.ip ? `CF 网站看到：${p.cf.ip}  ${cname(pcc(p))} ${where(p.cf)}` : null,
     puLine(ipOf(p)),
     p.speed > 0 ? `下载：峰值 ${p.speed} Mbps，平均 ${p.speedAvg} Mbps` : null,
-    p.err ? (p.delay > 0 ? `待复测：最近一次没测通（${p.err}）` : `不通：${p.err}`) : null, p.derived ? '来自订阅里的入口地址' : null].filter(Boolean).join('\n');
+    p.err ? (p.delay > 0 ? `待复测：最近一次没测通（${p.err}）` : `不通：${p.err}`) : null].filter(Boolean).join('\n');
   const pickIt = (id) => { view = ''; patch({ proxy: { pipId: id, exitMode: 'manual', state: 'on' } }); };
   const resChip = h('button', { class: 'chip ico' + (resOnly ? ' on' : ''), title: '只看住宅', 'aria-label': '只看住宅', 'aria-pressed': resOnly ? 'true' : 'false', onclick: () => { resOnly = !resOnly; render(); } }, icon('home', 17));
   // 类型芯片（decisions N-5）：和国家下拉一起筛；VPN Gate 源里的每一台都在 SSTP 里
@@ -270,25 +268,27 @@ function exitView(me, sub) {
 
 // 入口列表（优选 IP；通用订阅时是节点列表）。点一行 = 就用这个（手动）。
 function entryView(me, sub) {
-  const et = isET(sub), cur = et ? me.proxy.addressId : me.proxy.nodeKey, tv = et ? sub.tune : null;
+  const et = isET(sub), cur = et ? st.entry?.id : me.proxy.nodeKey, tv = et ? sub.tune : null;
   // 入口优选（decisions N-6）：有当前时段的分数时多一个“本时段”排序，最好的那一行标出来
   tuneNow = tv?.scores || null;
   sortsNow = et ? (tuneNow ? ['tune', 'delay', 'speed'] : ['delay', 'speed']) : ['delay'];
   if (!sortsNow.includes(sortBy)) sortBy = sortsNow[0];
   const rows = filtered(sub.nodes, ecc), alive = sub.nodes.filter((n) => n.delay > 0).length;
-  const bestId = (me.proxy.entryMode !== 'manual' && me.tune?.id) || tv?.best?.id || '', bestWhy = me.tune?.id === bestId ? me.tune.reason : tv?.best?.reason || '';
+  const bestId = st.entry?.tune?.id || tv?.best?.id || '', bestWhy = st.entry?.tune?.id === bestId ? st.entry.tune.reason : tv?.best?.reason || '';
   const tipOf = (n) => [`${keyOf(n)}${n.label ? '   ' + n.label : ''}`,
     n.colo ? `机房 ${n.colo}，普通网站的出口在${cname(ecc(n))}` : (n.exit?.ip ? `出口：${n.exit.ip} ${where(n.exit)}` : null),
     n.speed > 0 ? `下载：峰值 ${n.speed} Mbps，平均 ${n.speedAvg} Mbps` : null,
     tuneNow?.[n.id] != null ? `本时段分数 ${tuneNow[n.id]}（依据：${tv.known?.[n.id] || '本时段'}的下载记录）` : null,
     n.id === bestId && bestWhy ? `当前时段最佳：${bestWhy}` : null,
     n.err ? (n.delay > 0 ? `待复测：最近一次没测通（${n.err}）` : `不通：${n.err}`) : null, n.from === 'sub' ? `来自订阅“${st.subscriptions.find((x) => x.id === n.subId)?.name || '已删除'}”${n.gone ? '（已不在最新的订阅里，还通所以留用）' : ''}` : '自己加的'].filter(Boolean).join('\n');
-  const pickIt = (n) => { view = ''; patch({ proxy: et ? { nodeId: n.id, entryMode: 'manual', state: 'on' } : { nodeId: n.id, exitMode: 'manual', state: 'on' } }); };
+  // edgetunnel：点一行 = 全局钉死这个入口（全部实例一起换，N-11）；通用订阅：点一行 = 这个实例用这个节点
+  const pickIt = (n) => { view = ''; if (et) setEntry({ pin: keyOf(n) }, '全部实例已换到这个入口'); else patch({ proxy: { nodeId: n.id, exitMode: 'manual', state: 'on' } }); };
   const kf = (k, t) => h('button', { class: 'chip' + (kindFlt === k ? ' on' : ''), title: '只看' + t, 'aria-pressed': kindFlt === k ? 'true' : 'false', onclick: () => { kindFlt = kindFlt === k ? '' : k; render(); } }, t);
   // 立即优选一轮（入口优选，decisions N-6）：测全部延迟 + 挑几个测下载、按小时记下；受每天的流量上限约束
   const tuneB = tv && h('button', { class: 'ib' + (tv.busy ? ' on' : ''), title: tv.busy ? '正在优选…' : '立即优选一轮（测延迟，再挑几个测下载，按小时记下）', 'aria-label': '立即优选', disabled: tv.busy,
     onclick: () => run(async () => { await api('POST', `/api/subscriptions/${sub.id}/tune`); await load(); }, '正在优选…') }, h('span', { class: tv.busy ? 'ic spin' : 'ic' }, icon(tv.busy ? 'refresh' : 'clock', 22)));
-  return [head(sub, et ? '入口 优选 IP' : '节点', `${alive} / ${sub.nodes.length}`, rows, keyOf, tuneB),
+  const shared = et && h('span', { class: 'ib tipq', title: ENTRY_TIP, 'aria-label': '全部实例共用' }, icon('swap', 20));
+  return [head(sub, et ? '入口 优选 IP' : '节点', `${alive} / ${sub.nodes.length}`, rows, keyOf, [shared, tuneB]),
     chips(sub.nodes, ecc, et && [kf('cf', '优选'), kf('proxy', '反代')]),
     h('div', { class: 'ls', role: 'listbox' },
       rows.map((n) => { const on = n.id === cur; return h('button', { class: 'iprow r t' + (on ? ' on' : '') + (n.delay < 0 ? ' dead' : ''), role: 'option', 'data-k': 'n:' + n.id, 'aria-selected': on ? 'true' : 'false', title: tipOf(n), onclick: () => pickIt(n) },
@@ -302,7 +302,7 @@ function entryView(me, sub) {
         speedCell(sub, n, keyOf(n)),
         dlyBtn(sub, n, et ? keyOf(n) : '')); }),
       !rows.length && h('div', { class: 'empty' }, sub.scanning ? '正在探测…' : '没有')),
-    et && [h('div', { class: 'pad-fab' }), h('button', { class: 'fab', title: '添加地址', 'aria-label': '添加地址', onclick: addAddr }, icon('add', 26))]];
+    et && [h('div', { class: 'pad-fab' }), h('button', { class: 'fab', title: '添加优选 IP（只当入口）', 'aria-label': '添加优选 IP', onclick: addEntry }, icon('add', 26))]];
 }
 
 // 订阅线路：已添加了几条线路（一个订阅地址通常是一个 Host + 一个凭据；同时开了 ws 和 xhttp、或配了几个域名的会有几条）。点哪条用哪条。
@@ -391,7 +391,8 @@ function exitCard(me, fixAuto) {
 
 function mainView(me, sub) {
   const rt = me.rt, px = me.proxy, on = px.state === 'on', p = rt.probe, et = isET(sub), kids = [];
-  const exitAuto = px.exitMode !== 'manual', entryAuto = px.entryMode !== 'manual', region = (px.region || '').toUpperCase();
+  const exitAuto = px.exitMode !== 'manual', region = (px.region || '').toUpperCase();
+  const E = st.entry || {}, entryAuto = E.auto !== false; // 入口全局一个（决策 N-11）
   const live = rt.running || rt.starting, mine = me.id === st.me?.id;
   kids.push(appBar('节点与出口', host.back && { fn: () => host.back(), title: host.backTitle || '返回' },
     on && live && h('button', { class: 'ib', title: '重新探测出口', 'aria-label': '重新探测出口', onclick: () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); }, '正在探测…') }, icon('refresh', 22))));
@@ -405,20 +406,20 @@ function mainView(me, sub) {
   }
   const banner = (bad, text, ...acts) => h('div', { class: 'warn' + (bad ? ' bad' : '') }, icon('warn', 20), h('span', { class: 'tx' }, text), acts);
   const lk = (text, fn) => h('button', { class: 'lk', onclick: fn }, text);
-  const allAuto = () => { const curId = pipIdOf(px), pip = et && curId ? (sub.pips || []).find((x) => x.id === curId) : null; patch({ proxy: { exitMode: 'auto', entryMode: 'auto', entryRegion: '', region: (pip && pcc(pip)) || (px.region || ''), state: 'on' } }); };
-  if (on) { const c = exitCard(me, sub && (!(exitAuto && entryAuto) || px.entryRegion) ? allAuto : null); if (c) kids.push(c); }
+  const allAuto = () => { const curId = pipIdOf(px), pip = et && curId ? (sub.pips || []).find((x) => x.id === curId) : null; patch({ proxy: { exitMode: 'auto', region: (pip && pcc(pip)) || (px.region || ''), state: 'on' } }); };
+  if (on) { const c = exitCard(me, sub && !exitAuto ? allAuto : null); if (c) kids.push(c); }
   if (st.core.error) kids.push(banner(true, st.core.error, lk('重试', () => run(() => api('POST', '/api/setup/retry'), '正在重试…'))));
   const noexit = on && rt.notice?.startsWith('noexit:'), pipGone = on && sub && et && !exitAuto && p && p.direct && !p.cf;
   const restartNow = () => api('POST', restartPath(st, me));
   // 断着网的时候，提示旁边直接给“怎么修”（决策 F-HEAL）：缺什么就去选什么，不让用户自己找。
-  const curNode = sub ? sub.nodes.find((n) => n.id === (et ? px.addressId : px.nodeKey)) || null : null;
+  const curNode = sub ? sub.nodes.find((n) => n.id === (et ? E.id : px.nodeKey)) || null : null;
   const fixes = () => {
     if (!on) return [];
     if (!st.subscriptions.length) return [lk('添加订阅', () => addSub(me))];
     if (!sub) return [lk('选线路', go('sub'))];
-    if (!curNode && !(et && px.addressMode === 'same-as-exit')) return [lk(et ? '选入口' : '选节点', go('entry'))];
+    if (!curNode) return [et ? lk('加优选 IP', addEntry) : lk('选节点', go('entry'))];
     return [live && lk('再试一次', () => run(async () => { await api('POST', `/api/instances/${me.id}/probe`); await load(); }, '正在探测…')),
-      !(exitAuto && entryAuto) && lk('改自动', allAuto),
+      !exitAuto && lk('改自动', allAuto),
       linesOf().length > 1 && lk('换线路', go('sub'))];
   };
   if (rt.needRestart?.length) kids.push(banner(false, restartText(rt), lk('立即重启', () => run(restartNow))));
@@ -439,11 +440,11 @@ function mainView(me, sub) {
 
   if (sub) {
     // 出口（edgetunnel）/ 节点（通用订阅）
-    const entry = sub.nodes.find((n) => n.id === (et ? px.addressId : px.nodeKey)) || null;
+    const entry = sub.nodes.find((n) => n.id === (et ? E.id : px.nodeKey)) || null;
     const curId = pipIdOf(px), pip = et && curId ? (sub.pips || []).find((x) => x.id === curId) || null : null;
     const pool = et ? (sub.pips || []).filter((x) => x.delay > 0 && (!region || pcc(x) === region) && (!px.exitType || x.type === px.exitType)).length : 0;
     const ents = sub.nodes.filter((n) => n.delay > 0 && (!region || ecc(n) === region)).length;
-    const canNext = pool > 1 || (pool === 0 && ents > 1 && (!et || entryAuto));
+    const canNext = pool > 1 || (pool === 0 && ents > 1 && !et); // edgetunnel 不拿换入口来“换出口”（入口全局，N-11）
     const toAuto = () => patch({ proxy: { exitMode: 'auto', region: (pip && pcc(pip)) || (!et && entry && ecc(entry)) || region, state: 'on' } });
     const nextBtn = exitAuto && h('button', { class: 'lk', disabled: !canNext, title: '在这个国家里换一个出口', onclick: stop(() => run(async () => { await api('POST', `/api/instances/${me.id}/next`); await load(); }, '正在换…')) }, '换一个');
     kids.push(sec(et ? '出口' : '节点', nextBtn || null));
@@ -463,31 +464,29 @@ function mainView(me, sub) {
       kids.push(row({ k: 'nodeList', ic: 'swap', t: '从列表里选', s: cur, cls: entry ? 'on' : '', chev: true, aria: '选节点', onclick: go('entry') })); // 还没选时不换底色
     }
     if (et) {
-      const er = (px.entryRegion || '').toUpperCase();
-      const cur = entry ? [flagOf(ecc(entry), guessCC(entry.label)), ipSpan(addrText(entry)), entry.colo && h('span', { class: 'colo', title: '机房' }, entry.colo), dly(entry)] : null;
-      kids.push(sec('入口 优选 IP'));
-      // 自动时“现在用的是哪个入口”写在开关的副标题里（不另起一行）；手动时写在正在用的那一行里。
-      kids.push(row({ k: 'entryAuto', ic: 'tune', t: '自动选择', s: entryAuto ? (cur || '挑延迟最低的') : '固定一个，不自动换', trail: sw(entryAuto, '入口自动选择', (v) => patch({ proxy: { entryMode: v ? 'auto' : 'manual' } })) }));
-      // 当前时段最佳（入口优选，decisions N-6）：后台每小时按“下载为主、延迟为辅”给入口打分、分小时记下，
-      // 同一个出口国家里有明显更好的就自动换过去（不断开、出口不变）。这里写出它是谁、为什么。
-      const tv = sub.tune, tb = me.tune;
+      // 入口：全部实例共用一个（决策 N-11）。这里看的、改的都是全局的那一个，不是这个实例自己的。
+      const cur = entry ? [flagOf(ecc(entry), guessCC(entry.label)), ipSpan(addrText(entry)), entry.colo && h('span', { class: 'colo', title: '机房' }, entry.colo), dly(entry)] : h('span', { class: 'bad' }, '入口池是空的');
+      kids.push(sec('入口 优选 IP', h('span', { class: 'tipq shared', title: ENTRY_TIP, 'aria-label': '全部实例共用' }, icon('swap', 16), E.users > 1 ? E.users : null)));
+      // 自动时“现在用的是哪个入口”写在开关的副标题里（不另起一行）；钉死时写在“从列表里选”那一行里。
+      kids.push(row({ k: 'entryAuto', ic: 'tune', t: '自动选择', title: ENTRY_TIP, s: entryAuto ? cur : E.pinLost ? h('span', { class: 'bad' }, '钉的入口已不在入口池里，暂时按自动走') : '全部实例固定用一个',
+        trail: sw(entryAuto, '入口自动选择（全部实例共用）', (v) => setEntry(v ? { auto: true } : { pin: E.key }, v ? '全部实例的入口改回自动' : '全部实例固定用这个入口')) }));
+      // 当前时段最佳（入口优选，决策 N-6）：后台每小时按“下载为主、延迟为辅”给入口打分、分小时记下，有明显更好的就全部实例一起换过去（不断开）。
+      const tv = sub.tune, tb = E.tune;
       if (entryAuto && tv) {
-        const using = tb && tb.id === px.addressId, bn = tb && sub.nodes.find((n) => n.id === tb.id);
+        const using = tb && tb.key === E.key, bn = tb && sub.nodes.find((n) => n.id === tb.id);
         const why = tb ? h('span', { class: 'why' }, tb.reason) : null;
-        const tip = ['后台优选：只在入口自动、实例开着时测；每个订阅最多一小时一轮，每个地址最多下几 MB，IPv4、IPv6 都测',
+        const tip = ['后台优选：入口自动、有实例开着时测；最多一小时一轮，每个地址最多下几 MB，IPv4、IPv6 都测',
           `今天用了 ${fmtBytes(tv.used || 0)} / 每天最多 ${fmtBytes(tv.budget || 0)}`, tv.last ? `上一轮：${new Date(tv.last).toLocaleTimeString()}` : '还没测过',
-          tv.next ? `下一轮：${new Date(tv.next).toLocaleTimeString()} 之后` : null, '换入口时不断开已有的连接；出口国家不变'].filter(Boolean).join('\n');
+          tv.next ? `下一轮：${new Date(tv.next).toLocaleTimeString()} 之后` : null, '换入口时全部实例一起换，不断开已有的连接'].filter(Boolean).join('\n');
         // 点这一行看全部入口在这个时段的分数（列表默认按“本时段”排）；“立即优选”在列表顶上
         kids.push(row({ k: 'tuneBest', ic: 'speed', t: '当前时段最佳', cls: 'tbr', title: tip, chev: true, aria: '当前时段最佳', onclick: go('entry'),
           s: tb ? (using ? [h('span', { class: 'good' }, '正在用'), why] : [flagOf(ecc(bn || {}), ''), ipSpan(tb.key.replace(/:443$/, '')), why])
             : tv.busy ? '正在测…' : '还没有下载记录 · 后台会自动测，点开可以现在测' }));
       }
-      if (entryAuto) {
-        kids.push(row({ k: 'entryRegion', ic: 'flagI', t: '入口国家', trail: er ? [flag(er), cname(er)] : '跟随出口', drop: true, aria: '入口国家', onclick: (ev) => pickEntryRegion(ev.currentTarget, me, sub) }));
-      } else {
-        const own = !!entry && entry.from !== 'sub', live = sub.nodes.filter((n) => n.delay > 0).length;
-        kids.push(row({ k: 'entryList', ic: 'enter', t: '从列表里选', s: !own ? (cur || '未选择') : `${live} 个可用`, cls: own || !entry ? '' : 'on', chev: true, aria: '选入口', onclick: go('entry') }));
-        kids.push(row({ k: 'entryCustom', ic: 'edit', t: '自定义入口地址', s: own ? cur : 'IP 或域名', cls: own ? 'on' : '', aria: '自定义入口地址', onclick: () => customAddr(me, sub, 'entry') }));
+      if (!entryAuto) {
+        const own = !!entry && entry.from === 'custom';
+        kids.push(row({ k: 'entryList', ic: 'enter', t: '从列表里选', s: !own ? cur : `${E.alive || 0} 个可用`, cls: own ? '' : 'on', chev: true, aria: '选入口', onclick: go('entry') }));
+        kids.push(row({ k: 'entryCustom', ic: 'edit', t: '自定义入口地址', s: own ? cur : 'IP 或域名（优选 IP）', cls: own ? 'on' : '', aria: '自定义入口地址', onclick: () => customAddr(me, sub, 'entry') }));
       }
     }
   }
@@ -499,7 +498,7 @@ function mainView(me, sub) {
     kids.push(row({ k: 'fp', ic: 'finger', t: '指纹与伪装', s: [PLAT[fi.platform] || fi.platform, tz ? utc(tz) || tz : '系统时区', fi.lang || '系统语言'].filter(Boolean).join(' · '), trail: dz.total ? h('span', { class: scoreCls(dz.pct) }, `${dz.pass}/${dz.total}`) : null, chev: true, aria: '指纹与伪装', onclick: () => { fpDirect = false; view = 'fp'; fresh = true; render(); } }));
   }
   if (on && live) kids.push(row({ k: 'traffic', ic: 'speed', t: '流量', s: h('span', { class: 'mono', title: `已用 ↑ ${fmtBytes(rt.up || 0)}  ↓ ${fmtBytes(rt.down || 0)}` }, `↑ ${fmtBytes(rt.upRate)}/s   ↓ ${fmtBytes(rt.downRate)}/s`) }));
-  kids.push(h('div', { class: 'foot' }, '出口 = 网站看到的 IP；入口 = 连到服务端用的地址。'));
+  kids.push(h('div', { class: 'foot' }, '出口 = 网站看到的 IP，每个实例各自的；入口 = 连到服务端用的地址（优选 IP），全部实例共用一个。'));
   return kids;
 }
 

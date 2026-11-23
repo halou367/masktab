@@ -678,6 +678,21 @@ func (a *App) mailRoutes(mux *http.ServeMux) {
 		a.bump("state", id)
 		reply(w, nil, err)
 	})
+	// 卡密分字段原文（decisions MB-2）：信箱对话框里点眼睛 / 复制时才要。只经本地接口（R-4：只听 127.0.0.1、要令牌、带 Origin 的只认伴随扩展），
+	// 用 POST（不会被一个链接、一张图片顺手带出来），不进 /api/state、不进日志，回答不让缓存。
+	mux.HandleFunc("POST /api/mail/{id}/reveal", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !ok(w, id) {
+			return
+		}
+		m, has := a.vault.MailOf(id)
+		if !has {
+			reply(w, nil, errors.New("这个实例还没有卡密"))
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		reply(w, map[string]any{"kind": m.Kind, "email": m.Email, "password": m.Password, "clientId": m.ClientID, "refresh": m.Refresh}, nil)
+	})
 	// 立即收信：等收完再回（最多约三分钟：取件站第一次查一个邮箱要四十多秒），回的是收完以后的列表；added = 这次新来几封
 	mux.HandleFunc("POST /api/mail/{id}/fetch", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -815,7 +830,8 @@ func removeStr(l []string, s string) []string {
 
 // importCards 导入邮箱时识别出来的卡密：每张建一个实例（以邮箱命名，同导入邮箱），卡密存进密码库；
 // 已经有同一个邮箱的实例就把卡密补给它（不重复建）。返回新建几个、补给已有实例几个。
-func (a *App) importCards(cards []mailbox.Card, def string) (created, attached int) {
+// useDefault（decisions M-8）：nil = 老规矩；true / false = 新建的实例记下“用全局默认密码 / 用卡密自己的密码”（补给已有实例的不改它原来的选择）。
+func (a *App) importCards(cards []mailbox.Card, def string, useDefault *bool) (created, attached int) {
 	type job struct {
 		id  string
 		c   mailbox.Card
@@ -846,7 +862,7 @@ func (a *App) importCards(cards []mailbox.Card, def string) (created, attached i
 	a.mu.Unlock()
 	for _, j := range jobs {
 		if err := a.vault.SetMail(j.id, vault.Mail{Kind: j.c.Kind, Email: j.c.Email, Password: j.c.Password, ClientID: j.c.ClientID, Refresh: j.c.Refresh}); err != nil {
-			log.Printf("导入卡密（%s）：%v", j.c.Email, err)
+			log.Printf("导入卡密：%v", err) // 不写邮箱（日志里不留账号）
 			continue
 		}
 		if j.new {
@@ -857,7 +873,16 @@ func (a *App) importCards(cards []mailbox.Card, def string) (created, attached i
 				pass = def
 			}
 			if _, err := a.vault.Upsert(vault.Item{Inst: j.id, Site: "*", User: j.c.Email, Pass: pass, Src: "import"}); err != nil {
-				log.Printf("导入卡密（%s）：%v", j.c.Email, err)
+				log.Printf("导入卡密：%v", err)
+			}
+			if useDefault != nil {
+				own := j.c.Password
+				if own == "" && !*useDefault {
+					own = def
+				}
+				if err := a.vault.SetPassMode(j.id, *useDefault, &own); err != nil {
+					log.Printf("导入卡密：记密码选择：%v", err)
+				}
 			}
 		} else {
 			attached++

@@ -173,7 +173,22 @@ func (a *App) spareNodesLocked() []nodeRef {
 		d int
 	}
 	var cs []cand
+	// edgetunnel：入口是全局的，代理内核里只有那几个候选入口的出站（decisions N-11），从它们里挑
+	if et := a.firstETLocked(); et != nil {
+		for _, n := range a.cfgEntriesLocked() {
+			if d := a.scanLocked(n.Name).Delay; d > 0 && !n.Gone {
+				if n.Label == "" {
+					n.Label = hostPort(n.Server, n.Port)
+				}
+				n.Name = entryOut(et.ID, n.key())
+				cs = append(cs, cand{n, d})
+			}
+		}
+	}
 	for _, sub := range a.Subs {
+		if sub.Kind == "edgetunnel" && sub.Template != nil {
+			continue
+		}
 		for i, n := range a.nodesLocked(sub) {
 			if sub.Kind != "edgetunnel" && i >= maxNodesPerSub { // 超出的没写进代理内核的配置，切不过去
 				break

@@ -158,6 +158,9 @@ func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, has
 				keep = append(keep, o)
 			}
 		}
+		if a.syncSubExitsLocked(s, nodes) {
+			a.saveLocked("exits")
+		}
 		defer a.shareScanLocked() // 新同步进来的地址：别的订阅里测过的先照抄（a.Addresses 换好之后）
 	} else {
 		if !s.KindLocked {
@@ -200,6 +203,9 @@ func (a *App) DeleteSubscription(id string) (moved []int, to string) {
 		}
 	}
 	a.Addresses = ads
+	if a.dropSubExitsLocked(id, nil) { // 它带来的出口一起删（有实例用着的留下，只去掉来源标记）
+		a.saveLocked("exits")
+	}
 	changed := a.healAllLocked() // 顺带把“默认订阅”指到还在的订阅上
 	if s := a.subLocked(a.Settings.DefaultSubscriptionID); s != nil && len(moved) > 0 {
 		to = s.Name
@@ -409,4 +415,77 @@ func (a *App) refreshExits(minAge time.Duration) {
 	if changed { // 换了一批地址：测一遍，否则新地址没有延迟、不会被自动选中
 		a.rescanET()
 	}
+}
+
+// syncSubExitsLocked 把 edgetunnel 订阅各节点 path 里带的出口（proxyip= / socks5:// / /video/… 等）同步进出口库（decisions N-11）：
+// 新的加进来（标“来自订阅”）；地址库里已经有同样的（类型 + 值相同，不管谁加的）不重复加；上次带来、这次没有的删掉
+// （有实例正用着的留下，只去掉来源标记，变成普通的一条）。返回是否改了地址库。
+func (a *App) syncSubExitsLocked(s *model.Subscription, nodes []model.ProxyNode) bool {
+	found := map[string]exits.Parsed{}
+	var order []string
+	for _, n := range nodes {
+		secret := ""
+		for _, k := range []string{"uuid", "password"} {
+			if v, _ := n.Raw[k].(string); v != "" {
+				secret = v
+				break
+			}
+		}
+		for _, p := range exits.FromPath(subscription.PathOf(n.Raw), secret) {
+			k := p.Type + "|" + p.Value
+			if _, ok := found[k]; !ok {
+				found[k] = p
+				order = append(order, k)
+			}
+		}
+	}
+	changed := a.dropSubExitsLocked(s.ID, found)
+	have := map[string]bool{}
+	for _, e := range a.Exits {
+		if e.Source == "" {
+			have[e.Type+"|"+e.Value] = true
+		}
+		for _, it := range exitItems(e) {
+			have[it.Type+"|"+it.Value] = true
+		}
+	}
+	for _, k := range order {
+		if have[k] {
+			continue
+		}
+		p := found[k]
+		e := &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: p.Type, Value: p.Value, Label: "来自订阅“" + s.Name + "”", Expand: p.IsDomain, RefreshHours: 3, Resolved: []string{}, Sub: s.ID}
+		a.Exits = append(a.Exits, e)
+		changed = true
+		if e.Expand {
+			go a.ResolveExit(e.ID)
+		}
+	}
+	return changed
+}
+
+// dropSubExitsLocked 删掉订阅 subID 带来、又不在 keep 里的出口；有实例正用着的留下（去掉来源标记）。
+func (a *App) dropSubExitsLocked(subID string, keep map[string]exits.Parsed) bool {
+	used := map[string]bool{}
+	for _, in := range a.Instances {
+		if in.Proxy.ExitID != "" {
+			used[in.Proxy.ExitID] = true
+		}
+	}
+	changed := false
+	var out []*model.ExitEntry
+	for _, e := range a.Exits {
+		if e.Sub == subID && subID != "" {
+			if _, ok := keep[e.Type+"|"+e.Value]; !ok {
+				changed = true
+				if !used[e.ID] {
+					continue
+				}
+				e.Sub, e.UpdatedAt = "", now()
+			}
+		}
+		out = append(out, e)
+	}
+	a.Exits = out
+	return changed
 }

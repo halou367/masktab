@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/halou367/masktab/internal/model"
+	"github.com/halou367/masktab/internal/vault"
 )
 
 // 编出来的卡密（不是真的账号）。
@@ -395,5 +396,152 @@ func TestMailFailsCacheReadHide(t *testing.T) {
 	do("DELETE", "/api/mail/i2", "")
 	if _, err := os.Stat(a.mailCachePath("i2")); err == nil {
 		t.Fatal("删卡密后缓存还在")
+	}
+}
+
+// 卡密分字段查看（decisions MB-2）：POST /api/mail/{id}/reveal 回四个字段原文、不让缓存；GET 不行；没卡密 / 没这个实例报错；
+// 平常的 GET /api/mail/{id} 仍然只有脱敏的样子。
+func TestMailReveal(t *testing.T) {
+	_, do := mailApp(t)
+	card := "a@outlook.com----pass-word-1----00000000-1111-2222-3333-444444444444----" + testRT
+	b, _ := json.Marshal(map[string]string{"card": card})
+	if code, out := do("PUT", "/api/mail/i1", string(b)); code != 200 {
+		t.Fatalf("设卡密：%d %s", code, out)
+	}
+	code, out := do("POST", "/api/mail/i1/reveal", "")
+	var got map[string]string
+	_ = json.Unmarshal([]byte(out), &got)
+	if code != 200 || got["email"] != "a@outlook.com" || got["password"] != "pass-word-1" || got["clientId"] != "00000000-1111-2222-3333-444444444444" || got["refresh"] != testRT || got["kind"] != "outlook" {
+		t.Fatalf("reveal：%d %s", code, out)
+	}
+	if code, _ = do("GET", "/api/mail/i1/reveal", ""); code == 200 {
+		t.Fatal("reveal 只认 POST")
+	}
+	if code, out = do("POST", "/api/mail/i2/reveal", ""); code == 200 || !strings.Contains(out, "还没有卡密") {
+		t.Fatalf("没卡密：%d %s", code, out)
+	}
+	if code, _ = do("POST", "/api/mail/nope/reveal", ""); code == 200 {
+		t.Fatal("不存在的实例")
+	}
+	if _, out = do("GET", "/api/mail/i1", ""); strings.Contains(out, testRT) || strings.Contains(out, "pass-word-1") {
+		t.Fatalf("平常的信箱接口要脱敏：%s", out)
+	}
+}
+
+// 回答不让缓存
+func TestMailRevealNoStore(t *testing.T) {
+	a, _ := mailApp(t)
+	mux := http.NewServeMux()
+	a.mailRoutes(mux)
+	_ = a.vault.SetMail("i1", vault.Mail{Kind: "icloud", Email: "x@icloud.com"})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/mail/i1/reveal", nil))
+	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Body.String(), `"kind":"icloud"`) {
+		t.Fatalf("%d %q %s", w.Code, w.Header().Get("Cache-Control"), w.Body.String())
+	}
+}
+
+// 默认密码开关（decisions M-8）：导入时 useDefault=true → 自动填写用全局默认密码（所有勾选的实例一样）；false → 各用各的；
+// 抽屉里切换（PUT /api/vault/pwmode）；GET /api/vault?inst= 带出选择；卡密本身的密码不动（收信照用）。
+func TestImportUseDefault(t *testing.T) {
+	a, do := mailApp(t)
+	_ = a.vault.SetDefault("Global-Def-9")
+	match := func(inst string) map[string]any {
+		r := httptest.NewRequest("GET", "/api/vault/match?site=https%3A%2F%2Fnew.test", nil)
+		r.Header.Set("X-MaskTab-Inst", inst)
+		w := httptest.NewRecorder()
+		mux := http.NewServeMux()
+		a.accountRoutes(mux)
+		mux.ServeHTTP(w, r)
+		var out map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	starPass := func(m map[string]any) string {
+		for _, x := range m["items"].([]any) {
+			if it := x.(map[string]any); it["site"] == "*" {
+				return it["pass"].(string)
+			}
+		}
+		return "?"
+	}
+	text := strings.Join([]string{"d1@outlook.com----pw-d1----cid-d1----" + testRT, "d2@gmail.com----own-d2", "d3@gmail.com"}, "\n")
+	b, _ := json.Marshal(map[string]any{"text": text, "password": "Batch-Typed", "useDefault": true})
+	code, out := do("POST", "/api/import/emails", string(b))
+	if code != 200 || !strings.Contains(out, `"created":3`) || strings.Contains(out, "noDefault") {
+		t.Fatalf("导入（用默认）：%d %s", code, out)
+	}
+	if a.vault.Default() != "Global-Def-9" {
+		t.Fatal("勾了用默认密码：这批输入框里的不能改掉全局默认密码")
+	}
+	byName := map[string]string{}
+	for _, in := range a.Instances {
+		byName[in.Name] = in.ID
+	}
+	for _, n := range []string{"d1@outlook.com", "d2@gmail.com", "d3@gmail.com"} {
+		m := match(byName[n])
+		if m["default"] != "Global-Def-9" || m["pwMode"] != "default" || starPass(m) != "Global-Def-9" {
+			t.Fatalf("%s 用默认密码：%v", n, m)
+		}
+	}
+	if mc, _ := a.vault.MailOf(byName["d1@outlook.com"]); mc.Password != "pw-d1" || mc.Refresh != testRT {
+		t.Fatalf("信箱收信仍用卡密自己的凭据：%+v", mc)
+	}
+	// 抽屉里切成自定义：d1 用卡密里的密码，d2 用自带的
+	for n, want := range map[string]string{"d1@outlook.com": "pw-d1", "d2@gmail.com": "own-d2"} {
+		bb, _ := json.Marshal(map[string]any{"inst": byName[n], "useDefault": false})
+		if code, out := do("PUT", "/api/vault/pwmode", string(bb)); code != 200 {
+			t.Fatalf("切换：%d %s", code, out)
+		}
+		if m := match(byName[n]); m["pwMode"] != "custom" || m["default"] != want || starPass(m) != want {
+			t.Fatalf("%s 自定义：%v", n, m)
+		}
+	}
+	_, out = do("GET", "/api/vault?inst="+byName["d2@gmail.com"], "")
+	if !strings.Contains(out, `"pwMode":{"explicit":true,"pass":"own-d2","useDefault":false}`) {
+		t.Fatalf("抽屉读到的选择：%s", out)
+	}
+	if code, _ := do("PUT", "/api/vault/pwmode", `{"inst":"nope","useDefault":true}`); code == 200 {
+		t.Fatal("不存在的实例")
+	}
+	if code, _ := do("PUT", "/api/vault/pwmode", `{"inst":"i1"}`); code == 200 {
+		t.Fatal("没说用不用默认要报错")
+	}
+	// 不勾：各用各的；没写密码的用这批手填的；全局默认密码不动
+	b, _ = json.Marshal(map[string]any{"text": "e1@gmail.com\ne2@gmail.com----own-e2\ne3@outlook.com----pw-e3----cid----" + testRT + "-e3", "password": "Batch-Typed", "useDefault": false})
+	if code, out = do("POST", "/api/import/emails", string(b)); code != 200 {
+		t.Fatalf("导入（自定义）：%d %s", code, out)
+	}
+	for _, in := range a.Instances {
+		byName[in.Name] = in.ID
+	}
+	for n, want := range map[string]string{"e1@gmail.com": "Batch-Typed", "e2@gmail.com": "own-e2", "e3@outlook.com": "pw-e3"} {
+		if m := match(byName[n]); m["pwMode"] != "custom" || m["default"] != want || starPass(m) != want {
+			t.Fatalf("%s 自定义：%v", n, m)
+		}
+	}
+	if a.vault.Default() != "Global-Def-9" {
+		t.Fatal("不勾时也不改全局默认密码")
+	}
+	// 勾了但全局默认密码没设：回答里提示
+	_ = a.vault.SetDefault("")
+	b, _ = json.Marshal(map[string]any{"text": "f1@gmail.com", "useDefault": true})
+	if _, out = do("POST", "/api/import/emails", string(b)); !strings.Contains(out, `"noDefault":true`) {
+		t.Fatalf("没设默认密码要提示：%s", out)
+	}
+}
+
+// 日志里不打印邮箱（decisions MB-2）：导入邮箱 / 卡密的出错日志只写原因。查源码里 log 调用有没有带邮箱变量。
+func TestNoEmailInLogs(t *testing.T) {
+	for _, f := range []string{"accounts.go", "mail.go", "newinst.go", "api.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.Contains(line, "log.Print") && (strings.Contains(line, ".Email") || strings.Contains(line, ".email") || strings.Contains(line, "c.Email")) {
+				t.Errorf("%s:%d 日志里带了邮箱：%s", f, i+1, strings.TrimSpace(line))
+			}
+		}
 	}
 }

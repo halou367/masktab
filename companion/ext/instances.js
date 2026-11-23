@@ -2,8 +2,8 @@
 // 卡片写出口国旗和完整 IP（决策 UI-10；以前只画国旗、悬停才看到 IP）；记住账号的站点画成小图标；长按卡片拖动排序；
 // 点卡片打开右侧抽屉看账号、密码、Cookie；“导入邮箱”批量建实例。
 import { api, shownExit, RESTART_WHY } from './api.js';
-import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, appBar, sec, row, sw, ask, confirmDlg, overlay } from './ui.js';
-import { newWizard } from './wizard.js';
+import { h, icon, ibtn, flag, toast, run, delayText, delayCls, cname, appBar, sec, row, sw, ask, confirmDlg, overlay, toggle } from './ui.js';
+import { newWizard, noDefNote } from './wizard.js';
 import { siteIcon, siteName, siteKey, uniqSites } from './sites.js';
 import { face, busyLine, openInst, launching } from './menu.js';
 import { mailRows, cardLines } from './mail.js';
@@ -192,11 +192,33 @@ let accts = { id: '', items: null, at: 0 }, shown = new Set(), editing = '';
 async function loadAccts(id, force) {
   if (!force && accts.id === id && Date.now() - accts.at < 5000) return;
   const r = await api('GET', `/api/vault?inst=${encodeURIComponent(id)}`);
-  accts = { id, items: r.items, at: Date.now() };
+  accts = { id, items: r.items, mode: r.pwMode || null, at: Date.now() };
   ctx.render();
 }
 function copy(text, what) {
   navigator.clipboard.writeText(text).then(() => { toast(`已复制${what}，30 秒后清空剪贴板`); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30_000); }, () => toast('复制失败', true));
+}
+// 抽屉里的“默认密码”开关（decisions M-8）：勾上 = 网站自动填写用全局默认密码；不勾 = 用这个实例自己的密码（可以看、改）。
+// 只管网站自动填写，信箱收信一直用卡密自己的凭据。
+function pwRows(i, m) {
+  if (!m) return null;
+  const hasDef = !!ctx.st.vault?.hasDefault, show = shown.has('pw:' + i.id);
+  const reload = async () => { await loadAccts(i.id, true); await ctx.load(true); };
+  const setMode = (useDefault, password) => run(async () => { await api('PUT', '/api/vault/pwmode', { inst: i.id, useDefault, ...(password != null ? { password } : {}) }); await reload(); },
+    useDefault ? '已改成用默认密码' : '已改成用这个实例自己的密码');
+  const editOwn = async () => {
+    const v = await ask(`#${i.no} 自己的密码`, { value: m.pass || '', ok: '保存', note: '不勾“默认密码”时，这个实例在网站上自动填写用它。' });
+    if (v != null) setMode(false, v);
+  };
+  const s = m.useDefault ? (hasDef ? '网站自动填写用全局默认密码（勾上的实例都一样）' : h('span', { class: 'bad' }, '全局默认密码还没设置'))
+    : ['用这个实例自己的密码 · ', h('span', { class: 'pw mono' }, m.pass ? (show ? m.pass : '•'.repeat(Math.min(12, Math.max(6, m.pass.length)))) : '还没填')];
+  return [h('h3', {}, icon('key', 16), '网站密码'), row({ ic: 'key', t: '默认密码', s, trail: sw(m.useDefault, m.useDefault ? '不用默认密码，改用这个实例自己的密码' : '改用全局默认密码',
+    (v) => { if (!v && !m.pass) editOwn(); else setMode(v); }) }),
+  m.useDefault && !hasDef && h('div', { class: 'pwrow', style: { padding: '0 16px 8px' } }, noDefNote(() => ctx.load(true))),
+  !m.useDefault && h('div', { class: 'pwrow', style: { padding: '0 16px 8px', justifyContent: 'flex-end' } },
+    m.pass && ibtn('eye', show ? '隐藏密码' : '显示密码', () => { show ? shown.delete('pw:' + i.id) : shown.add('pw:' + i.id); ctx.render(); }),
+    m.pass && ibtn('copy', '复制密码', () => copy(m.pass, '密码')),
+    ibtn('edit', '改这个实例的密码', editOwn))];
 }
 // 抽屉里的“节点与出口”：代理开关、用的哪条线路、出了什么问题；点进去是完整的节点面板（对着这个实例，它不用开着）。
 // 以前节点只能在实例自己的窗口里改：订阅删了、节点坏了，实例开不起来，也就没有地方改（用户反馈，决策 F-HEAL）。
@@ -206,7 +228,7 @@ function netRows(i) {
   const pf = et ? (sub.profiles || []).find((x) => x.key && x.key === px.profile) || (sub.profiles || []).find((x) => x.host === px.host) || (sub.profiles || [])[0] : null;
   const node = sub && !et ? sub.nodes.find((n) => n.id === px.nodeKey) : null;
   const auto = px.exitMode !== 'manual', region = (px.region || '').toUpperCase();
-  const how = !sub ? null : et ? [auto ? '出口自动' : '出口手动', region && auto ? ' · ' + cname(region) : '', px.entryMode !== 'manual' ? ' · 入口自动' : ' · 入口手动']
+  const how = !sub ? null : et ? [auto ? '出口自动' : '出口手动', region && auto ? ' · ' + cname(region) : '', st.entry?.auto === false ? ' · 入口全局固定' : ' · 入口全局自动']
     : [auto ? '自动选节点' : '手动', node ? ' · ' + (node.label || node.server) : auto ? '' : h('span', { class: 'bad' }, ' · 节点已不在订阅里')];
   const go = () => (ctx.openNode ? ctx.openNode(i.id) : toast('请在这个实例的窗口里打开“节点与出口”', true));
   const lk = (t, fn) => h('button', { class: 'lk', onclick: fn }, t);
@@ -266,6 +288,7 @@ function drawer(i) {
       h('div', { class: 'sw2', style: { padding: '4px 16px 0' }, title: '实例颜色' }, ctx.st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, title: '实例颜色', onclick: () => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
       netRows(i),
       mailRows({ ...ctx, load: ctx.load }, i),
+      pwRows(i, accts.id === i.id ? accts.mode : null),
       h('h3', {}, icon('key', 16), '账号管理', h('span', { class: 'grow' }), ibtn('plus', '手动添加一条', () => { editing = 'new'; ctx.render(); })),
       h('div', { class: 'sub hint' }, '在这个实例里登录过的账号会自动记住；网站不让浏览器记密码也照样记。下次打开登录页自动填好，不会替你点登录。'),
       editing === 'new' && form(null),
@@ -277,7 +300,7 @@ function drawer(i) {
 }
 
 // ---------- 导入邮箱 ----------
-let imp = { text: '', pass: '', save: true };
+let imp = { text: '', pass: '', useDef: true }; // useDef：默认密码开关（decisions M-8），默认勾上
 function parse(text) { // 与核心服务 vault.ParseEmails 同规则，只用来预览数量。卡密行（mailbox.ParseCard）先挑出来单算（decisions MB-1）
   const { cards, rest } = cardLines(text);
   const seen = new Set(cards.map((c) => c.email.toLowerCase())); let ok = cards.length, bad = 0, own = 0;
@@ -297,17 +320,20 @@ function importBox() {
   return h('div', { class: 'scrim center', onclick: (ev) => ev.target === ev.currentTarget && close() },
     h('div', { class: 'modal' },
       h('h3', {}, icon('mail', 18), '导入邮箱', h('span', { class: 'grow' }), ibtn('x', '关闭', close)),
-      h('div', { class: 'sub hint' }, '一行一个邮箱，可以在后面跟它自己的密码（空格、逗号、|、---- 都行）。每个邮箱建一个实例，用邮箱命名，相互隔离；登录时自动填邮箱和密码，注册新站时提示用默认密码。没写密码的邮箱用下面的默认密码' + (hasDef ? '（留空 = 用已保存的那个）。' : '。')
+      h('div', { class: 'sub hint' }, '一行一个邮箱，可以在后面跟它自己的密码（空格、逗号、|、---- 都行）。每个邮箱建一个实例，用邮箱命名，相互隔离；登录时自动填邮箱和密码。勾着“默认密码”时网站上都填全局默认密码；不勾就各用各的密码（没写的用下面填的）。'
         + '也可以直接粘贴卡密（email----password----client_id----refresh_token，或单独一个 iCloud 邮箱）：自动建实例并记住卡密，有新邮件会提示。'),
       h('textarea', { rows: 8, placeholder: 'alice@gmail.com\nbob@outlook.com----他自己的密码\ncarol@gmail.com', value: imp.text, oninput: (ev) => { imp.text = ev.target.value; const s = ev.target.selectionStart; ctx.render(); const t = document.querySelector('.modal textarea'); t.focus(); t.setSelectionRange(s, s); } }),
+      // 密码 + “默认密码”开关（decisions M-8）：勾上 = 这批实例网站自动填写都用全局默认密码；不勾 = 各用各的（这行自带的 / 卡密里的 / 下面填的）
       h('div', { class: 'frow' }, icon('key', 18),
-        h('input', { class: 'grow', type: 'text', autocomplete: 'off', placeholder: hasDef ? '默认密码（可留空）' : '默认密码', title: hasDef ? '留空 = 用已保存的默认密码' : '没写密码的邮箱用它', value: imp.pass, oninput: (ev) => { imp.pass = ev.target.value; } }),
-        h('label', { class: 'ck', title: '以后注册新站、导入时都用它' }, h('input', { type: 'checkbox', checked: imp.save, onchange: (ev) => { imp.save = ev.target.checked; } }), '设为默认')),
+        imp.useDef ? h('span', { class: 'grow pwuse' }, hasDef ? '网站自动填写用全局默认密码' : '网站自动填写用全局默认密码（还没设置）')
+          : h('input', { class: 'grow', type: 'text', autocomplete: 'off', placeholder: '这批的密码（没写密码的邮箱用它）', 'aria-label': '这批的密码', title: '这行自带密码的用自己的；卡密用卡密里的；其余用这里填的', value: imp.pass, oninput: (ev) => { imp.pass = ev.target.value; } }),
+        toggle('默认密码', imp.useDef, '勾上：这批实例网站自动填写都用全局默认密码（勾上的实例都一样）；不勾：用各自的密码（这行自带的、卡密里的，或左边填的）', (v) => { imp.useDef = v; ctx.render(); if (!v) setTimeout(() => document.querySelector('.modal input[type="text"]')?.focus(), 30); })),
+      imp.useDef && !hasDef && noDefNote(() => ctx.load(true)),
       h('div', { class: 'frow' }, h('span', { class: 'sub grow' }, p.ok ? `将创建 ${p.ok} 个实例${p.cards ? `，其中 ${p.cards} 个是卡密（带信箱）` : ''}${p.own ? `，${p.own} 个带自己的密码` : ''}${p.bad ? `；${p.bad} 行不是邮箱，会跳过` : ''}` : '还没有邮箱'),
         h('button', { class: 'btn pri', disabled: !p.ok, onclick: () => run(async () => {
-          if (!imp.pass && !hasDef && p.own + p.cards < p.ok && !confirm('没有设默认密码，没写密码的邮箱将只记邮箱、不记密码。继续？')) return;
-          const r = await api('POST', '/api/import/emails', { text: imp.text, password: imp.pass, save: imp.save });
-          toast(`已创建 ${r.created} 个实例${r.cards ? `，记住 ${r.cards} 个卡密` : ''}${r.attached ? `（${r.attached} 个补给了已有的实例）` : ''}${r.skipped ? `，${r.skipped} 个已存在跳过` : ''}`);
-          imp = { text: '', pass: '', save: true }; close(); await ctx.load(true);
+          if (!imp.useDef && !imp.pass && p.own + p.cards < p.ok && !confirm('没填这批的密码：没写密码的邮箱将只记邮箱、不记密码。继续？')) return;
+          const r = await api('POST', '/api/import/emails', { text: imp.text, password: imp.useDef ? '' : imp.pass, useDefault: imp.useDef });
+          toast(`已创建 ${r.created} 个实例${r.cards ? `，记住 ${r.cards} 个卡密` : ''}${r.attached ? `（${r.attached} 个补给了已有的实例）` : ''}${r.skipped ? `，${r.skipped} 个已存在跳过` : ''}${r.noDefault ? '；全局默认密码还没设置，设好后自动生效' : ''}`, !!r.noDefault);
+          imp = { text: '', pass: '', useDef: true }; close(); await ctx.load(true);
         }) }, icon('plus', 16), '创建实例'))));
 }

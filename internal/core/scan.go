@@ -26,34 +26,35 @@ const (
 	traceURL     = "https://www.cloudflare.com/cdn-cgi/trace"
 )
 
-// nodeRef 是"入口"列表里的一行：edgetunnel 订阅的一个入口地址（优选 IP），或通用订阅的一个节点。
-// 入口地址有三个来源，地位相同：订阅里的、自己加的、反代列表里的（反代本身也是一台转发到 Cloudflare 的机器，可以当入口）。
+// nodeRef 是"入口"列表里的一行：edgetunnel 的一个入口地址（优选 IP），或通用订阅的一个节点。
+// edgetunnel 的入口只来自优选 IP（decisions N-11）：订阅里各节点的地址、自己加的、地址库里当入口用的（Cloudflare 官方 IP 的列表 / 单个 IP，
+// 或手动标成“优选 IP”的）。反代（ProxyIP）不再进入口池。
 type nodeRef struct {
-	ID     string // 地址的 id；来自反代列表的是 "x:地址:端口"；通用订阅是节点的 key
-	Name   string // 对应的测速用出站名
+	ID     string // 地址的 id；来自地址库的是 "x:地址:端口"；通用订阅是节点的 key
+	Name   string // 测速记录名（edgetunnel：全局一份，不再按订阅分），也是代理内核里候选入口的出站名
 	Server string
 	Port   int
 	Label  string
 	Host   string
 	Type   string
-	From   string // sub | custom | pip
-	Sub    string // From = sub：地址来自哪个订阅（N-10 起各订阅共用，不一定是正在看的这个）
+	From   string // sub | custom | pip（来自地址库）
+	Sub    string // From = sub：地址来自哪个订阅
 	Gone   bool   // 已不在最新一次拉取的订阅里（留用）
 }
 
 func (n nodeRef) key() string { return hostPort(n.Server, n.Port) }
 
-// pipRef 是"反代"列表里的一行。来源也有两个：反代列表里的，和入口地址里能当反代的（不是 Cloudflare 自己的 IP）。
+// pipRef 是"出口"列表里的一行：地址库里当出口用的 ProxyIP，或全局出口（SOCKS5 / SSTP 等）。
 type pipRef struct {
-	ID      string // 出口条目的 id（展开的域名是 "id|IP"）；来自入口地址的是 "a:地址:端口"
-	Name    string
+	ID      string // 出口条目的 id（展开的域名 / 列表是 "id|项"）
+	Name    string // 测速记录名（全局一份）
 	Type    string // proxyip | socks5 | http | https | turn | sstp
 	Value   string
 	Label   string
-	Derived bool // 来自入口地址
+	Derived bool // 老数据：以前入口地址里能当反代的也列进来（“a:地址:端口”）。N-11 起不再生成，只为读老实例保留
 }
 
-// key 是用来和入口地址比较"是不是同一台机器"的 地址:端口。
+// key 是 地址:端口（proxyip）或 类型|值（全局出口）。
 func (p pipRef) key() string {
 	if p.Type != "proxyip" {
 		return p.Type + "|" + p.Value
@@ -62,7 +63,103 @@ func (p pipRef) key() string {
 	return hostPort(h, port)
 }
 
-// nodesLocked 列出一个订阅的全部入口。
+// entryName / pipName：一个地址作为入口 / 作为出口的测速记录名。地址池是全局的，一个地址只有一条记录（N-11 以前按订阅各一条）。
+func entryName(key string) string { return hname("a-", key) }
+func pipName(key string) string   { return hname("p-", key) }
+
+// entryRole：地址库里这一项当入口（true）还是当出口（false）。见 model.ExitEntry.UsableAsEntry。
+func entryRole(e *model.ExitEntry, typ, val string) bool {
+	if typ != "proxyip" || val == "" {
+		return false // 全局出口永远是出口
+	}
+	if e.UsableAsEntry != nil {
+		return *e.UsableAsEntry
+	}
+	h, _ := exits.SplitHostPort(val)
+	return inCF(h)
+}
+
+// exitItems 列出地址库一条里的每一项（类型、取值、id、备注）。源本身（VPN Gate、列表网址）不是地址。
+func exitItems(e *model.ExitEntry) (out []pipRef) {
+	if expands(e) {
+		for _, it := range e.Resolved {
+			typ, v := exitRef(e, it)
+			out = append(out, pipRef{ID: e.ID + "|" + it, Type: typ, Value: v, Label: itemLabel(e, it)})
+		}
+		return out
+	}
+	if e.Source != "" {
+		return nil
+	}
+	return []pipRef{{ID: e.ID, Type: e.Type, Value: exitValue(e, ""), Label: e.Label}}
+}
+
+// entryPoolLocked 是全局的入口池（全部 edgetunnel 实例共用，decisions N-11）。顺序：各订阅带来的（按订阅顺序）→ 自己加的 → 地址库里当入口的。
+// 同一个 地址:端口 只出现一次。
+func (a *App) entryPoolLocked() []nodeRef {
+	var out []nodeRef
+	seen := map[string]bool{}
+	add := func(n nodeRef) {
+		k := n.key()
+		if n.Server == "" || seen[k] {
+			return
+		}
+		seen[k] = true
+		n.Name = entryName(k)
+		out = append(out, n)
+	}
+	for _, s := range a.etSubsLocked(a.Settings.DefaultSubscriptionID) {
+		for _, ad := range a.Addresses {
+			if ad.SubscriptionID == s.ID && ad.Source != "custom" {
+				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "sub", Sub: s.ID, Gone: ad.Gone})
+			}
+		}
+	}
+	for _, ad := range a.Addresses {
+		if ad.Source == "custom" {
+			add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "custom"})
+		}
+	}
+	for _, e := range a.Exits {
+		for _, it := range exitItems(e) {
+			if !entryRole(e, it.Type, it.Value) {
+				continue
+			}
+			h, port := exits.SplitHostPort(it.Value)
+			if port == 0 {
+				port = 443
+			}
+			add(nodeRef{ID: "x:" + hostPort(h, port), Server: h, Port: port, Label: it.Label, From: "pip"})
+		}
+	}
+	return out
+}
+
+// exitPoolLocked 是全局的出口库：地址库里当出口用的 ProxyIP 和全部全局出口（SOCKS5 / SSTP 等）。入口地址不再“顺带”当反代（N-11）。
+// Cloudflare 官方 IP 当不了 ProxyIP，不列。
+func (a *App) exitPoolLocked() []pipRef {
+	var out []pipRef
+	seen := map[string]bool{}
+	for _, e := range a.Exits {
+		for _, p := range exitItems(e) {
+			k := p.key()
+			if p.Value == "" || seen[k] || entryRole(e, p.Type, p.Value) {
+				continue
+			}
+			p.Name = pipName(k)
+			if p.Type == "proxyip" {
+				if h, _ := exits.SplitHostPort(p.Value); inCF(h) || a.scanLocked(p.Name).Kind == "cf" {
+					continue
+				}
+			}
+			seen[k] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// nodesLocked 列出一个订阅的全部入口：edgetunnel 是全局入口池（Host / 类型按这个订阅填，给界面看）；通用订阅是它自己的节点。
 func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 	var out []nodeRef
 	if sub == nil {
@@ -74,52 +171,9 @@ func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 		if len(sub.Hosts) == 1 {
 			host = sub.Hosts[0]
 		}
-		seen := map[string]bool{}
-		add := func(n nodeRef) {
-			k := n.key()
-			if n.Server == "" || seen[k] {
-				return
-			}
-			seen[k] = true
-			n.Name, n.Host, n.Type = hname("a-", sub.ID, k), host, typ
+		for _, n := range a.entryPoolLocked() {
+			n.Host, n.Type = host, typ
 			out = append(out, n)
-		}
-		// 订阅只当“入口模板”用（连接参数），它带来的地址和自己加的、地址库里的一样，进共用的地址池（decisions N-10）：
-		// 先是这个订阅自己的，再是自己加的，再是别的 edgetunnel 订阅带来的，最后是地址库。同一个 地址:端口 只出现一次。
-		for _, ad := range a.Addresses {
-			if ad.SubscriptionID == sub.ID && ad.Source != "custom" {
-				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "sub", Sub: sub.ID, Gone: ad.Gone})
-			}
-		}
-		for _, ad := range a.Addresses {
-			if ad.Source == "custom" {
-				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "custom"})
-			}
-		}
-		for _, ad := range a.Addresses {
-			if ad.Source != "custom" && ad.SubscriptionID != sub.ID && a.isETLocked(ad.SubscriptionID) {
-				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "sub", Sub: ad.SubscriptionID, Gone: ad.Gone})
-			}
-		}
-		for _, e := range a.Exits {
-			if e.Type != "proxyip" {
-				continue
-			}
-			items := []string{""}
-			if e.Expand {
-				items = e.Resolved
-			}
-			for _, item := range items {
-				typ, v := exitRef(e, item)
-				if typ != "proxyip" || v == "" { // 列表里夹着的全局出口不是入口地址
-					continue
-				}
-				h, port := exits.SplitHostPort(v)
-				if port == 0 {
-					port = 443
-				}
-				add(nodeRef{ID: "x:" + hostPort(h, port), Server: h, Port: port, Label: itemLabel(e, item), From: "pip"})
-			}
 		}
 		return out
 	}
@@ -172,46 +226,12 @@ func (a *App) entryLocked(sub *model.Subscription, id string) (nodeRef, bool) {
 	return nodeRef{}, false
 }
 
-// pipsLocked 列出一个 edgetunnel 订阅可用的全部反代候选。
+// pipsLocked 列出 edgetunnel 实例可选的出口（全局出口库，和订阅无关；保留这个名字给老代码用）。
 func (a *App) pipsLocked(sub *model.Subscription) []pipRef {
-	var out []pipRef
 	if sub == nil || sub.Kind != "edgetunnel" || sub.Template == nil {
-		return out
+		return nil
 	}
-	seen := map[string]bool{}
-	add := func(p pipRef) {
-		k := p.key()
-		if p.Value == "" || seen[k] {
-			return
-		}
-		seen[k] = true
-		p.Name = hname("p-", sub.ID, k)
-		if p.Type == "proxyip" { // Cloudflare 官方 IP 只能当入口：地址落在官方网段里，或者探测时认出来的
-			if h, _ := exits.SplitHostPort(p.Value); inCF(h) || a.scanLocked(p.Name).Kind == "cf" {
-				return
-			}
-		}
-		out = append(out, p)
-	}
-	for _, e := range a.Exits {
-		if expands(e) {
-			for _, ip := range e.Resolved {
-				typ, v := exitRef(e, ip)
-				add(pipRef{ID: e.ID + "|" + ip, Type: typ, Value: v, Label: itemLabel(e, ip)})
-			}
-			continue
-		}
-		if e.Source != "" { // 源本身不是地址（没展开出东西来就什么都没有）
-			continue
-		}
-		add(pipRef{ID: e.ID, Type: e.Type, Value: exitValue(e, ""), Label: e.Label})
-	}
-	for _, n := range a.nodesLocked(sub) {
-		if n.From != "pip" && usableAsPip(n.Server) {
-			add(pipRef{ID: "a:" + n.key(), Type: "proxyip", Value: n.key(), Label: n.Label, Derived: true})
-		}
-	}
-	return out
+	return a.exitPoolLocked()
 }
 
 // pipID 返回实例当前选的反代在候选列表里的 id；空 = 不指定。
@@ -232,37 +252,13 @@ func setPip(in *model.Instance, id string) {
 
 // pipValueLocked 返回实例所选反代的类型与取值；不指定时两者为空。
 func (a *App) pipValueLocked(in *model.Instance) (typ, val string) {
-	if v, ok := strings.CutPrefix(in.Proxy.ExitID, "a:"); ok {
+	if v, ok := strings.CutPrefix(in.Proxy.ExitID, "a:"); ok { // 老数据：入口地址顺带当的反代
 		return "proxyip", v
 	}
 	if e := a.exitLocked(in.Proxy.ExitID); e != nil {
 		return exitRef(e, in.Proxy.ExitIP)
 	}
 	return "", ""
-}
-
-// viaLocked 返回测反代时借用的入口：反代的出口和用哪个入口无关，所以全部反代都经同一个入口来测。
-// 选定之后不随便换（换了要重载配置），只有它不在列表里或者不通了才重选最快的。
-func (a *App) viaLocked(sub *model.Subscription, nodes []nodeRef) (nodeRef, bool) {
-	if len(nodes) == 0 {
-		return nodeRef{}, false
-	}
-	if k := a.pipVia[sub.ID]; k != "" {
-		for _, n := range nodes {
-			if n.key() == k && a.scanLocked(n.Name).Delay >= 0 {
-				return n, true
-			}
-		}
-	}
-	best := nodes[0]
-	for _, n := range nodes {
-		d, bd := a.scanLocked(n.Name).Delay, a.scanLocked(best.Name).Delay
-		if d > 0 && (bd <= 0 || d < bd) {
-			best = n
-		}
-	}
-	a.pipVia[sub.ID] = best.key()
-	return best, true
 }
 
 // hostOfRaw 取节点伪装用的 Host / SNI；与 server 相同时不重复展示。
@@ -416,11 +412,14 @@ func (a *App) testDelays(nodes []nodeRef) {
 	wg.Wait()
 }
 
+// coreDelay 经代理内核测一个出站的延迟（测试里换成假的）。
+var coreDelay = func(a *App, name, url string, timeoutMs int) (int, error) { return a.core.Delay(name, url, timeoutMs) }
+
 // delayOnce 测一次延迟；失败返回 -1。测试期间如果配置被重载（策略组会被重置），重测一次。
 func (a *App) delayOnce(name, url string, timeoutMs int) int {
 	for try := 0; try < 2; try++ {
 		gen := a.cfgGen.Load()
-		d, err := a.core.Delay(name, url, timeoutMs)
+		d, err := coreDelay(a, name, url, timeoutMs)
 		if err == nil && d > 0 {
 			return d
 		}
@@ -809,22 +808,20 @@ func (a *App) pruneGoneLocked(sub *model.Subscription) {
 	}
 }
 
-// autoPick 给实例确认线路（出口、入口里开着"自动"的那一半）。返回是否换了。exclude 是这一轮试过不通的（入口 id，反代见 pipKey）。
+// autoPick 给实例确认线路。返回是否换了。exclude 是这一轮试过不通的（入口 id，反代见 pipKey）。
 //
-//	出口（反代）自动：只认国家。在所选国家里挑一个可用的反代，当前的仍然可用就不动；不通了换同一个国家里的下一个。
-//	      这个国家没有反代可挑时退回老办法：挑一个出口在这个国家的入口，反代配成和它同国。
-//	      一个都没有就保持原样并提示，绝不悄悄换到别的国家。没选国家（不限）时：入口挑最快的，反代配成和入口同国。
-//	出口手动：钉死，不通也不换。
-//	入口自动：反代那台机器自己能当入口就用它（同一台机器，少绕一跳）；不能就挑延迟最低的，先同国、再全部——能连上最要紧。
-//	      指定了入口国家（EntryRegion）就先在那个国家里挑，见 entryWant；那里没有能用的就按上面的办法，并提示一句。
-//	入口手动：钉死。
+//	edgetunnel（decisions N-11）：入口是全局的（entry.go），这里只管出口——
+//	  出口自动：只认国家（和类型）。在所选国家里挑一个可用的出口，当前的仍然可用就不动；不通了换同一个国家里的下一个。
+//	        这个国家一个都没有就保持原样并提示，绝不悄悄换到别的国家。没选国家：当前的照用；没有就配一个和全局入口同国的（没有就不指定）。
+//	  出口手动：钉死，不通也不换。
+//	通用订阅：节点就是出口，只有一个开关——自动时当前的不通就换成最快的可用节点。
 func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	if !a.coreOK {
 		return false
 	}
 	a.mu.Lock()
 	in := a.instLocked(id)
-	if in == nil || in.Proxy.State != "on" || in.Proxy.AddressMode == "same-as-exit" {
+	if in == nil || in.Proxy.State != "on" {
 		a.mu.Unlock()
 		return false
 	}
@@ -833,48 +830,17 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 		a.mu.Unlock()
 		return false
 	}
-	isET := sub.Kind == "edgetunnel" && sub.Template != nil
-	exitAuto, entryAuto := in.Proxy.ExitAuto(), in.Proxy.EntryAuto()
-	if !isET { // 通用订阅：节点就是出口，只有一个开关
-		entryAuto, exitAuto = exitAuto, false
+	if sub.Kind == "edgetunnel" && sub.Template != nil {
+		defer a.mu.Unlock()
+		return a.pickExitLocked(in, sub, exclude)
 	}
-	if !exitAuto && !entryAuto {
+	// 通用订阅：节点就是出口，只有一个开关（ExitMode）
+	if !in.Proxy.ExitAuto() {
 		a.mu.Unlock()
 		return false
 	}
 	nodes := a.nodesLocked(sub)
 	cur, region, url := currentNode(in, sub), in.Proxy.Region, a.Settings.DelayURL
-	entryRegion := in.Proxy.EntryRegion
-	curPip := pipID(in)
-	exitType := ""
-	if isET && exitAuto {
-		exitType = in.Proxy.ExitType
-	}
-	// 第一步：出口。选了国家（或出口类型）、开着自动 → 先在这个国家、这一类里定反代。
-	newPip, pipOK := curPip, false
-	var pipKeyOf string // 定下来的反代是哪台机器（地址:端口）
-	if isET {
-		ps := a.pipCandsLocked(sub, in)
-		if exitAuto {
-			ps = ofType(ps, exitType)
-		}
-		if exitAuto && (region != "" || exitType != "") {
-			newPip, pipOK = pickExit(ps, region, curPip, exclude)
-			if !pipOK {
-				newPip = curPip
-			}
-		}
-		p, found := findCand(ps, newPip)
-		found = found && newPip != ""
-		if !exitAuto { // 出口手动：入口跟着它（同一台机器，或者它所在的国家）；没指定反代就只挑最快的
-			region = ""
-			if found {
-				region, pipKeyOf = p.Country, p.Key
-			}
-		} else if found && pipOK {
-			pipKeyOf = p.Key
-		}
-	}
 	a.mu.Unlock()
 	if len(nodes) == 0 {
 		return false
@@ -882,89 +848,53 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	if err := a.applyConfig(); err != nil {
 		return false
 	}
-	chosen, ok := cur, false
-	noEntry := "" // 指定的入口国家里没有能用的入口
-	if entryAuto {
-		nameOf := map[string]string{}
-		for _, n := range nodes {
-			nameOf[n.ID] = n.Name
+	nameOf := map[string]string{}
+	for _, n := range nodes {
+		nameOf[n.ID] = n.Name
+	}
+	verify := func(nid string) bool { // 现测一次，结果记回去
+		d := a.delayOnce(nameOf[nid], url, 5000)
+		a.mu.Lock()
+		s := a.slotLocked(nameOf[nid])
+		s.Delay = d
+		if d > 0 {
+			s.Err = ""
 		}
-		verify := func(nid string) bool { // 现测一次，结果记回去
-			d := a.delayOnce(nameOf[nid], url, 5000)
+		a.mu.Unlock()
+		return d > 0
+	}
+	curOK := false
+	if nameOf[cur] != "" && !exclude[cur] {
+		curOK = verify(cur)
+	}
+	try := func() (string, bool) { // 按上次的结果从快到慢逐个现测，通了就用
+		for i := 0; i < 5; i++ {
 			a.mu.Lock()
-			s := a.slotLocked(nameOf[nid])
-			s.Delay = d
-			if d > 0 {
-				s.Err = ""
-			} else if s.Err == "" {
-				s.Err = "直接探测是通的，但经代理内核实际连不上"
-			}
+			c, found := pickEntry(a.entryCandsLocked(nodes), region, cur, exclude)
 			a.mu.Unlock()
-			return d > 0
-		}
-		curOK := false
-		if nameOf[cur] != "" && !exclude[cur] {
-			curOK = verify(cur)
-		}
-		try := func(country string) (string, bool) { // 按上次的结果从快到慢逐个现测，通了就用
-			for i := 0; i < 5; i++ {
-				a.mu.Lock()
-				c, found := pickEntry(a.entryCandsLocked(nodes), country, cur, exclude)
-				a.mu.Unlock()
-				if !found {
-					return "", false
-				}
-				if (c == cur && curOK) || verify(c) {
-					return c, true
-				}
+			if !found {
+				return "", false
 			}
-			return "", false
+			if (c == cur && curOK) || verify(c) {
+				return c, true
+			}
+			exclude = withKey(exclude, c)
 		}
-		// 指定了入口国家：先在那个国家里挑
-		want := entryWant(isET, entryRegion, region, pipKeyOf != "")
-		if want != "" {
-			if chosen, ok = try(want); !ok {
-				noEntry = want
+		return "", false
+	}
+	chosen, ok := try()
+	if !ok { // 记录都过期了：把这个地区的节点重测一遍再挑
+		a.mu.Lock()
+		var again []nodeRef
+		for i, c := range a.entryCandsLocked(nodes) {
+			if !exclude[c.ID] && (region == "" || strings.EqualFold(c.Country, region)) {
+				again = append(again, nodes[i])
 			}
 		}
-		// 反代那台机器自己能当入口：用它
-		if !ok && pipKeyOf != "" {
-			for _, n := range nodes {
-				if n.key() != pipKeyOf || exclude[n.ID] {
-					continue
-				}
-				a.mu.Lock()
-				d := a.scanLocked(n.Name).Delay
-				a.mu.Unlock()
-				if (n.ID == cur && curOK) || (d > 0 && verify(n.ID)) {
-					chosen, ok = n.ID, true
-				}
-				break
-			}
-		}
-		// 反代已经定在所选国家里（或者是手动钉死的）：入口只管连得上，同国没有就用全部里最快的
-		anyCountry := pipKeyOf != "" && region != ""
-		if !ok {
-			chosen, ok = try(region)
-		}
-		if !ok && anyCountry {
-			chosen, ok = try("")
-		}
-		if !ok { // 记录都过期了：把这个地区的入口重测一遍再挑（出口未知的入口测了也归不进地区，不测）
-			a.mu.Lock()
-			var again []nodeRef
-			for i, c := range a.entryCandsLocked(nodes) {
-				if !exclude[c.ID] && (region == "" || anyCountry || strings.EqualFold(c.Country, region)) {
-					again = append(again, nodes[i])
-				}
-			}
-			a.mu.Unlock()
-			if len(again) > 0 {
-				a.testDelays(again)
-				if chosen, ok = try(region); !ok && anyCountry {
-					chosen, ok = try("")
-				}
-			}
+		a.mu.Unlock()
+		if len(again) > 0 {
+			a.testDelays(again)
+			chosen, ok = try()
 		}
 	}
 	a.mu.Lock()
@@ -972,38 +902,71 @@ func (a *App) autoPick(id string, exclude map[string]bool) bool {
 	if in = a.instLocked(id); in == nil {
 		return false
 	}
-	changed := false
 	r := a.rtLocked(id)
-	if entryAuto && ok && chosen != cur {
-		setNode(in, sub, chosen)
-		changed = true
+	if region != "" && !ok {
+		r.Notice = "noexit:" + strings.ToUpper(region)
 	}
-	if isET && exitAuto {
-		if !pipOK && exitType == "" { // 所选国家里没有反代（或没选国家）：反代配成和入口同国
-			entry, _ := findCand(a.entryCandsLocked(nodes), currentNode(in, sub))
-			if region == "" || strings.EqualFold(entry.Country, region) {
-				newPip = pickPip(a.pipCandsLocked(sub, in), entry, curPip)
-				pipOK = region != "" && entry.alive()
+	if !ok || chosen == cur {
+		return false
+	}
+	setNode(in, sub, chosen)
+	in.UpdatedAt = now()
+	a.saveLocked("instances")
+	a.saveScanLocked()
+	a.bumpLocked("state", id)
+	return true
+}
+
+// withKey 往“试过不通”的表里加一个（表是 nil 时新建）。
+func withKey(m map[string]bool, k string) map[string]bool {
+	if m == nil {
+		m = map[string]bool{}
+	}
+	m[k] = true
+	return m
+}
+
+// pickExitLocked：edgetunnel 实例的出口自动（见 autoPick）。持 a.mu，返回是否换了。
+func (a *App) pickExitLocked(in *model.Instance, sub *model.Subscription, exclude map[string]bool) bool {
+	r := a.rtLocked(in.ID)
+	before := pipID(in)
+	if strings.HasPrefix(in.Proxy.ExitID, "a:") && in.Proxy.ExitAuto() { // 老数据：入口地址顺带当的反代（N-11 起入口不当出口）
+		setPip(in, "")
+	}
+	if !in.Proxy.ExitAuto() {
+		return false
+	}
+	region, exitType, curPip := in.Proxy.Region, in.Proxy.ExitType, pipID(in)
+	ps := ofType(a.pipCandsLocked(sub, in), exitType)
+	newPip, ok := curPip, true
+	if region != "" || exitType != "" {
+		if newPip, ok = pickExit(ps, region, curPip, exclude); !ok {
+			newPip = curPip
+		}
+	} else if _, found := findCand(ps, curPip); curPip == "" || !found || exclude[pipKey(curPip)] {
+		// 没限国家：当前的照用（后台扫描没测通不算，SI-1）；没有（或已不在出口库、这次真连试过不通）就配一个和全局入口同国的
+		entry := cand{}
+		if cur, has := a.entryCurLocked(); has {
+			if c, f := findCand(a.globalCandsLocked([]nodeRef{cur}), cur.key()); f {
+				entry = c
 			}
 		}
-		// 限了出口类型、这一类里没有能用的：不换成别的类型（用户要的就是这一类），留着当前的，界面上提示“无可用出口”
-		if newPip != pipID(in) {
-			setPip(in, newPip)
-			changed = true
+		if exclude[pipKey(curPip)] {
+			curPip = ""
 		}
+		newPip = pickPip(ps, entry, curPip)
 	}
-	if (region != "" || exitType != "") && ((isET && exitAuto && !pipOK) || (!isET && !ok)) {
+	if (region != "" || exitType != "") && !ok {
 		r.Notice = "noexit:" + strings.ToUpper(region) // 界面上显示成"<国家>无可用出口"（只限了类型时国家是空的）
-	} else if noEntry != "" {
-		r.Notice = "noentry:" + strings.ToUpper(noEntry) // 界面上显示成"<国家>没有可用的入口，已跟随出口"
 	}
-	if changed {
-		in.UpdatedAt = now()
-		a.saveLocked("instances")
-		a.saveScanLocked()
-		a.bumpLocked("state", id)
+	setPip(in, newPip)
+	if pipID(in) == before {
+		return false
 	}
-	return changed
+	in.UpdatedAt = now()
+	a.saveLocked("instances")
+	a.bumpLocked("state", in.ID)
+	return true
 }
 
 // NextExit 是面板上的"换一个"：出口自动时，在同一个国家里换到下一个可用的出口。
@@ -1042,7 +1005,7 @@ func (a *App) NextExit(id string) error {
 			done = true
 		}
 	}
-	if !done && isET && !in.Proxy.EntryAuto() { // 剩下的办法是换入口，但入口是手动钉死的
+	if !done && isET { // 入口是全局的（N-11），不拿换入口来“换出口”
 		a.mu.Unlock()
 		return errors.New("这个国家只有这一个可用的出口")
 	}

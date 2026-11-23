@@ -758,7 +758,21 @@ html.wzwin body.bye #main { opacity: 0; transition: opacity var(--d-s) var(--e-a
 .dlg.mset { width: min(440px, calc(100% - 32px)); }
 .mset .mlbl { display: block; margin: 4px 24px 6px; font-size: 13px; color: var(--on2); }
 .mset textarea { min-height: 76px; }
-.mset .mcard { margin: 0 24px 12px; padding: 8px 12px; border-radius: 12px; background: var(--surf2); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--on2); }
+/* 卡密分字段（decisions MB-2）：一行一个字段，名字 / 值 / 眼睛 / 复制；值长了在格子里折行，不撑宽对话框 */
+.mset .mfields { margin: 0 24px 12px; padding: 4px 4px 4px 12px; border-radius: 12px; background: var(--surf2); }
+.mset .mf { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; column-gap: 2px; padding: 6px 0; }
+.mset .mf .k { grid-column: 1; grid-row: 1; } .mset .mf .v { grid-column: 1; grid-row: 2; } .mset .mf .ib { grid-row: 1 / span 2; }
+.mset .mf + .mf { border-top: 1px solid var(--line); }
+.mset .mf .k { font-size: 12px; color: var(--on2); }
+.mset .mf .v { font-size: 12px; overflow-wrap: anywhere; word-break: break-all; min-width: 0; color: var(--on); }
+.mset .mf .v.masked { color: var(--on2); }
+.mset .mf .ib.on { color: var(--acc); }
+@media (max-width: 360px) { .mset .mfields { margin: 0 16px 12px; } }
+/* 默认密码开关（decisions M-8） */
+.pwrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pwrow .grow { min-width: 0; }
+.pwnote { font-size: 12px; color: var(--on2); }
+.pwnote.bad { color: var(--bad); }
 .mset .mhint { margin-top: -6px; font-size: 12.5px; } .mset .mhint.bad { color: var(--bad); }
 .mset .acts .grow { flex: 1; }
 .mchip { color: inherit; padding: 0 2px; min-height: 0; } .mchip.on { color: var(--acc); font-weight: 600; }
@@ -853,3 +867,9 @@ html.pc .mrow { min-height: 58px; padding: 8px 14px; }
 .utab .tag { flex: none; } .utab.sleep .tt { color: var(--on2); }
 .unote { font-size: 12.5px; line-height: 18px; color: var(--on2); margin-top: 6px; } .unote.pad { padding: 12px calc(var(--gut) + 14px); }
 .uacts { margin-top: 14px; } .uacts .btn { height: 32px; padding: 0 14px 0 10px; gap: 6px; font-size: 13px; box-shadow: inset 0 0 0 1px var(--div); }
+/* 入口全部实例共用（决策 N-11）：分组标题右边一个小图标 + 在用的实例数，说明在悬停提示里 */
+.sec .shared { display: inline-flex; align-items: center; gap: 3px; cursor: help; font-size: 12px; color: var(--on3); }
+.wz .pwnote { margin: 0 24px 10px; line-height: 1.5; } .wz .pwnote .lk, .modal .pwnote .lk { color: var(--acc); margin-left: 4px; }
+.wz .wzpwr .tg { min-height: 36px; }
+.modal .pwnote { margin: 0 0 8px; line-height: 1.5; }
+.modal .frow .pwuse { font-size: 14px; color: var(--on2); min-width: 0; }

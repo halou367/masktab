@@ -102,8 +102,8 @@ export function mailSetup(c, inst, cur) {
       done(true);
     }, '信箱已保存');
     const o = overlay(h('div', { class: 'dlg mset', role: 'dialog' }, h('h3', {}, `#${inst.no} 的信箱`),
-      h('div', { class: 'note' }, '卡密存进加密的密码库，只有核心服务拿得到；这里只显示脱敏后的样子。收信走这个实例自己的线路。'),
-      set && h('div', { class: 'mcard mono' }, [cur.card?.email, cur.card?.password && '密码 ' + cur.card.password, cur.card?.clientId && 'client_id ' + cur.card.clientId, cur.card?.refresh && 'token ' + cur.card.refresh].filter(Boolean).join('\n')),
+      h('div', { class: 'note' }, '卡密存进加密的密码库，只有核心服务拿得到；下面默认遮住，点眼睛才显示。收信走这个实例自己的线路。'),
+      set && cardFields(inst, cur),
       h('label', { class: 'mlbl' }, '卡密'), ta, hint,
       h('label', { class: 'mlbl' }, '取件地址'), base,
       h('div', { class: 'acts' }, set && h('button', { class: 'btn danger', onclick: async () => { if (await confirmDlg('清除这个实例的卡密？', '收到的信也一起清掉。实例和账号不动。', '清除', true)) run(async () => { await api('DELETE', `/api/mail/${inst.id}`); done(true); }, '已清除'); } }, '清除'),
@@ -111,6 +111,39 @@ export function mailSetup(c, inst, cur) {
     o.sc.addEventListener('dismiss', () => res(false));
     setTimeout(() => ta.focus(), 60);
   });
+}
+
+// ---------- 卡密分字段（decisions MB-2） ----------
+// 邮箱、密码、client_id、refresh_token 各一行：默认遮住（核心服务给的脱敏样子），点眼睛显示、点复制复制。
+// 原文只在点眼睛 / 复制的那一刻向核心服务要一次（POST /api/mail/<id>/reveal），存在这个对话框里，关了就没了；不写进页面状态、不进日志。
+const FIELDS = [['email', '邮箱'], ['password', '密码'], ['clientId', 'client_id'], ['refresh', 'refresh_token']];
+/** 遮住的样子：邮箱留前两个字和域名，其余用核心服务给的脱敏样子。 */
+export function maskField(k, card) {
+  const v = card?.[k] || '';
+  if (k !== 'email') return v;
+  const at = v.indexOf('@');
+  return at > 0 ? v.slice(0, Math.min(2, at)) + '•••' + v.slice(at) : v;
+}
+function cardFields(inst, cur) {
+  const card = cur.card || { email: cur.email };
+  const list = FIELDS.filter(([k]) => k === 'email' || card[k]);
+  const open = new Set();
+  let full = null;
+  const get = async () => (full ||= await api('POST', `/api/mail/${inst.id}/reveal`));
+  const box = h('div', { class: 'mfields', role: 'group', 'aria-label': '卡密' });
+  const paint = () => box.replaceChildren(...list.map(([k, lab]) => {
+    const on = open.has(k) && full;
+    return h('div', { class: 'mf', 'data-k': k },
+      h('span', { class: 'k' }, lab),
+      h('span', { class: 'v mono' + (on ? '' : ' masked'), title: on ? '' : '已遮住' }, on ? full[k] || '' : maskField(k, card)),
+      ibtn(on ? 'eyeoff' : 'eye', on ? `遮住${lab}` : `显示${lab}`, () => run(async () => { if (open.has(k)) open.delete(k); else { await get(); open.add(k); } paint(); }), on ? 'on' : ''),
+      ibtn('copy', `复制${lab}`, () => run(async () => {
+        const v = (await get())[k] || '';
+        await navigator.clipboard.writeText(v).then(() => { toast(`已复制${lab}，30 秒后清空剪贴板`); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30_000); }, () => toast('复制失败', true));
+      })));
+  }));
+  paint();
+  return box;
 }
 
 // ---------- 实例详情里的“信箱”一栏 ----------

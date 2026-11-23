@@ -158,3 +158,36 @@ func TestParseList(t *testing.T) {
 		t.Errorf("SplitItem = %s %s", typ, v)
 	}
 }
+
+// 订阅节点 path 里带的出口（decisions N-11）：各种写法都认，认出来的值和导入时一样；不是地址的丢掉。
+func TestFromPath(t *testing.T) {
+	uuid := "11111111-2222-3333-4444-555555555555"
+	video := RewriteChain("/x", "sstp", "vpn:vpn@vpn1.example.net:443", "query", uuid, "")
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/?proxyip=203.0.113.7:443&ed=2560", "proxyip|203.0.113.7:443"},
+		{"/?ed=2560&proxyip=pip.example.com", "proxyip|pip.example.com"},
+		{"/proxyip=[2001:db8::1]:2053/?ed=2560", "proxyip|[2001:db8::1]:2053"},
+		{"/a/proxyip.example.org/b", "proxyip|proxyip.example.org"},
+		{"/socks5://u:p@192.0.2.1:1080?ed=2560", "socks5|u:p@192.0.2.1:1080"},
+		{"/s5=u:p@192.0.2.2:1080", "socks5|u:p@192.0.2.2:1080"},
+		{"/%3Fproxyip%3D203.0.113.8", "proxyip|203.0.113.8"},
+		{video, "sstp|vpn:vpn@vpn1.example.net:443"},
+		{"/?ed=2560", ""},
+		{"/?proxyip=not-an-address!", ""},
+	}
+	for _, c := range cases {
+		var got []string
+		for _, p := range FromPath(c.path, uuid) {
+			got = append(got, p.Type+"|"+p.Value)
+		}
+		if strings.Join(got, ",") != c.want {
+			t.Errorf("FromPath(%q) = %v，应为 %q", c.path, got, c.want)
+		}
+	}
+	if len(FromPath(video, "")) != 0 {
+		t.Error("没有密钥解不开 /video/，不该瞎认")
+	}
+}
