@@ -156,5 +156,5 @@ func (a *App) trim(id string) {
 		a.bumpLocked("state", id)
 	}
 	a.mu.Unlock()
-	log.Printf("实例 #%d 休眠：工作集 %d MB → %d MB", no, b>>20, af>>20)
+	log.Printf("实例 #%d 休眠：释放约 %d MB（压缩前工作集 %d MB，之后会回升一些）", no, mb, b>>20)
 }
