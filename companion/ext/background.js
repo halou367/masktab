@@ -1,5 +1,5 @@
 import './swlife.js'; // 新后台一装好就接手（放最前面：事件要在脚本第一遍执行时挂上）
-import { api, config, fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText, letterOf } from './api.js';
+import { api, config, fmtBytes, shownExit, RESTART_WHY, noticeText, letterOf } from './api.js';
 import { avatarPx, hexRgb } from './icon.js';
 import { mailNotes } from './common.js';
 import './vaultmsg.js'; // 挂出 globalThis.MTVault（和手机的后台共用，所以不是模块导出）
@@ -54,7 +54,6 @@ async function paint(st) {
   const p = rt.probe;
   if (on && p?.cf) lines.push(`出口：${p.cf.country} ${p.cf.ip}${p.cf.org ? ' · ' + p.cf.org : ''}`);
   if (on && p?.direct) lines.push(`非 CF 站点看到：${p.direct.country} ${p.direct.ip}`);
-  if (on && mismatch(me)) lines.push('⚠ 两路出口国家不一致');
   if (rt.launchedTz) lines.push('时区：' + rt.launchedTz);
   if (on && rt.latency > 0) lines.push(`延迟：${rt.latency} ms`);
   if (rt.running) lines.push(`↑ ${fmtBytes(rt.upRate)}/s  ↓ ${fmtBytes(rt.downRate)}/s`, `已用 ↑ ${fmtBytes(rt.up)}  ↓ ${fmtBytes(rt.down)}`);

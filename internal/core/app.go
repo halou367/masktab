@@ -266,6 +266,9 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	if a.migratePoolsLocked() { // 老地址库一次性分进入口库 / 出口库（decisions N-13）
 		a.saveLocked("exits")
 	}
+	if a.resplitSetsLocked() { // 分套规则改过（decisions N-14）：用存着的节点重新分一次，不用等下次拉订阅
+		a.saveLocked("subscriptions")
+	}
 	var wx fileWrap[[]*model.GlobalExtension]
 	if readJSON(a.p("config", "extensions.json"), &wx) { // 读不出来（文件坏了 / 没有）就不清：清单都没有，不能凭它删文件
 		a.Exts = wx.Items

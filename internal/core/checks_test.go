@@ -27,16 +27,21 @@ func TestChecks(t *testing.T) {
 	}
 
 	s := a.checksLocked(in, rt, info)
-	if s.Pass != 13 || s.Total != 13 {
-		t.Fatalf("全部一致应为 13/13，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
+	if s.Pass != 12 || s.Total != 12 {
+		t.Fatalf("全部一致应为 12/12，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
 	}
 
 	// 两路出口不同国、固定了别的时区：这两项不过
 	rt.Probe.Direct = &model.IPInfo{IP: "198.51.100.7", Country: "HK", Timezone: "Asia/Hong_Kong"}
 	info.TZ = "Europe/Berlin"
 	s = a.checksLocked(in, rt, info)
-	if find(s, "same").OK || find(s, "tz").OK || s.Pass != 11 || s.Total != 13 {
-		t.Fatalf("应为 11/13 且 same、tz 不过，得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
+	if find(s, "tz").OK || s.Pass != 11 || s.Total != 12 {
+		t.Fatalf("应为 11/12 且 tz 不过（两路出口不同国不再算一项，N-14），得到 %d/%d：%+v", s.Pass, s.Total, s.Items)
+	}
+	for _, c := range s.Items {
+		if c.K == "same" {
+			t.Fatalf("不应再有\"两路出口在同一国家\"这一项")
+		}
 	}
 
 	// CF 网站出口换过 / 走的是 Cloudflare 自己的出口：cfexit 不过（decisions SI-1）

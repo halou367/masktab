@@ -202,7 +202,7 @@ export function exitsView(c) {
   const subRow = (s) => row({ ic: 'sub', t: [h('span', { class: 'el' }, s.name), st.settings.defaultSubscriptionId === s.id && h('span', { class: 'tag' }, '默认')],
     // edgetunnel 订阅只当“入口模板”（连接参数）；里面的地址并进入口地址库，各订阅共用（decisions N-10）
     s: [s.kind === 'edgetunnel' ? h('span', { class: 'tag' }, 'edgetunnel') : h('span', { class: 'tag g' }, '通用'),
-      s.kind === 'edgetunnel' ? `${(s.profiles || []).length} 条线路 · ${s.addrs || 0} 个地址已并入入口地址库${s.addrsGone ? `（另有 ${s.addrsGone} 个已不在订阅里）` : ''} · ${ago(s.fetchedAt)}` : `${s.nodeCount} 个节点 · ${ago(s.fetchedAt)}`,
+      s.kind === 'edgetunnel' ? `${(s.profiles || []).length} 套 Host · ${s.addrs || 0} 个地址已并入入口地址库${s.addrsGone ? `（另有 ${s.addrsGone} 个已不在订阅里）` : ''} · ${ago(s.fetchedAt)}` : `${s.nodeCount} 个节点 · ${ago(s.fetchedAt)}`,
       s.lastError && h('span', { class: 'bad' }, ' · ' + s.lastError)],
     chev: true, title: s.kind === 'edgetunnel' ? `${s.url}\n只取连接参数（域名、uuid、路径、ECH、alpn 等）；订阅里的地址并进入口地址库，每次更新订阅自动同步` : s.url,
     onclick: async () => {

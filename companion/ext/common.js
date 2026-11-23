@@ -11,10 +11,6 @@ export function shownExit(inst) {
   if (!p) return null;
   return (inst.tz?.source === 'exit-direct' ? p.direct || p.cf : p.cf || p.direct) || null;
 }
-export function mismatch(inst) {
-  const p = inst?.rt?.probe;
-  return !!(p && p.cf && p.direct && p.cf.country && p.direct.country && p.cf.country !== p.direct.country);
-}
 export const RESTART_WHY = { timezone: '出口时区已变化', extensions: '扩展有增删', fingerprint: '指纹 / 语言设置已改', appearance: '颜色 / 编号已改' };
 // “需重启：…”那一句，和点“立即重启”该调哪个接口。头像菜单、新标签页、节点与出口、扩展页都用这两个（决策 UI-19：提示要在第一眼看得到的地方，不只在节点页里）。
 // 手机上出口时区变了，重启实例换不掉内核里的会话状态，要重启整个 app 才算数（decisions A-11）；其余都是重启这个实例。

@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"encoding/base64"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -177,5 +178,54 @@ func TestEdgetunnelProfiles(t *testing.T) {
 	info2, ok := DetectEdgetunnel(n2, false)
 	if !ok || len(info2.Profiles) != 1 || info2.Profiles[0].Host != "*.wild.example.org" || len(info2.Profiles[0].Hosts) != 6 {
 		t.Errorf("随机子域应合成一套：%v %+v", ok, info2)
+	}
+}
+
+// 分套（decisions N-14）：去掉 address、端口、path 后参数一样的算一套——10 个 Host 就是 10 套，
+// 同一 Host 的 TLS（443）和明文（80）节点是同一套，随机路径不影响分套。
+func TestEdgetunnelSets(t *testing.T) {
+	mk := func(addr, host string, tls bool, path string) string {
+		sec := "security=tls&sni=" + host + "&fp=chrome&"
+		if !tls {
+			sec = "security=none&"
+		}
+		return "vless://a715370f-ae91-4ae6-8bbc-748d1cd9038c@" + addr + "?" + sec + "type=ws&host=" + host + "&path=" + path + "&encryption=none#n-" + addr + host
+	}
+	var lines []string
+	for i := 0; i < 130; i++ {
+		h := string(rune('a'+i%10)) + ".sets.example.com"
+		tls := i%3 != 0
+		port := "443"
+		if !tls {
+			port = "80"
+		}
+		lines = append(lines, mk("104.16.9."+strconv.Itoa(i)+":"+port, h, tls, "%2Fr"+strconv.Itoa(i)+"%3Fed%3D2560"))
+	}
+	nodes, err := Parse([]byte(strings.Join(lines, "\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, ok := DetectEdgetunnel(nodes, false)
+	if !ok || len(info.Profiles) != 10 {
+		t.Fatalf("10 个 Host 应分成 10 套：%v %d", ok, len(info.Profiles))
+	}
+	keys := map[string]bool{}
+	for _, p := range info.Profiles {
+		keys[p.Key] = true
+		if len(p.Hosts) != 1 || p.Template.Base["tls"] != true {
+			t.Errorf("每套一个 Host，模板取 TLS 节点：%+v", p)
+		}
+	}
+	if len(keys) != 10 {
+		t.Errorf("每套 key 不同：%d", len(keys))
+	}
+	// 只有一个 Host、TLS 和明文混着：一套
+	var one []string
+	for i := 0; i < 6; i++ {
+		one = append(one, mk("104.16.8."+strconv.Itoa(i)+":"+[]string{"443", "80"}[i%2], "one.example.com", i%2 == 0, "%2Fx"+strconv.Itoa(i)))
+	}
+	n1, _ := Parse([]byte(strings.Join(one, "\n")))
+	if i1, ok := DetectEdgetunnel(n1, false); !ok || len(i1.Profiles) != 1 || i1.Profiles[0].Template.Base["tls"] != true {
+		t.Errorf("同一 Host 的 TLS 和明文应是一套：%v %+v", ok, i1)
 	}
 }

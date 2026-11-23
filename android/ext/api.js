@@ -16,4 +16,4 @@ export async function api(method, path, body, timeout = method === 'GET' ? 20000
   return r.data;
 }
 export const config = async () => ({});
-export { fmtBytes, shownExit, mismatch, RESTART_WHY, noticeText, letterOf } from './common.js';
+export { fmtBytes, shownExit, RESTART_WHY, noticeText, letterOf } from './common.js';

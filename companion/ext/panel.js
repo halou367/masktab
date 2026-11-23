@@ -316,7 +316,15 @@ function curProfile(me, sub) {
   return profs.find((x) => x.key && x.key === me.proxy.profile) || profs.find((x) => x.host === me.proxy.host) || profs[0] || null;
 }
 const netTag = (pf) => (pf ? h('span', { class: 'tag' + (pf.net === 'xhttp' ? ' exp' : ''), title: pf.net === 'xhttp' ? 'XHTTP：实验性，连不上就换回 ws' : `${pf.type} + ${pf.net}` }, (pf.type !== 'vless' ? pf.type + ' ' : '') + pf.net) : h('span', { class: 'tag g', title: '通用订阅' }, '通用'));
-const cntOf = (s) => (s.scanning && s.progress ? `${s.progress.done} / ${s.progress.total}` : `${s.nodes.filter((n) => n.delay > 0).length}/${s.nodes.length} 可用`);
+// edgetunnel 订阅一行就是一套 Host（去掉地址、端口、path 后参数一样的算一套，decisions N-14）：写“第几套 / 共几套”，节点可用数没意义（地址都并进入口地址库了）。
+// 通用订阅还是写节点可用数。
+const cntOf = (s, pf) => {
+  if (isET(s) && pf) {
+    const ps = s.profiles || [], i = ps.findIndex((x) => x.key === pf.key), n = ps.length;
+    return (n > 1 ? `第 ${i + 1} 套，共 ${n} 套 Host` : '1 套 Host') + (pf.hosts > 1 ? ` · ${pf.hosts} 个子域` : '');
+  }
+  return s.scanning && s.progress ? `${s.progress.done} / ${s.progress.total}` : `${s.nodes.filter((n) => n.delay > 0).length}/${s.nodes.length} 可用`;
+};
 const addSub = async (me) => {
   if (busy) return;
   const url = await ask('添加订阅', { placeholder: '订阅地址 https://…', note: 'edgetunnel 或通用订阅（Clash / V2Ray），自动识别。', ok: '添加', type: 'url' });
@@ -334,7 +342,7 @@ function subView(me, sub) {
     onclick: () => { view = ''; if (!isCur(l)) patch({ proxy: { subscriptionId: l.s.id, profile: l.pf ? l.pf.key : '', state: 'on' } }); else render(); } },
   h('span', { class: 'lic' }, icon('sub', 24)),
   h('span', { class: 'tx' }, h('span', { class: 't' }, h('span', { class: 'el' }, l.pf ? l.pf.host || l.s.name : l.s.name)),
-    h('span', { class: 's' }, netTag(isET(l.s) ? l.pf : null), l.s.lastError ? h('span', { class: 'bad el', title: l.s.lastError }, '刷新失败') : cntOf(l.s), ' · ' + ago(l.s.fetchedAt)))))),
+    h('span', { class: 's' }, netTag(isET(l.s) ? l.pf : null), l.s.lastError ? h('span', { class: 'bad el', title: l.s.lastError }, '刷新失败') : cntOf(l.s, l.pf), ' · ' + ago(l.s.fetchedAt)))))),
   !lines.length && h('div', { class: 'empty' }, '还没有订阅'),
   sub?.hasEch && row({ ic: 'lock', t: 'ECH', s: sub.echOff ? '已关（这个网络用不了时会自动关）' : '加密握手里的域名', trail: sw(!sub.echOff, 'ECH', (v) => run(() => api('POST', `/api/subscriptions/${sub.id}/ech?off=${v ? 0 : 1}`), '正在重测…')) }),
   sub?.lastError && h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, '刷新失败：' + sub.lastError)),
@@ -344,14 +352,14 @@ function subView(me, sub) {
 
 // ---------- 节点与出口（首页） ----------
 // 当前出口（一张卡片说完，下面的行不再重复）：这是哪类网站的出口、国旗 + 写全的 IP（点一下复制）、类型图标、城市 · 运营商、纯净度和 CF 风险两行（各带一句说明）、CF 信誉、延迟、纯净度圆环；
-// 两路出口不同时第二行列另一路（“普网” = 普通网站），不在同一国家时给黄色提示。国名、“住宅 / 机房”不写字：国旗和图标已经说了（悬停有字）。
+// 两路出口不同时第二行列另一路（“普网” = 普通网站），只列出来、不提示（N-14）。国名、“住宅 / 机房”不写字：国旗和图标已经说了（悬停有字）。
 // 改了节点 / 出口 / 入口（拨开关、选一行）以后，核心服务先把出口清空、断流，确认完新出口再放行（proxyflow.go 的 refresh），要几秒。
 // 以前这几秒里出口卡片缩成一行“正在探测出口…”、上面再冒出一条红色“断网中：正在确认出口”，下面的开关整体往上跳一大截，
 // 刚拨的开关就跑到别处去了（需求方：“关了自动看一眼，视觉中心变成入口的了”）。现在卡片留着上一次的出口、同样的高度，
 // 只在角上写“正在确认出口…”（决策 UI-32）。lastProbe 只在这个页面里记着，不落盘。
 const lastProbe = new Map();
 const CONFIRMING = '正在确认出口'; // proxyflow.go 的 refreshTry 写的 r.Cut：几秒就过去的状态，不当成断网提示
-function exitCard(me, fixAuto) {
+function exitCard(me) {
   const p0 = me.rt.probe, live = me.rt.running || me.rt.starting;
   if (p0) lastProbe.set(me.id, p0);
   const p = p0 || (live ? lastProbe.get(me.id) : null), again = !p0 && !!p; // again：正在重新确认，先画上一次的
@@ -360,7 +368,6 @@ function exitCard(me, fixAuto) {
   if (!(p.cf || p.direct)) return null;
   const main = (me.tz?.source === 'exit-direct' ? p.direct || p.cf : p.cf || p.direct);
   const other = p.cf && p.direct && p.cf.ip !== p.direct.ip ? (main === p.cf ? p.direct : p.cf) : null;
-  const diff = p.cf && p.direct && cc(p.cf) && cc(p.direct) && cc(p.cf) !== cc(p.direct);
   const copy = (ip) => (e) => { e.stopPropagation(); navigator.clipboard?.writeText(ip).then(() => toast('已复制 IP'), () => toast('复制失败', true)); };
   const q = ipq(main.ip), pu = pureInfo(q), cf = cfRisk(st, me), len = (ip) => (ip.length > 24 ? ' long' : ip.length > 15 ? ' mid' : '');
   const capOf = (x) => (x === p.cf ? 'CF 网站' : '普网'), capTip = (x) => (x === p.cf ? '托管在 Cloudflare 上的网站看到的出口' : '普通网站看到的出口');
@@ -386,7 +393,8 @@ function exitCard(me, fixAuto) {
         h('span', { class: 'qn' }, cf.note || '越低越好'))),
     other && h('div', { class: 'xsplit', title: capTip(other) }, icon(other === p.cf ? 'cloud' : 'globe', 16), capOf(other), flagOf(cc(other)),
       h('button', { class: 'mono' + len(other.ip), title: '复制 IP', onclick: copy(other.ip) }, other.ip), tyIcon(other.ip, 16), pbar(scoreOf(other.ip))),
-    diff && h('div', { class: 'nswarn' }, icon('warn', 16), h('span', { class: 'grow' }, '两路出口不在同一国家'), fixAuto && h('button', { class: 'lk', onclick: fixAuto }, '改自动')));
+    // 两路出口不同国的黄色提示去掉了（decisions N-14）：普网那路多半是 Cloudflare 自己的 104.28 段，跟着 Worker 走，怎么改都对不上，提示只会吓人
+  );
 }
 
 function mainView(me, sub) {
@@ -407,7 +415,7 @@ function mainView(me, sub) {
   const banner = (bad, text, ...acts) => h('div', { class: 'warn' + (bad ? ' bad' : '') }, icon('warn', 20), h('span', { class: 'tx' }, text), acts);
   const lk = (text, fn) => h('button', { class: 'lk', onclick: fn }, text);
   const allAuto = () => { const curId = pipIdOf(px), pip = et && curId ? (sub.pips || []).find((x) => x.id === curId) : null; patch({ proxy: { exitMode: 'auto', region: (pip && pcc(pip)) || (px.region || ''), state: 'on' } }); };
-  if (on) { const c = exitCard(me, sub && !exitAuto ? allAuto : null); if (c) kids.push(c); }
+  if (on) { const c = exitCard(me); if (c) kids.push(c); }
   if (st.core.error) kids.push(banner(true, st.core.error, lk('重试', () => run(() => api('POST', '/api/setup/retry'), '正在重试…'))));
   const noexit = on && rt.notice?.startsWith('noexit:'), pipGone = on && sub && et && !exitAuto && p && p.direct && !p.cf;
   const restartNow = () => api('POST', restartPath(st, me));
@@ -436,7 +444,7 @@ function mainView(me, sub) {
   kids.push(sec('订阅'));
   const curPf = curProfile(me, sub);
   if (!st.subscriptions.length) kids.push(row({ k: 'sub', ic: 'add', t: '添加订阅', s: 'edgetunnel 或通用订阅', onclick: () => addSub(me) }));
-  else kids.push(row({ k: 'sub', ic: 'sub', t: sub ? (curPf?.host || sub.name) : '选一条线路', s: sub ? [netTag(isET(sub) ? curPf : null), sub.lastError ? h('span', { class: 'bad' }, '刷新失败') : cntOf(sub), ' · ' + ago(sub.fetchedAt)] : `${linesOf().length} 条线路`, chev: true, aria: '订阅线路', onclick: go('sub') }));
+  else kids.push(row({ k: 'sub', ic: 'sub', t: sub ? (curPf?.host || sub.name) : '选一条线路', s: sub ? [netTag(isET(sub) ? curPf : null), sub.lastError ? h('span', { class: 'bad' }, '刷新失败') : cntOf(sub, curPf), ' · ' + ago(sub.fetchedAt)] : `${linesOf().length} 套`, chev: true, aria: '订阅线路', onclick: go('sub') }));
 
   if (sub) {
     // 出口（edgetunnel）/ 节点（通用订阅）

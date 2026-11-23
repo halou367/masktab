@@ -60,7 +60,7 @@ function syncEntry(state) {
 }
 fixture.__syncSrc = syncEntry.toString();
 const light = JSON.parse(JSON.stringify(fixture)); light.settings.theme = 'light';
-// 两路出口不同国家的样子（黄色提示）
+// 两路出口不同国家的样子：不再给黄色提示（decisions N-14，普网那路是 Cloudflare 自己的出口，对不上是常态）
 const split = JSON.parse(JSON.stringify(fixture)); { const m = split.instances.find((x) => x.id === split.me.id); m.rt.probe.direct = { ...m.rt.probe.direct, country: 'HK', city: 'Hong Kong', timezone: 'Asia/Hong_Kong' }; split.me = m; }
 // IPv6 的样子（决定 N-2）：入口、出口列表里各放最长写法的 IPv6（一个通、一个本机没有 IPv6 所以不通），
 // 地址库里放一个展开出 IPv6 的域名、一个解析失败的域名、一个单独的 IPv6。
@@ -289,6 +289,7 @@ if (want('flow')) {
   i = await info();
   const lines = await pg.locator('button.sl').count();
   check('节点页 → 订阅线路', i.title === '订阅线路' && lines >= 1 && i.hash === 'node', { ...i, lines });
+  { const t = await pg.locator('button.sl').first().innerText(); check('订阅线路：edgetunnel 一行一套 Host，写“1 套 Host”，不写节点可用数（N-14）', /1 套 Host/.test(t) && !/可用/.test(t), t); }
   // 对话框：点“添加订阅”弹出输入框，遮罩盖上时告诉 app 压暗状态栏、导航栏
   await calls();
   await pg.locator('button.row', { hasText: '添加订阅' }).click();
@@ -556,7 +557,7 @@ if (want('newtab')) {
   await pg.close();
   const c2 = await mkctx(split); const p2 = await c2.newPage(); watch(p2, 'newtab-split');
   await p2.goto(base + 'newtab.html#inst=p2'); await p2.waitForTimeout(800);
-  check('两路出口不同国家：新标签页卡片上出现黄色提示', await p2.locator('.nstat .nswarn', { hasText: '两路出口不在同一国家' }).count() === 1, {});
+  check('两路出口不同国家：新标签页不再出现黄色提示（N-14）', await p2.locator('.nstat').count() === 1 && await p2.locator('.nswarn', { hasText: '同一国家' }).count() === 0, {});
   await c2.close();
 }
 // 电脑版对照：同一份状态（只把“宿主”和内核能力换成电脑版的），画电脑版的工具栏弹窗，和手机的节点页比内容。

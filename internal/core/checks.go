@@ -95,15 +95,7 @@ func (a *App) checksLocked(in *model.Instance, rt *Runtime, info *fpInfo) *check
 		}
 		add(check{K: "lang", T: "语言与出口国家一致", V: v, OK: ok})
 	}
-	// 5. 两路出口（普通网站 / Cloudflare 上的网站）在同一个国家
-	switch {
-	case !on || pr == nil || pr.CF == nil || pr.Direct == nil || pr.CF.Country == "" || pr.Direct.Country == "":
-		add(check{K: "same", T: "两路出口在同一国家", V: "只有一路", NA: true})
-	case strings.EqualFold(pr.CF.Country, pr.Direct.Country):
-		add(check{K: "same", T: "两路出口在同一国家", V: strings.ToUpper(pr.CF.Country), OK: true})
-	default:
-		add(check{K: "same", T: "两路出口在同一国家", V: "普通网站 " + strings.ToUpper(pr.Direct.Country) + " / CF 网站 " + strings.ToUpper(pr.CF.Country), OK: false})
-	}
+	// （原第 5 项"两路出口在同一国家"去掉了，decisions N-14：普网那路是 Cloudflare 自己的 104.28 段，对不上是常态，不算破绽）
 	// 6. Cloudflare 上的网站能打开（CF 那一路探得到出口）
 	switch {
 	case !on || pr == nil:

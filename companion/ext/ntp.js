@@ -1,5 +1,5 @@
 // 新标签页（电脑和手机共用，决策 D-4、UI-1）：照已确认的 Chrome 风格演示。
-// 从上到下：搜索框；伪装概况卡（出口 IP、延迟、住宅 / 机房；伪装度、纯净度、CF 风险；两路出口不同国时黄色提示；点卡片去“节点与出口”）；
+// 从上到下：搜索框；伪装概况卡（出口 IP、延迟、住宅 / 机房；伪装度、纯净度、CF 风险；点卡片去“节点与出口”）；
 // 书签；最近访问；已存账号的网站。哪几块显示由设置里的“新标签页”决定（settings.ntpHide）。
 // 外壳（电脑 newtab.js / 手机 newtab.js）只给几样它自己才有的东西：
 //   host.recent()      最近访问 [{url, title, at}]（电脑取内核自己的历史记录；手机由 app 按实例记）
@@ -7,7 +7,7 @@
 //   host.openUpdate()  去“组件与更新”（有新版本时搜索框下面有一行提示）
 import { api } from './api.js';
 import { h, icon, flag, avatar, delayText, delayCls, ringEl, ask, confirmDlg, toast, applyTheme } from './ui.js';
-import { shownExit, mismatch, disguise, exitQ, cfRisk, openWeb, CF_TEST_URL, TYPE_NAME, restartText, restartPath } from './common.js';
+import { shownExit, disguise, exitQ, cfRisk, openWeb, CF_TEST_URL, TYPE_NAME, restartText, restartPath } from './common.js';
 import { siteIcon, siteName, uniqSites } from './sites.js';
 
 // 还没有书签时先放几个查出口和指纹的网站（只是默认值，删掉或加了自己的就不再出现）
@@ -78,8 +78,7 @@ function statCard(st, me, host) {
     h('div', { class: 'nsg' },
       cell(ringEl(dz.pct, 44), '伪装度', dz.total ? `${dz.pass}/${dz.total} 项一致` : '待判断', '越高越好', '伪装度：指纹、时区、语言、出口这些对不对得上，一致的项数 ÷ 能判断的项数'),
       cell(ringEl(q.score, 44, null, pu?.cls), '纯净度', pu ? pu.word : '查不到', pu ? [h('span', {}, '越高越干净'), h('br'), pu.src] : '越高越干净', pu ? pu.tip : '纯净度：出口 IP 本身干不干净（= 100 − IPPure 系数），还没查到'),
-      cfCell),
-    mismatch(me) && h('div', { class: 'nswarn' }, icon('warn', 16), '两路出口不在同一国家', h('span', { class: 'grow' }), h('span', { title: '普网' }, flag(rt.probe.direct.country)), h('span', { title: 'CF 网站' }, flag(rt.probe.cf.country))));
+      cfCell));
   // 窗口开着但断着网（订阅没了、节点不通…）：写在最显眼的地方，点一下去改（决策 F-HEAL）。以前这种情况窗口根本开不起来。
   // 时区变了要重启才放行（电脑版）也算：以前新标签页上看不出来已经断着网。“启动中”“正在确认出口”只是一小会儿，不提示。
   const tzCut = st.host !== 'android' && rt.needRestart?.includes('timezone');

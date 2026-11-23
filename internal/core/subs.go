@@ -491,3 +491,33 @@ func (a *App) dropSubExitsLocked(subID string, keep map[string]exits.Parsed) boo
 	a.Exits = out
 	return changed
 }
+
+// resplitSetsLocked：启动时按现在的分套规则（decisions N-14）用订阅里存着的节点重分一次。
+// 只动 Profiles / Template / Hosts；实例记的那套 key 不在了，profileOf 会按 Host 找回来，再找不到用第一套。返回是否改了。
+func (a *App) resplitSetsLocked() bool {
+	changed := false
+	for _, s := range a.Subs {
+		if s.Kind != "edgetunnel" || len(s.Nodes) == 0 {
+			continue
+		}
+		info, ok := subscription.DetectEdgetunnel(s.Nodes, s.KindLocked)
+		if !ok {
+			continue
+		}
+		if len(info.Profiles) == len(s.Profiles) {
+			same := true
+			for i, p := range info.Profiles {
+				if p.Key != s.Profiles[i].Key || len(p.Hosts) != len(s.Profiles[i].Hosts) {
+					same = false
+					break
+				}
+			}
+			if same {
+				continue
+			}
+		}
+		s.Template, s.Hosts, s.Profiles = &info.Profiles[0].Template, info.Profiles[0].Hosts, info.Profiles
+		changed = true
+	}
+	return changed
+}
