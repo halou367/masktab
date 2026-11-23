@@ -3,6 +3,7 @@
 package tabbar
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"syscall"
@@ -33,15 +34,37 @@ func (g *group) repaintIfChanged() {
 	}
 	sig := sb.String() + "@" + g.active + string(rune('0'+g.hover+1)) + string(rune('0'+g.hoverKind)) + string(drop) + string(mode) +
 		string(rune(g.rect.W())) + string(rune(g.rect.H())) + string(rune(int(g.scale*100))) + string(rune(g.bg[0]<<16|g.bg[1]<<8|g.bg[2]))
+	// 排版（UI-34）：当前的约两倍宽；放不下时左右滚。当前实例换了、实例数或宽变了：把当前的滚到看得见（第一次直接到，之后滑过去）
+	act := -1
+	for i, t := range g.tabs {
+		if t.ID == g.active {
+			act = i
+		}
+	}
+	lay := func(scroll int) Layout {
+		if g.m.st.Compact {
+			return LayCompact(g.rect.W(), len(g.tabs), act, scroll, g.scale)
+		}
+		return Lay(g.rect.W(), len(g.tabs), act, scroll, g.scale)
+	}
+	probe := lay(g.sc.Px())
+	g.sc.Clamp(probe.Max)
+	if key := fmt.Sprintf("%s|%d|%d|%v", g.active, len(g.tabs), g.rect.W(), g.scale); key != g.revealKey && g.rect.W() > 0 {
+		first := g.revealKey == ""
+		g.revealKey = key
+		if goal := probe.Reveal(act, int(math.Round(g.sc.Goal)), g.scale); float64(goal) != g.sc.Goal {
+			g.sc.Goal = float64(goal)
+			if first || !g.shown {
+				g.sc.Pos = g.sc.Goal
+			}
+		}
+	}
+	sig += fmt.Sprintf("~%d", g.sc.Px())
 	if sig == g.sig {
 		return
 	}
 	g.sig = sig
-	if g.m.st.Compact {
-		g.lay = LayCompact(g.rect.W(), len(g.tabs), g.scale)
-	} else {
-		g.lay = Lay(g.rect.W(), len(g.tabs), g.scale)
-	}
+	g.lay = lay(g.sc.Px())
 	g.render()
 }
 
@@ -113,6 +136,7 @@ func (g *group) render() {
 	copy(pix, c.Pix)
 	g.m.fonts(g.scale)
 	_, _, _ = pSetBkMode.Call(mem, 1 /* 透明 */)
+	_, _, _ = pIntersectClipRect.Call(mem, uintptr(g.lay.View.L), 0, uintptr(g.lay.View.R), uintptr(full)) // 滚出去的那一截不画字（UI-34）
 	for i, s := range g.lay.Slots {
 		if i >= len(g.tabs) {
 			break
@@ -135,6 +159,8 @@ func (g *group) render() {
 		_, _, _ = pDrawTextW.Call(mem, uintptr(unsafe.Pointer(&txt[0])), uintptr(len(txt)-1), uintptr(unsafe.Pointer(&tr)), 0x20|0x4|0x8000|0x800)
 	}
 	_, _, _ = pGdiFlush.Call()
+	_, _, _ = pSelectClipRgn.Call(mem, 0)
+	FadeEdges(pix[:w*hgt*4], w, hgt, g.lay, g.scale)
 	RoundTop(pix[:w*hgt*4], w, hgt, 8*g.scale) // 系统画字时不写透明度那一位，这里统一补上
 	Ears(pix, w, full, ear(g.scale), g.bg)
 	size, src := point32{int32(w), int32(full)}, point32{}
@@ -203,7 +229,8 @@ func (g *group) frame(sf *surface, e float64) {
 		copy(sf.keep, c.Pix)
 		g.m.fonts(g.scale)
 		var boxes []Rect
-		strip := Strip(g.lay, ActiveOf(paints), g.scale)
+		strip := Strip(g.lay, g.scale)
+		_, _, _ = pIntersectClipRect.Call(sf.mem, uintptr(g.lay.View.L), 0, uintptr(g.lay.View.R), uintptr(sf.h)) // 滚出去的那一截不画字（UI-34）
 		for i, s := range g.lay.Slots {
 			if i >= len(g.tabs) {
 				break
@@ -227,6 +254,7 @@ func (g *group) frame(sf *surface, e float64) {
 			boxes = append(boxes, Rect{int(tr.L), int(tr.T), int(tr.R), int(tr.B)})
 		}
 		_, _, _ = pGdiFlush.Call()
+		_, _, _ = pSelectClipRgn.Call(sf.mem, 0)
 		for _, b := range boxes {
 			for y := max(b.T, 0); y < min(b.B, sf.h); y++ {
 				for x := max(b.L, 0); x < min(b.R, sf.w); x++ {
@@ -239,7 +267,8 @@ func (g *group) frame(sf *surface, e float64) {
 			}
 		}
 	}
-	up := px(stripUp, g.scale) // 底色从窗口的上沿开始：左上角和窗口的圆角对齐；右边在标题栏中间，不削
+	FadeEdges(sf.pix, sf.w, sf.h, g.lay, g.scale) // 滚出去的那一头渐隐（字画完再做，字一起隐）
+	up := px(stripUp, g.scale)                    // 底色从窗口的上沿开始：左上角和窗口的圆角对齐；右边在标题栏中间，不削
 	Corners(sf.pix[up*sf.w*4:], sf.w, sf.h-up, 8*g.scale, true, false)
 	size, src := point32{int32(sf.w), int32(sf.h)}, point32{}
 	blend := [4]byte{0, 0, 255, 1}

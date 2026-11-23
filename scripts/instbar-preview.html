@@ -1,0 +1,118 @@
+<!doctype html>
+<!-- 实例栏预览（decisions UI-34）：页面检查 instbar 段用。排版、色条、过渡、滚动、命中都来自 internal/tabbar（编成 instbar.wasm），
+     只有画字、悬停延时的计时在这里（照 paint_windows.go、bar_windows.go 的做法）。实例名都是假的。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>实例栏预览</title>
+<style>
+  html, body { margin: 0; background: #f1f3f4; font-family: "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif; }
+  #win { position: relative; margin: 0; }
+  #bar { position: absolute; left: 0; top: 0; display: block; }
+  #page { position: absolute; left: 0; right: 0; height: 90px; background: #fff; color: #5f6368; font-size: 12px; padding: 10px 14px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="win"><canvas id="bar"></canvas><div id="page">网页内容（假的）</div></div>
+<script src="wasm_exec.js"></script>
+<script>
+const Q = new URLSearchParams(location.search);
+const SETS = {
+  // 多：16 个，当前的在后面（要滚到看得见）。名字都是假的
+  many: { w: 900, active: 11, labels: ['普通窗口', '#1 opus5.5', '#7 maple.river', '#8 north.wind', '#12 quiet.lake', '#16', '#17 sonnet5.5', '#18 fabel5.2', '#19 工作',
+    '#21 测试', '#22 blue.fox', '#23 研究账号', '#24', '#25 shop', '#26 news', '#27 dev'] },
+  few: { w: 900, active: 1, labels: ['普通窗口', '#1 opus5.5', '#7 maple.river'] },
+};
+const COLORS = [[95, 99, 104], [26, 115, 232], [217, 48, 37], [249, 171, 0], [24, 128, 56], [161, 66, 244], [0, 137, 123], [232, 113, 10], [196, 41, 120]];
+const set = SETS[Q.get('set') || 'many'];
+const S = Number(Q.get('scale') || devicePixelRatio || 1);
+const W = set.w, BG = [32, 33, 36], OUT = [222, 225, 230], TAB = [53, 54, 58];
+const cv = document.getElementById('bar'), ctx = cv.getContext('2d', { willReadFrequently: true });
+let e = 0, open = false, anim = null, hover = -1, hoverX = false, mouse = null, inSince = 0, outSince = 0, rearm = false, H = 0, last = performance.now();
+
+function scene(h) { // 栏底下假的浏览器：窗口上沿外面、标题栏、一个浏览器自己的标签页
+  const img = ctx.createImageData(W * S, h), d = img.data, up = Math.round(4 * S);
+  for (let y = 0; y < h; y++) for (let x = 0; x < W * S; x++) {
+    let c = y < up ? OUT : BG;
+    if (y >= up + 8 * S && x >= 300 * S && x < 520 * S) c = TAB;
+    const i = (y * W * S + x) * 4; d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
+  }
+  return img;
+}
+function ellipsis(t, max) {
+  if (ctx.measureText(t).width <= max) return t;
+  while (t.length && ctx.measureText(t + '…').width > max) t = t.slice(0, -1);
+  return t ? t + '…' : '';
+}
+function draw() {
+  const r = instbar.render(e, hover, hoverX), info = JSON.parse(r.info), h = r.h;
+  if (cv.width !== r.w || cv.height !== h) { cv.width = r.w; cv.height = h; cv.style.width = W + 'px'; cv.style.height = h / S + 'px'; document.getElementById('page').style.top = h / S + 'px'; }
+  const img = scene(h), d = img.data, p = r.pix;
+  for (let i = 0; i < d.length; i += 4) { const a = p[i + 3] / 255; for (let k = 0; k < 3; k++) d[i + k] = p[i + k] + d[i + k] * (1 - a); }
+  ctx.putImageData(img, 0, 0);
+  if (info.ink > 0) { // 字：位置照 paint_windows.go 的 frame（左 11、右 8，有 × 时让到 × 左边 2），滚出 View 的不画
+    ctx.save(); ctx.beginPath(); ctx.rect(info.view.L, 0, info.view.R - info.view.L, h); ctx.clip();
+    ctx.globalAlpha = info.ink; ctx.textBaseline = 'middle';
+    for (const t of info.tabs) {
+      const n = t.now, L = n.L + 11 * S; let R = n.R - 8 * S;
+      if (t.close.R > t.close.L && (t.active || t.hover)) R = t.close.L - 2 * S;
+      if (R <= L) continue;
+      ctx.font = `${t.active ? 600 : 400} ${12 * S}px "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif`;
+      ctx.fillStyle = `rgb(${t.ink.join(',')})`;
+      ctx.fillText(ellipsis(t.label, R - L), L, (n.T + n.B) / 2 + 0.5 * S);
+    }
+    ctx.restore();
+  }
+  const all = ctx.getImageData(0, 0, cv.width, h);
+  instbar.fade(all.data, cv.width, h); // 两头渐隐：字画完再做（和 Windows 上一样）
+  ctx.putImageData(all, 0, 0);
+  H = h;
+}
+function setOpen(v) { if (v === open) return; open = v; anim = { from: e, t0: performance.now(), dur: (v ? 150 : 110) * Math.abs((v ? 1 : 0) - e) }; if (!v) { hover = -1; rearm = true; } }
+function inBand(info) { const b = info.band; return mouse && mouse.x >= b.L && mouse.x < b.R && mouse.y >= b.T && mouse.y < b.B; }
+function stay() { const m = 10 * S; return mouse && mouse.x >= -m && mouse.x < W * S + m && mouse.y >= -m && mouse.y < instbar.openH * S + m; }
+function tick(now) {
+  const dt = Math.min(now - last, 50); last = now;
+  let dirty = false;
+  if (instbar.moving()) dirty = instbar.step(dt) || dirty;
+  const info = JSON.parse(instbar.info(e));
+  // 悬停意图（tabbar.Hover）：停 hoverIn 才展开、离开 hoverOut 才收、收起后先离开一次色条
+  if (!open) { if (inBand(info) && !rearm) { inSince ||= now; if (now - inSince >= instbar.hoverIn) setOpen(true); } else { inSince = 0; if (!inBand(info)) rearm = false; } }
+  else if (stay()) outSince = 0; else { outSince ||= now; if (now - outSince >= instbar.hoverOut) { outSince = 0; setOpen(false); } }
+  if (anim) {
+    const x = anim.dur ? Math.min(1, (now - anim.t0) / anim.dur) : 1;
+    e = open ? anim.from + (1 - anim.from) * instbar.easeOut(x) : anim.from * (1 - instbar.easeShut(x));
+    if (x >= 1) { e = open ? 1 : 0; anim = null; }
+    dirty = true;
+  }
+  if (open && mouse) { const [k, i] = instbar.hit(Math.round(mouse.x), Math.round(mouse.y - 0)); const h2 = k === 1 || k === 2 ? i : -1, x2 = k === 2; if (h2 !== hover || x2 !== hoverX) { hover = h2; hoverX = x2; dirty = true; } }
+  if (dirty) draw();
+  requestAnimationFrame(tick);
+}
+const pos = (ev) => { const b = cv.getBoundingClientRect(); return { x: (ev.clientX - b.left) * S, y: (ev.clientY - b.top) * S }; };
+addEventListener('mousemove', (ev) => { mouse = pos(ev); });
+cv.addEventListener('mousedown', (ev) => {
+  const p = pos(ev);
+  if (!open) { const i = instbar.stripHit(Math.round(p.x)); if (i >= 0) instbar.select(i); setOpen(true); draw(); return; }
+  const [k, i] = instbar.hit(Math.round(p.x), Math.round(p.y));
+  if (k === 1) { instbar.select(i); draw(); }
+});
+// 滚轮（UI-34）：换成 Windows 的单位（一格 120；页面里一格 deltaY 按 100 算），纵向 = 左右滚，横向照原方向
+cv.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  const k = ev.deltaMode === 1 ? 100 / 3 : 1, horiz = Math.abs(ev.deltaX) > Math.abs(ev.deltaY);
+  const delta = Math.round((horiz ? ev.deltaX : -ev.deltaY) * k * 1.2);
+  if (instbar.wheel(delta, horiz)) draw();
+}, { passive: false });
+addEventListener('instbar', () => {});
+const go = new Go();
+fetch('instbar.wasm').then((r) => r.arrayBuffer()).then((b) => WebAssembly.instantiate(b, go.importObject)).then(({ instance }) => {
+  go.run(instance);
+  instbar.setup(JSON.stringify({ w: W * S, scale: S, active: set.active, bg: BG, tabs: set.labels.map((label, i) => ({ label, color: COLORS[i % COLORS.length] })) }));
+  draw();
+  window.__ib = { ready: true, S, info: () => JSON.parse(instbar.info(e)), e: () => e, open: () => open, moving: () => instbar.moving() };
+  requestAnimationFrame(tick);
+});
+</script>
+</body>
+</html>

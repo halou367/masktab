@@ -10,7 +10,13 @@ type Canvas struct {
 	Pix  []byte
 	// Premul：每个点带自己的透明度（预乘），画上去的东西按“盖在上面”合成。不设的话透明度那一位不动（整张图之后统一设）。
 	Premul bool
+	// 裁剪（UI-34）：clip 时只画 clipL ≤ x < clipR 的点。标签滚出 View 的那一截不画。
+	clip         bool
+	clipL, clipR int
 }
+
+// ClipX 只画横坐标在 [l, r) 里的点；ClipX(0, 0) 取消。
+func (c *Canvas) ClipX(l, r int) { c.clip, c.clipL, c.clipR = r > l, l, r }
 
 func NewCanvas(w, h int, bg [3]int) *Canvas {
 	c := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4)}
@@ -21,7 +27,7 @@ func NewCanvas(w, h int, bg [3]int) *Canvas {
 }
 
 func (c *Canvas) blend(x, y int, col [3]int, a float64) {
-	if x < 0 || y < 0 || x >= c.W || y >= c.H || a <= 0 {
+	if x < 0 || y < 0 || x >= c.W || y >= c.H || a <= 0 || (c.clip && (x < c.clipL || x >= c.clipR)) {
 		return
 	}
 	if a > 1 {
@@ -43,14 +49,17 @@ func (c *Canvas) At(x, y int) [3]int {
 }
 
 // RoundRect 填一个圆角矩形，半径 rad。
-func (c *Canvas) RoundRect(r Rect, rad float64, col [3]int) {
+func (c *Canvas) RoundRect(r Rect, rad float64, col [3]int) { c.roundRect(r, rad, col, 1) }
+
+// roundRect 同 RoundRect，整个再乘上透明度 k。
+func (c *Canvas) roundRect(r Rect, rad float64, col [3]int, k float64) {
 	cx0, cy0, cx1, cy1 := float64(r.L)+rad, float64(r.T)+rad, float64(r.R)-rad, float64(r.B)-rad
 	for y := r.T; y < r.B; y++ {
 		for x := r.L; x < r.R; x++ {
 			fx, fy := float64(x)+0.5, float64(y)+0.5
 			dx := math.Max(math.Max(cx0-fx, fx-cx1), 0)
 			dy := math.Max(math.Max(cy0-fy, fy-cy1), 0)
-			c.blend(x, y, col, rad+0.5-math.Hypot(dx, dy))
+			c.blend(x, y, col, math.Min(1, rad+0.5-math.Hypot(dx, dy))*k)
 		}
 	}
 }
@@ -254,6 +263,7 @@ func Draw(w int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bo
 func draw(w, h int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus bool) *Canvas {
 	c := NewCanvas(w, h, lk.Bg)
 	rad := 7 * scale
+	c.ClipX(l.View.L, l.View.R)
 	for i, s := range l.Slots {
 		if i >= len(tabs) {
 			break
@@ -270,11 +280,54 @@ func draw(w, h int, l Layout, tabs []TabPaint, lk Look, scale float64, hoverPlus
 			c.Line(cx-d, cy+d, cx+d, cy-d, 1.3*scale, ink, 0.9)
 		}
 	}
+	c.ClipX(0, 0)
 	if hoverPlus {
 		c.RoundRect(l.Plus, rad, Tint(lk.Dim, lk.Bg, 0.22))
 	}
 	plusMark(c, l.Plus, lk, scale, 1)
 	return c
+}
+
+// PlusStripColor 是收起时 ＋ 那一小段的颜色：淡淡的，比没选中的实例还淡。
+func PlusStripColor(lk Look) [3]int { return Tint(lk.Dim, lk.Bg, 0.45) }
+
+// FadeEdges 在标签滚出去的那一头画一道渐隐（UI-34）：那一头后面还有东西才画，宽 fadeW。
+// 在字画完以后调用（字、× 一起隐）。位图里这一行的底色是匀的，所以拿 View 外面紧挨着的那一列当“底”，往它那边混。
+// pix 是 BGRA（预乘也一样），w 宽 h 高。
+func FadeEdges(pix []byte, w, h int, l Layout, scale float64) {
+	left, right := l.Fades()
+	fw := px(fadeW, scale)
+	if fw <= 0 || l.View.W() < 3*fw {
+		return
+	}
+	do := func(ref, x0 int, rev bool) {
+		if ref < 0 || ref >= w {
+			return
+		}
+		for k := 0; k < fw; k++ {
+			x := x0 + k
+			if x < 0 || x >= w {
+				continue
+			}
+			t := (float64(k) + 0.5) / float64(fw) // 0 = 全隐 … 1 = 原样
+			if rev {
+				t = 1 - t
+			}
+			t = t * t * (3 - 2*t)
+			for y := 0; y < h; y++ {
+				p, r := pix[(y*w+x)*4:(y*w+x)*4+4], pix[(y*w+ref)*4:(y*w+ref)*4+4]
+				for j := 0; j < 4; j++ {
+					p[j] = byte(float64(r[j]) + (float64(p[j])-float64(r[j]))*t + 0.5)
+				}
+			}
+		}
+	}
+	if left {
+		do(l.View.L-1, l.View.L, false)
+	}
+	if right {
+		do(l.View.R, l.View.R-fw, true)
+	}
 }
 
 // StripColor 是色条里这个实例那一段的颜色。
@@ -309,7 +362,7 @@ func mix(a, b [3]int, t float64) [3]int {
 // MorphRect 是一个标签在 e 这一刻占的位置：e = 0 是色条里它的那一段 strip（见 Strip），e = 1 是展开后的标签 tab。
 // 四条边各自匀着过去：往下长的同时滑到标签的位置、长到标签那么宽。
 func MorphRect(tab, strip Rect, e float64) Rect {
-	at := func(a, b int) int { return int(lerp(float64(a), float64(b), e) + 0.5) }
+	at := func(a, b int) int { return int(math.Floor(lerp(float64(a), float64(b), e) + 0.5)) } // 滚出左边的是负数：不能用 int(x+0.5)（往 0 截，差一个像素）
 	return Rect{at(strip.L, tab.L), at(strip.T, tab.T), at(strip.R, tab.R), at(strip.B, tab.B)}
 }
 
@@ -362,7 +415,8 @@ func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlu
 		}
 	}
 	ink := InkAlpha(e)
-	strip := Strip(l, ActiveOf(tabs), scale)
+	strip := Strip(l, scale)
+	c.ClipX(l.View.L, l.View.R)
 	for i, s := range l.Slots {
 		if i >= len(tabs) {
 			break
@@ -380,6 +434,11 @@ func Morph(w int, l Layout, tabs []TabPaint, lk Look, scale, e float64, hoverPlu
 			c.Line(cx-d, cy-d, cx+d, cy+d, 1.3*scale, col, 0.9*ink)
 			c.Line(cx-d, cy+d, cx+d, cy-d, 1.3*scale, col, 0.9*ink)
 		}
+	}
+	c.ClipX(0, 0)
+	if len(l.Slots) > 0 && e < 0.5 { // 收着时 ＋ 那一小段：跟着往下长，越展开越淡，到一半（＋ 开始淡入）就没了
+		r := MorphRect(l.Plus, PlusStrip(l, scale), e)
+		c.roundRect(r, math.Min(lerp(2.5, 7, e)*scale, float64(r.H())/2), PlusStripColor(lk), math.Max(0, 1-2*e))
 	}
 	if ink > 0 {
 		if hoverPlus {

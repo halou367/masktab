@@ -37,7 +37,7 @@ fast() {
 
 # 页面检查：各段分成五组同时跑。页面检查的时间大半是在等页面动画，不吃 CPU，所以组数不用跟着核数走。
 # 分组按各段用时排匀（2026-11：flow 31 秒，desk 22，narrow 21，shots 13，heal 14，update 11，其余个位数）；JOBS=1 改成一个进程依次跑。
-PAGE_GROUPS=("flow" "desk" "narrow jank" "shots light v6 tune groups" "heal update newtab safe import a11y sstp fp downloads mail")
+PAGE_GROUPS=("flow" "desk" "narrow jank" "shots light v6 tune groups instbar" "heal update newtab safe import a11y sstp fp downloads mail")
 pages() {
   need_pw
   local t0=$SECONDS ext="$MT_OUT/ext" shots="$MT_OUT/pages" bad=0 groups=() i
@@ -45,6 +45,8 @@ pages() {
   for f in $SHARED_EXT; do cp -r "companion/ext/$f" "$ext/"; done
   cp -r android/ext/* "$ext/"
   cp android/scripts/preview-pages.mjs android/scripts/fixture-state.json "$MT_PW/"
+  # 实例栏（UI-34）：Windows 上用的排版和画法编成 WebAssembly，页面检查 instbar 段在浏览器里画、用滚轮和鼠标点
+  GOOS=js GOARCH=wasm go build -o "$ext/instbar.wasm" ./cmd/instbar-preview && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" scripts/instbar-preview.html "$ext/" || bad=1
   if [ $# -gt 0 ]; then groups=("$*"); elif [ "${JOBS:-}" = 1 ]; then groups=("${PAGE_GROUPS[*]}"); else groups=("${PAGE_GROUPS[@]}"); fi
   local pids=()
   for i in "${!groups[@]}"; do
