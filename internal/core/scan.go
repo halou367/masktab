@@ -486,57 +486,83 @@ func (a *App) testExits(nodes []nodeRef, withCF bool) {
 	wg.Wait()
 }
 
-// testPips 逐个测反代：经借用的入口访问 Cloudflare 的 trace，得到用这个反代时 Cloudflare 站点看到的 IP，再测往返延迟。
+// testPips 测反代 / 全局出口：经借用的入口访问 Cloudflare 的 trace，得到用它时 Cloudflare 站点看到的 IP，再测往返延迟。
 // socks5 / http 是全局出口（所有网站都从它出去），顺带测普通网站看到的 IP。
-func (a *App) testPips(pips []pipRef) {
+//
+// 它们全挤在借来的同一个入口上，所以全进程同时只测 pipSlots 个（整段：trace、查归属、测延迟都算在里面，decisions N-9）；
+// 偶发失败（超时、被取消、被中断）的等这一遍测完再测一次；之前能用的连着 deadAfter 轮都不通才判死。
+// interactive = 手动点的（可以用另留的位置）。
+func (a *App) testPips(pips []pipRef, interactive bool) {
 	a.mu.Lock()
 	eps := a.Settings.IPInfoEndpoints
 	a.mu.Unlock()
+	var mu sync.Mutex
+	var again []pipRef
+	run := func(p pipRef, last bool) {
+		release := pipGate.acquire(interactive)
+		cf, ex, d, err, reason := a.testPip(p, eps)
+		release()
+		if err != nil && !last && cfprobe.Transient(err) {
+			mu.Lock()
+			again = append(again, p)
+			mu.Unlock()
+			return
+		}
+		a.mu.Lock()
+		s := a.slotLocked(p.Name)
+		if err != nil {
+			if failLocked(s, cfprobe.Transient(err), friendlyErr(reason, err)) {
+				s.CF, s.Exit, s.At = nil, nil, now()
+			}
+		} else {
+			s.Delay, s.CF, s.Exit, s.At, s.Err, s.Fails = d, cf, ex, now(), "", 0
+		}
+		a.bumpLocked("state", "")
+		a.mu.Unlock()
+	}
 	var wg sync.WaitGroup
 	for _, p := range pips {
 		wg.Add(1)
-		go func(p pipRef) {
-			defer wg.Done()
-			var cf, ex *model.IPInfo
-			var reason string
-			var cold int
-			err := a.viaScan(p.Name, func(port int, group string) error {
-				start := time.Now()
-				hc := probe.Client(port, 10*time.Second)
-				ip, loc, err := cfTrace(hc)
-				if err != nil {
-					time.Sleep(150 * time.Millisecond)
-					reason = a.core.LastError(group, start)
-					return err
-				}
-				cold = int(time.Since(start).Milliseconds())
-				i := probe.Lookup(hc, ip, loc, eps)
-				cf = &i
-				if p.Type != "proxyip" {
-					if ip2, err := exitIP(hc, false); err == nil {
-						j := probe.Lookup(hc, ip2, "", eps)
-						ex = &j
-					}
-				}
-				return nil
-			})
-			d := -1
-			if err == nil {
-				if d = a.delayOnce(p.Name, traceURL, 6000); d < 0 {
-					d = cold
-				}
-			}
-			a.mu.Lock()
-			s := a.slotLocked(p.Name)
-			s.Delay, s.CF, s.Exit, s.At, s.Err = d, cf, ex, now(), ""
-			if err != nil {
-				s.Err = friendlyErr(reason, err)
-			}
-			a.bumpLocked("state", "")
-			a.mu.Unlock()
-		}(p)
+		go func(p pipRef) { defer wg.Done(); run(p, false) }(p)
 	}
 	wg.Wait()
+	for _, p := range again {
+		wg.Add(1)
+		go func(p pipRef) { defer wg.Done(); run(p, true) }(p)
+	}
+	wg.Wait()
+}
+
+// testPip 测一个反代 / 全局出口。d 是往返延迟（毫秒），测不出时用首次请求的耗时。
+func (a *App) testPip(p pipRef, eps []string) (cf, ex *model.IPInfo, d int, err error, reason string) {
+	var cold int
+	err = a.viaScan(p.Name, func(port int, group string) error {
+		start := time.Now()
+		hc := probe.Client(port, 10*time.Second)
+		ip, loc, err := cfTrace(hc)
+		if err != nil {
+			time.Sleep(150 * time.Millisecond)
+			reason = a.core.LastError(group, start)
+			return err
+		}
+		cold = int(time.Since(start).Milliseconds())
+		i := probe.Lookup(hc, ip, loc, eps)
+		cf = &i
+		if p.Type != "proxyip" {
+			if ip2, err := exitIP(hc, false); err == nil {
+				j := probe.Lookup(hc, ip2, "", eps)
+				ex = &j
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, -1, err, reason
+	}
+	if d = a.delayOnce(p.Name, traceURL, 6000); d < 0 {
+		d = cold
+	}
+	return cf, ex, d, nil, ""
 }
 
 // cfTrace 返回经该通道访问 Cloudflare 站点时对方看到的 IP 和国家。
@@ -644,10 +670,10 @@ func (a *App) entryCandsLocked(nodes []nodeRef) []cand {
 	t := time.Now()
 	for _, n := range nodes {
 		sc := a.scanLocked(n.Name)
-		c := cand{ID: n.ID, Key: n.key(), Delay: sc.Delay}
+		c := cand{ID: n.ID, Key: n.key(), Delay: suspect(sc)}
 		if sc.Delay > 0 { // 入口优选的当前时段分数（decisions N-6）：没测过下载的只按延迟算分，测过的加上速度
 			mbps, _, _, _ := a.tune.Hist[n.key()].estimate(t.Hour(), t.UnixMilli())
-			c.Score = entryScore(mbps, sc.Delay)
+			c.Score = entryScore(mbps, c.Delay)
 		}
 		if sc.Exit != nil {
 			c.Country = sc.Exit.Country
@@ -660,6 +686,14 @@ func (a *App) entryCandsLocked(nodes []nodeRef) []cand {
 	return out
 }
 
+// suspect 是自动选线时用的延迟：最近一轮没测通、还没判死的（Fails > 0），照样算能用，但往后排（decisions N-9）。
+func suspect(sc model.NodeScan) int {
+	if sc.Delay > 0 && sc.Fails > 0 {
+		return sc.Delay + suspectPenalty
+	}
+	return sc.Delay
+}
+
 func (a *App) pipCandsLocked(sub *model.Subscription, me *model.Instance) []cand {
 	used := map[string]bool{}
 	for _, o := range a.Instances {
@@ -670,7 +704,7 @@ func (a *App) pipCandsLocked(sub *model.Subscription, me *model.Instance) []cand
 	var out []cand
 	for _, p := range a.pipsLocked(sub) {
 		sc := a.scanLocked(p.Name)
-		c := cand{ID: p.ID, Key: p.key(), Delay: sc.Delay, Derived: p.Derived, Used: used[p.ID], Type: p.Type}
+		c := cand{ID: p.ID, Key: p.key(), Delay: suspect(sc), Derived: p.Derived, Used: used[p.ID], Type: p.Type}
 		if sc.CF != nil {
 			c.Country = sc.CF.Country
 		}

@@ -170,10 +170,11 @@ type lineView struct {
 	SpeedAvg   float64 `json:"speedAvg,omitempty"`   // 下载平均 Mbps
 	SpeedState string  `json:"speedState,omitempty"` // run | wait
 	SpeedErr   string  `json:"speedErr,omitempty"`
+	Fails      int     `json:"fails,omitempty"` // 最近连着几轮没测通；延迟 > 0 时表示“还算能用，待复测”（decisions N-9）
 }
 
 func (a *App) lineViewLocked(subID, key string, sc model.NodeScan) lineView {
-	v := lineView{Kind: sc.Kind, Colo: sc.Colo, TCP: sc.TCP, At: sc.At, Speed: sc.Speed, SpeedAvg: sc.SpeedAvg, SpeedErr: sc.SpeedErr}
+	v := lineView{Kind: sc.Kind, Colo: sc.Colo, TCP: sc.TCP, At: sc.At, Speed: sc.Speed, SpeedAvg: sc.SpeedAvg, SpeedErr: sc.SpeedErr, Fails: sc.Fails}
 	if st, now := a.speedOfLocked(subID, key); st != "" {
 		v.SpeedState, v.SpeedErr = st, ""
 		if st == "run" {

@@ -199,6 +199,8 @@ type NodeScan struct {
 	SpeedAvg float64 `json:"speedAvg,omitempty"` // 下载平均，Mbps
 	SpeedAt  int64   `json:"speedAt,omitempty"`
 	SpeedErr string  `json:"speedErr,omitempty"`
+	// Fails：连着几轮没测通（测通了清零）。之前能用的偶发失败一次不判死，延迟等留着，界面上标“待复测”（decisions N-9）。
+	Fails int `json:"fails,omitempty"`
 }
 
 // IPQ 是一个出口 IP 的"成色"：是住宅还是机房、纯净度多少。来自第三方查询，查不到不影响使用。

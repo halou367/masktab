@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/halou367/masktab/internal/cfprobe"
@@ -25,11 +24,8 @@ import (
 // Cloudflare 看到的来源 IP（= 把它当反代用时 Cloudflare 站点看到的出口）。
 // 几十上百个地址并发测，几秒钟出齐，不需要等代理内核一条一条建隧道。
 
-const (
-	directWorkers = 32
-	directTimeout = 4 * time.Second
-	speedLimit    = 6 * time.Second
-)
+// 并发上限、时限、复测见 directprobe.go（decisions N-9）。
+const speedLimit = 6 * time.Second
 
 type scanProg struct {
 	Done  int `json:"done"`
@@ -126,30 +122,33 @@ func (a *App) applyDirectLocked(t target, r cfprobe.Result, err error, self stri
 	if inCF(remote) || (self != "" && r.IP == self) {
 		kind = "cf"
 	}
+	transient, reason := cfprobe.Transient(err), cfprobe.Reason(err)
 	if t.entry != "" {
 		s := a.slotLocked(t.entry)
-		s.At = at
 		if err != nil {
-			s.Delay, s.Err = -1, cfprobe.Reason(err)
+			if failLocked(s, transient, reason) {
+				s.At = at
+			}
 		} else {
 			cc, city := cfprobe.Colo(r.Colo)
 			if cc == "" {
 				cc = r.Loc
 			}
-			s.Delay, s.TCP, s.Colo, s.Kind, s.Err = r.RTT, r.TCP, r.Colo, kind, ""
+			s.Delay, s.TCP, s.Colo, s.Kind, s.Err, s.Fails, s.At = r.RTT, r.TCP, r.Colo, kind, "", 0, at
 			s.Exit, s.CF = &model.IPInfo{Country: cc, City: city, Org: "Cloudflare"}, nil
 		}
 	}
 	if t.pip != "" {
 		s := a.slotLocked(t.pip)
-		s.At = at
 		switch {
 		case err != nil:
-			s.Delay, s.Err = -1, cfprobe.Reason(err)
+			if failLocked(s, transient, reason) {
+				s.At = at
+			}
 		case kind == "cf":
-			s.Delay, s.Kind, s.CF, s.Err = -1, "cf", nil, "这是 Cloudflare 官方 IP，只能当入口，不能当反代"
+			s.Delay, s.Kind, s.CF, s.Err, s.Fails, s.At = -1, "cf", nil, "这是 Cloudflare 官方 IP，只能当入口，不能当反代", 0, at
 		default:
-			s.Delay, s.TCP, s.Colo, s.Kind, s.Err = r.RTT, r.TCP, r.Colo, "proxy", ""
+			s.Delay, s.TCP, s.Colo, s.Kind, s.Err, s.Fails, s.At = r.RTT, r.TCP, r.Colo, "proxy", "", 0, at
 			if s.CF == nil || s.CF.IP != r.IP {
 				s.CF = &model.IPInfo{IP: r.IP, Country: r.Loc}
 			} else {
@@ -170,19 +169,6 @@ func probeHosts(host string) []string {
 		return []string{cfprobe.SpeedHost}
 	}
 	return []string{host, cfprobe.SpeedHost}
-}
-
-// traceAny 按 hosts 的顺序探测，第一个成功的算数。TCP 都连不上时不再换名字重试（换了也一样）。
-func traceAny(server string, port int, hosts []string, useTLS bool) (r cfprobe.Result, err error) {
-	for _, h := range hosts {
-		ctx, cancel := context.WithTimeout(context.Background(), directTimeout)
-		r, err = cfprobe.Trace(ctx, server, port, h, useTLS)
-		cancel()
-		if err == nil || r.Remote == "" {
-			return
-		}
-	}
-	return
 }
 
 // scanDirect 并发直接探测一个 edgetunnel 订阅的全部地址，结果随测随发到界面。
@@ -219,30 +205,21 @@ func (a *App) scanDirect(subID string) {
 		r cfprobe.Result
 	}
 	var oks []done
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, directWorkers)
 	last := time.Now()
-	for _, t := range ts {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(t target) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			r, err := traceAny(t.server, t.port, hosts, useTLS)
-			a.mu.Lock()
-			a.applyDirectLocked(t, r, err, "")
-			if err == nil {
-				oks = append(oks, done{t, r})
-			}
-			prog.Done++
-			if time.Since(last) > 150*time.Millisecond || prog.Done == prog.Total {
-				last = time.Now()
-				a.bumpLocked("state", "")
-			}
-			a.mu.Unlock()
-		}(t)
-	}
-	wg.Wait()
+	a.mu.Lock()
+	prev := a.prevLocked(ts)
+	a.mu.Unlock()
+	a.probeDirect(ts, hosts, useTLS, false, prev, func(t target, r cfprobe.Result, err error) {
+		a.applyDirectLocked(t, r, err, "")
+		if err == nil {
+			oks = append(oks, done{t, r})
+		}
+		prog.Done++
+		if time.Since(last) > 150*time.Millisecond || prog.Done == prog.Total {
+			last = time.Now()
+			a.bumpLocked("state", "")
+		}
+	})
 	if self := <-selfCh; self != "" {
 		a.mu.Lock()
 		for _, d := range oks {
@@ -365,7 +342,7 @@ func (a *App) scanGlobalExits(subID string) {
 	}
 	a.mu.Unlock()
 	if len(g) > 0 && a.applyConfig() == nil {
-		a.testPips(g)
+		a.testPips(g, false)
 	}
 }
 
@@ -620,34 +597,31 @@ func (a *App) Ping(subID string, keys []string) {
 			a.viaLocked(sub, a.nodesLocked(sub))
 		}
 	}
-	for _, t := range ts { // 先把这几行标成"正在测"：延迟清零，界面显示 —
-		if t.entry != "" {
-			a.slotLocked(t.entry).Delay = 0
-		}
-		if t.pip != "" {
-			a.slotLocked(t.pip).Delay = 0
+	prev := a.prevLocked(ts)
+	was := map[string]int{} // 标成“正在测”之前的延迟：没测通时按它判断要不要留着（failLocked）
+	for _, t := range ts {  // 先把这几行标成"正在测"：延迟清零，界面显示 —
+		for _, name := range []string{t.entry, t.pip} {
+			if name != "" {
+				s := a.slotLocked(name)
+				was[name], s.Delay = s.Delay, 0
+			}
 		}
 	}
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
 	if host != "" && len(ts) > 0 {
-		hosts := probeHosts(host)
-		var wg sync.WaitGroup
-		for _, t := range ts {
-			wg.Add(1)
-			go func(t target) {
-				defer wg.Done()
-				r, err := traceAny(t.server, t.port, hosts, useTLS)
-				a.mu.Lock()
-				a.applyDirectLocked(t, r, err, "")
-				a.bumpLocked("state", "")
-				a.mu.Unlock()
-			}(t)
-		}
-		wg.Wait()
+		a.probeDirect(ts, probeHosts(host), useTLS, true, prev, func(t target, r cfprobe.Result, err error) {
+			for _, name := range []string{t.entry, t.pip} {
+				if s := a.scan[name]; name != "" && s != nil && s.Delay == 0 {
+					s.Delay = was[name]
+				}
+			}
+			a.applyDirectLocked(t, r, err, "")
+			a.bumpLocked("state", "")
+		})
 	}
 	if len(g) > 0 && a.coreOK && a.applyConfig() == nil {
-		a.testPips(g)
+		a.testPips(g, true)
 	}
 	a.mu.Lock()
 	a.saveScanLocked()

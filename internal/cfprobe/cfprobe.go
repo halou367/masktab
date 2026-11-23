@@ -31,9 +31,14 @@ type Result struct {
 // SpeedHost 是测下载速度用的站点：Cloudflare 官方的测速端点，任何官方 IP 和反代都能转发到它。
 const SpeedHost = "speed.cloudflare.com"
 
+// DialTimeout 是 TCP 握手最多等多久（再受调用方 ctx 的总时限约束）。
+// 以前是 3 秒：SYN 只要丢一次，内核隔约 1 秒（Linux）或更久才重发，再加上远处 ProxyIP 本身的来回，
+// 路由器一忙就刚好卡在 3 秒上被判超时。4.5 秒能容一次重发（decisions N-9）。
+const DialTimeout = 4500 * time.Millisecond
+
 // dial 返回连接、TCP 握手耗时和实际连上的 IP。TCP 连上了但 TLS 握手失败时，后两项仍然有值。
 func dial(ctx context.Context, server string, port int, sni string, useTLS bool) (net.Conn, int, string, error) {
-	d := netx.BindDialer(net.Dialer{Timeout: 3 * time.Second})
+	d := netx.BindDialer(net.Dialer{Timeout: DialTimeout})
 	start := time.Now()
 	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(strings.Trim(server, "[]"), strconv.Itoa(port)))
 	if err != nil {
@@ -280,4 +285,30 @@ func Reason(err error) string {
 		return "这个地址没有把请求转发到 Cloudflare（返回 " + strings.ToUpper(s) + "）"
 	}
 	return err.Error()
+}
+
+// Transient 判断一次失败像不像“偶发”的：超时、被取消、连接被中断 / 重置。
+// 这类失败在本机或路由器一时拥塞时大量出现，同一个地址放慢再测往往就通了；
+// 拒绝连接、没有路、返回了 HTTP 错误、对方不是 Cloudflare 这些是确定的，不算（decisions N-9）。
+func Transient(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "refused") || NoRoute(s) || strings.HasPrefix(s, "http ") || strings.Contains(s, "no such host") {
+		return false
+	}
+	for _, k := range []string{"timeout", "timed out", "deadline", "canceled", "cancelled", "eof", "reset", "forcibly closed", "broken pipe"} {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
 }

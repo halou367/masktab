@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/halou367/masktab/internal/cfprobe"
@@ -262,22 +261,17 @@ func (a *App) TuneRound(subID string) int {
 		return 0
 	}
 	// 一、全部入口测延迟（每个一个小请求，和“测速”的第一步一样）
-	hosts := probeHosts(host)
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 16)
+	// 和整轮测速共用全局并发上限（decisions N-9），以前这里自己再开 16 个
+	ts := make([]target, 0, len(nodes))
 	for _, n := range nodes {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(n nodeRef) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			r, err := traceAny(n.Server, n.Port, hosts, useTLS)
-			a.mu.Lock()
-			a.applyDirectLocked(target{key: n.key(), server: n.Server, port: n.Port, entry: n.Name}, r, err, "")
-			a.mu.Unlock()
-		}(n)
+		ts = append(ts, target{key: n.key(), server: n.Server, port: n.Port, entry: n.Name})
 	}
-	wg.Wait()
+	a.mu.Lock()
+	prev := a.prevLocked(ts)
+	a.mu.Unlock()
+	a.probeDirect(ts, probeHosts(host), useTLS, false, prev, func(t target, r cfprobe.Result, err error) {
+		a.applyDirectLocked(t, r, err, "")
+	})
 	// 二、挑几个测下载
 	t := time.Now()
 	a.mu.Lock()
