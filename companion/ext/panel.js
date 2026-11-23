@@ -282,7 +282,7 @@ function entryView(me, sub) {
     n.speed > 0 ? `下载：峰值 ${n.speed} Mbps，平均 ${n.speedAvg} Mbps` : null,
     tuneNow?.[n.id] != null ? `本时段分数 ${tuneNow[n.id]}（依据：${tv.known?.[n.id] || '本时段'}的下载记录）` : null,
     n.id === bestId && bestWhy ? `当前时段最佳：${bestWhy}` : null,
-    n.err ? (n.delay > 0 ? `待复测：最近一次没测通（${n.err}）` : `不通：${n.err}`) : null, n.from === 'sub' ? (n.gone ? '已不在最新的订阅里，还通所以留用' : null) : '自己加的'].filter(Boolean).join('\n');
+    n.err ? (n.delay > 0 ? `待复测：最近一次没测通（${n.err}）` : `不通：${n.err}`) : null, n.from === 'sub' ? `来自订阅“${st.subscriptions.find((x) => x.id === n.subId)?.name || '已删除'}”${n.gone ? '（已不在最新的订阅里，还通所以留用）' : ''}` : '自己加的'].filter(Boolean).join('\n');
   const pickIt = (n) => { view = ''; patch({ proxy: et ? { nodeId: n.id, entryMode: 'manual', state: 'on' } : { nodeId: n.id, exitMode: 'manual', state: 'on' } }); };
   const kf = (k, t) => h('button', { class: 'chip' + (kindFlt === k ? ' on' : ''), title: '只看' + t, 'aria-pressed': kindFlt === k ? 'true' : 'false', onclick: () => { kindFlt = kindFlt === k ? '' : k; render(); } }, t);
   // 立即优选一轮（入口优选，decisions N-6）：测全部延迟 + 挑几个测下载、按小时记下；受每天的流量上限约束

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/halou367/masktab/internal/cfprobe"
@@ -171,23 +172,27 @@ func probeHosts(host string) []string {
 	return []string{host, cfprobe.SpeedHost}
 }
 
-// scanDirect 并发直接探测一个 edgetunnel 订阅的全部地址，结果随测随发到界面。
-func (a *App) scanDirect(subID string) {
+// scanDirect 直接探测全部 edgetunnel 订阅的共用地址池（一个地址只测一遍，见 pool.go），结果随测随发到界面。
+// first 是发起的订阅：它的站点名优先用来探测。各订阅的进度条显示同一份进度。
+func (a *App) scanDirect(first string) {
 	a.mu.Lock()
-	sub := a.subLocked(subID)
-	host, useTLS := directOf(sub)
-	var ts []target
-	if sub != nil {
-		ts = a.targetsLocked(sub)
+	a.shareScanLocked()
+	bs := a.directPoolLocked(first, nil)
+	prog := &scanProg{}
+	var ids []string
+	for _, b := range bs {
+		prog.Total += len(b.ts)
 	}
-	prog := &scanProg{Total: len(ts)}
-	a.scanProg[subID] = prog
+	for _, sub := range a.etSubsLocked(first) {
+		ids = append(ids, sub.ID)
+		a.scanProg[sub.ID] = prog
+	}
+	prev := a.prevLocked(allRecs(bs))
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
-	if host == "" || len(ts) == 0 {
+	if prog.Total == 0 {
 		return
 	}
-	hosts := probeHosts(host)
 	// 本机的公网 IP：trace 返回的来源 IP 等于它，说明连的是 Cloudflare 官方 IP 而不是反代。
 	selfCh := make(chan string, 1)
 	go func() {
@@ -201,18 +206,14 @@ func (a *App) scanDirect(subID string) {
 		selfCh <- r.IP
 	}()
 	type done struct {
-		t target
-		r cfprobe.Result
+		recs []target
+		r    cfprobe.Result
 	}
 	var oks []done
 	last := time.Now()
-	a.mu.Lock()
-	prev := a.prevLocked(ts)
-	a.mu.Unlock()
-	a.probeDirect(ts, hosts, useTLS, false, prev, func(t target, r cfprobe.Result, err error) {
-		a.applyDirectLocked(t, r, err, "")
+	a.runPool(bs, false, prev, func(recs []target, r cfprobe.Result, err error) {
 		if err == nil {
-			oks = append(oks, done{t, r})
+			oks = append(oks, done{recs, r})
 		}
 		prog.Done++
 		if time.Since(last) > 150*time.Millisecond || prog.Done == prog.Total {
@@ -224,23 +225,28 @@ func (a *App) scanDirect(subID string) {
 		a.mu.Lock()
 		for _, d := range oks {
 			if d.r.IP == self {
-				a.applyDirectLocked(d.t, d.r, nil, self)
+				for _, t := range d.recs {
+					a.applyDirectLocked(t, d.r, nil, self)
+				}
 			}
 		}
 		a.bumpLocked("state", "")
 		a.mu.Unlock()
 	}
-	go a.enrich(subID)
+	go a.enrich(ids...)
 }
 
-// enrich 给反代的出口 IP 补上城市和运营商（一次批量查询；查不到不影响使用），再查它们的类型和纯净度。
-func (a *App) enrich(subID string) {
+// enrich 给这几个订阅里反代的出口 IP 补上城市和运营商（一次批量查询；查不到不影响使用），再查它们的类型和纯净度。
+func (a *App) enrich(subIDs ...string) {
 	a.mu.Lock()
-	sub := a.subLocked(subID)
 	want := map[string][]*model.IPInfo{}
 	var all []string
 	seen := map[string]bool{}
-	if sub != nil {
+	for _, subID := range subIDs { // 同一个 IP 在几个订阅里都有：一起查一次
+		sub := a.subLocked(subID)
+		if sub == nil {
+			continue
+		}
 		for _, p := range a.pipsLocked(sub) {
 			s := a.scan[p.Name]
 			if s == nil || s.CF == nil || s.CF.IP == "" {
@@ -324,22 +330,14 @@ func (a *App) enrich(subID string) {
 	}
 }
 
-// scanGlobalExits 测 socks5 / http 这类全局出口：它们必须经一条真实的隧道才测得出来。
-func (a *App) scanGlobalExits(subID string) {
+// scanGlobalExits 测 socks5 / sstp 这类全局出口：它们必须经一条真实的隧道才测得出来。
+// 各订阅的同一个全局出口只经最先列出它的订阅测一次（decisions N-10）。
+func (a *App) scanGlobalExits(first string) {
 	if !a.coreOK {
 		return
 	}
 	a.mu.Lock()
-	sub := a.subLocked(subID)
-	var g []pipRef
-	if sub != nil {
-		for _, p := range a.pipsLocked(sub) {
-			if p.Type != "proxyip" {
-				g = append(g, p)
-			}
-		}
-		a.viaLocked(sub, a.nodesLocked(sub))
-	}
+	g := a.pipGroupsLocked(first, nil)
 	a.mu.Unlock()
 	if len(g) > 0 && a.applyConfig() == nil {
 		a.testPips(g, false)
@@ -532,8 +530,12 @@ func (a *App) speedRun(ctx context.Context, subID string, job *speedJob) {
 		}
 		a.mu.Lock()
 		job.cur = ""
-		if ctx.Err() == nil { // 被停掉的不记结果
-			for _, name := range []string{t.entry, t.pip} {
+		if ctx.Err() == nil { // 被停掉的不记结果；同一个地址在各订阅里的记录一起写（decisions N-10）
+			names := a.sameKeyNamesLocked(key)
+			if len(names) == 0 {
+				names = []string{t.entry, t.pip}
+			}
+			for _, name := range names {
 				if name == "" {
 					continue
 				}
@@ -571,35 +573,23 @@ func (a *App) speedOfLocked(subID, key string) (state string, mbps float64) {
 }
 
 // Ping 只测指定的几个地址（界面上点一下延迟）：keys 是 地址:端口（入口和 proxyip 反代），全局出口是 类型|值。
-// 和整轮测速互不影响；测完补城市、运营商和纯净度。
+// 和整轮测速互不影响；地址是各订阅共用的，结果写进每个订阅里它的记录（decisions N-10）。测完补城市、运营商和纯净度。
 func (a *App) Ping(subID string, keys []string) {
 	want := map[string]bool{}
 	for _, k := range keys {
 		want[k] = true
 	}
 	a.mu.Lock()
-	sub := a.subLocked(subID)
-	host, useTLS := directOf(sub)
-	var ts []target
-	var g []pipRef
-	if sub != nil {
-		for _, t := range a.targetsLocked(sub) {
-			if want[t.key] {
-				ts = append(ts, t)
-			}
-		}
-		for _, p := range a.pipsLocked(sub) {
-			if p.Type != "proxyip" && want[p.key()] {
-				g = append(g, p)
-			}
-		}
-		if len(g) > 0 {
-			a.viaLocked(sub, a.nodesLocked(sub))
-		}
+	if !a.isETLocked(subID) {
+		a.mu.Unlock()
+		return
 	}
-	prev := a.prevLocked(ts)
-	was := map[string]int{} // 标成“正在测”之前的延迟：没测通时按它判断要不要留着（failLocked）
-	for _, t := range ts {  // 先把这几行标成"正在测"：延迟清零，界面显示 —
+	bs := a.directPoolLocked(subID, want)
+	g := a.pipGroupsLocked(subID, want)
+	recs := allRecs(bs)
+	prev := a.prevLocked(recs)
+	was := map[string]int{}  // 标成“正在测”之前的延迟：没测通时按它判断要不要留着（failLocked）
+	for _, t := range recs { // 先把这几行标成"正在测"：延迟清零，界面显示 —
 		for _, name := range []string{t.entry, t.pip} {
 			if name != "" {
 				s := a.slotLocked(name)
@@ -607,25 +597,47 @@ func (a *App) Ping(subID string, keys []string) {
 			}
 		}
 	}
+	var ids []string
+	for _, sub := range a.etSubsLocked(subID) {
+		ids = append(ids, sub.ID)
+	}
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
-	if host != "" && len(ts) > 0 {
-		a.probeDirect(ts, probeHosts(host), useTLS, true, prev, func(t target, r cfprobe.Result, err error) {
-			for _, name := range []string{t.entry, t.pip} {
-				if s := a.scan[name]; name != "" && s != nil && s.Delay == 0 {
-					s.Delay = was[name]
-				}
+	restore := func() { // 持锁：没测到的（比如地址刚被删）还停在“正在测”，放回原值
+		for name, d := range was {
+			if s := a.scan[name]; s != nil && s.Delay == 0 {
+				s.Delay = d
 			}
-			a.applyDirectLocked(t, r, err, "")
-			a.bumpLocked("state", "")
-		})
+		}
+	}
+	if len(bs) > 0 {
+		var wg sync.WaitGroup
+		for _, b := range bs {
+			wg.Add(1)
+			go func(b *directBatch) {
+				defer wg.Done()
+				a.probeDirect(b.ts, b.hosts, b.useTLS, true, prev, func(t target, r cfprobe.Result, err error) {
+					for _, rec := range b.recs[t.key] {
+						for _, name := range []string{rec.entry, rec.pip} {
+							if s := a.scan[name]; name != "" && s != nil && s.Delay == 0 {
+								s.Delay = was[name]
+							}
+						}
+						a.applyDirectLocked(rec, r, err, "")
+					}
+					a.bumpLocked("state", "")
+				})
+			}(b)
+		}
+		wg.Wait()
 	}
 	if len(g) > 0 && a.coreOK && a.applyConfig() == nil {
 		a.testPips(g, true)
 	}
 	a.mu.Lock()
+	restore()
 	a.saveScanLocked()
 	a.bumpLocked("state", "")
 	a.mu.Unlock()
-	a.enrich(subID)
+	a.enrich(ids...)
 }

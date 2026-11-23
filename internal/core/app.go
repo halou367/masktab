@@ -286,6 +286,7 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	if a.scan == nil {
 		a.scan = map[string]*model.NodeScan{}
 	}
+	a.shareScanLocked() // 升级上来：以前各订阅只测自己的地址，现在共用（decisions N-10），先照抄别的订阅里测过的
 	a.adapter = kernel.Get(a.Settings.Kernel)
 	if a.hosted() {
 		a.adapter = kernel.Hosted{Label: a.Host.KernelName}

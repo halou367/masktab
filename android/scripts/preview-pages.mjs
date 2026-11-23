@@ -931,7 +931,7 @@ if (desk && want('desk')) {
     const did = deskCalls.map((c) => `${c.m} ${c.p}`);
     await tap('.appbar button[aria-label="返回"]'); await gp.waitForTimeout(400);
     const back2 = await gp.evaluate(() => location.hash.slice(1));
-    check('电脑版地址库：列表是一行（几个、多久前更新、多久更新一次），单个 IP 收在“独立 IP”里', rows.length === 2 && /列表/.test(rows[0]) && /2 个地址 · 5 分钟前更新 · 每 6 小时更新/.test(rows[0]) && /^独立 IP/.test(rows[1]) && /1 个地址/.test(rows[1]), rows);
+    check('电脑版地址库：列表是一行（几个、多久前更新、多久更新一次），单个 IP 收在“独立 IP”里，订阅带来的地址一组（decisions N-10）', rows.length === 3 && /来自订阅/.test(rows[2]) && /列表/.test(rows[0]) && /2 个地址 · 5 分钟前更新 · 每 6 小时更新/.test(rows[0]) && /^独立 IP/.test(rows[1]) && /1 个地址/.test(rows[1]), rows);
     check('电脑版地址库：点“独立 IP”进这一组，返回回到地址库', lo.hash === 'exits/loose' && /独立 IP/.test(lo.h1) && lo.n === 1 && back1 === 'exits', { lo, back1 });
     check('电脑版地址库：列表展开页有网址那一行、能立即更新，返回回到地址库', /best\.txt 0 \/ 2/.test(li.h1) && li.n === 2 && /https:\/\/ipdb\.example\.com\/api\/best\.txt/.test(li.src) && did.includes('POST /api/exits/L1/resolve') && back2 === 'exits', { li, did, back2 });
     deskExits = null; await gp.close(); }
@@ -1485,6 +1485,7 @@ if (want('groups')) for (const w of [412, 320]) {
   // 列表里的最后一个是 Cloudflare 官方 IP：只当入口用，结果在 nodes 里
   s0.nodes.push({ ...s0.nodes[0], id: 'x:203.0.113.52:443', server: '203.0.113.52', port: 443, label: '', from: 'pip', kind: 'cf', colo: 'SJC', delay: 60, exit: inf('', 'US', 'San Jose', 'Cloudflare') });
   g.ipq['203.0.113.50'] = { type: 'res', score: 90 };
+  s0.nodes[1].gone = true; s0.addrs = 3; s0.addrsGone = 1; // 订阅带来的地址里有一个已不在最新的订阅里（decisions N-10）
   g.__reply = { 'POST /api/exits': { added: 3, lists: 1, listAddrs: 128, updated: 0, absorbed: 40 }, 'POST /api/exits/L1/resolve': { count: 131, error: '' }, 'PATCH /api/exits/L1': { count: 64 }, 'PUT /api/exits/loose': { added: 1, removed: 1, changed: 0 } };
   const c = await br.newContext({ viewport: { width: w, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, g);
   const pg = await c.newPage(); watch(pg, 'groups-' + w);
@@ -1497,12 +1498,20 @@ if (want('groups')) for (const w of [412, 320]) {
   let rows = await lib();
   const secT = await pg.evaluate(() => [...document.querySelectorAll('.sec')].map((e) => e.innerText.replace(/\s+/g, ' ')).find((t) => /地址库/.test(t)) || '');
   const L1 = rows.find((t) => /best\.txt/.test(t)) || '', L2 = rows.find((t) => /result\.csv/.test(t)) || '', LO = rows.find((t) => /^独立 IP/.test(t)) || '', D1 = rows.find((t) => /pip\.example\.com/.test(t)) || '';
-  check(`地址库（${w} 宽）：一个列表网址是一行，写有多少个、几个通、上一次什么时候更新、多久更新一次`, rows.length === 5 && /列表/.test(L1) && /5 个地址 · 4 个通 · 2 小时前更新 · 每 3 小时更新/.test(L1) && /60 ms/.test(L1) && /22\.0M/.test(L1), { rows, L1 });
+  check(`地址库（${w} 宽）：一个列表网址是一行，写有多少个、几个通、上一次什么时候更新、多久更新一次`, rows.length === 6 && /列表/.test(L1) && /5 个地址 · 4 个通 · 2 小时前更新 · 每 3 小时更新/.test(L1) && /60 ms/.test(L1) && /22\.0M/.test(L1), { rows, L1 });
   check(`地址库（${w} 宽）：更新失败的列表写出原因、还在用上一次的几个、上一次成功是什么时候；没起名字的显示网址`, /raw\.example\.org\/someone/.test(L2) && /1 个地址/.test(L2) && /3 天前更新/.test(L2) && /不自动更新/.test(L2) && /更新失败：拉取列表失败（直连：HTTP 404）（还在用上一次的 1 个）/.test(L2), L2);
   check(`地址库（${w} 宽）：单个 IP 都收在“独立 IP”一行里（列表和独立 IP 里的地址不再一条条摊在地址库里），域名也写上一次更新的时间`,
-    /3 个地址 · 1 个通/.test(LO) && /88 ms/.test(LO) && !rows.some((t) => /104\.16\.9\.9|203\.0\.113\.5\d|198\.51\.100\.9:/.test(t)) && /展开 2 个地址 · 1 个通 · 30 分钟前更新 · 每 3 小时解析/.test(D1) && /5 组 · 12 个地址/.test(secT) && rows.some((t) => /198\.51\.100\.23/.test(t) && /SOCKS5/.test(t)), { rows, secT });
+    /3 个地址 · 1 个通/.test(LO) && /88 ms/.test(LO) && !rows.some((t) => /104\.16\.9\.9|203\.0\.113\.5\d|198\.51\.100\.9:/.test(t)) && /展开 2 个地址 · 1 个通 · 30 分钟前更新 · 每 3 小时解析/.test(D1) && /6 组 · 16 个地址/.test(secT) && rows.some((t) => /198\.51\.100\.23/.test(t) && /SOCKS5/.test(t)), { rows, secT });
   check(`地址库（${w} 宽）：不横向溢出`, !(await wide()), await wide());
   await pg.screenshot({ path: path.join(out, `groups-lib-${w}.png`), fullPage: true });
+  // 订阅带来的地址（decisions N-10）：一个订阅一组，点开每个地址一行
+  const SG = rows.find((t) => /来自订阅/.test(t)) || '';
+  check(`地址库（${w} 宽）：订阅带来的地址一个订阅一组，标“来自订阅”，写有几个、几个通、几个已不在订阅里`, /机场/.test(SG) && /4 个地址 · 4 个通 · 1 个已不在订阅里/.test(SG), SG);
+  await pg.locator('.librow', { hasText: '来自订阅' }).click(); await pg.waitForTimeout(500);
+  const sp = await pg.evaluate(() => ({ hash: location.hash.slice(1), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')), foot: [...document.querySelectorAll('.foot')].map((e) => e.innerText).join(' ') }));
+  check(`订阅地址子页（${w} 宽）：每个地址一行，已不在订阅里的有标记，底下说明随订阅自动同步`, sp.hash === 'exits/s-' + SID && sp.rows.length === 4 && sp.rows.filter((t) => /已不在订阅里/.test(t)).length === 1 && /自动同步/.test(sp.foot) && !(await wide()), sp);
+  await pg.screenshot({ path: path.join(out, `groups-subaddr-${w}.png`), fullPage: true });
+  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(600);
   // 列表这一行的菜单：整组的操作都在这里
   await pg.locator('.librow', { hasText: 'best.txt' }).click(); await pg.waitForTimeout(350);
   let opts = await pg.evaluate(() => [...document.querySelectorAll('.ddm .opt, .scrim .opt')].map((e) => e.innerText.trim()));
