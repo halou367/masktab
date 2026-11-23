@@ -151,8 +151,9 @@ type nodeView struct {
 	Label  string        `json:"label"`
 	Host   string        `json:"host,omitempty"`
 	Type   string        `json:"type,omitempty"`
-	From   string        `json:"from"`           // sub | custom | pip
-	Gone   bool          `json:"gone,omitempty"` // 已不在最新的订阅里（留用）
+	From   string        `json:"from"`            // sub | custom | pip
+	Sub    string        `json:"subId,omitempty"` // from = sub：地址来自哪个订阅（各订阅共用，decisions N-10）
+	Gone   bool          `json:"gone,omitempty"`  // 已不在最新的订阅里（留用）
 	Delay  int           `json:"delay"`
 	Exit   *model.IPInfo `json:"exit,omitempty"` // 普通网站看到的出口
 	CF     *model.IPInfo `json:"cf,omitempty"`   // 不指定反代时 Cloudflare 站点看到的出口
@@ -170,10 +171,11 @@ type lineView struct {
 	SpeedAvg   float64 `json:"speedAvg,omitempty"`   // 下载平均 Mbps
 	SpeedState string  `json:"speedState,omitempty"` // run | wait
 	SpeedErr   string  `json:"speedErr,omitempty"`
+	Fails      int     `json:"fails,omitempty"` // 最近连着几轮没测通；延迟 > 0 时表示“还算能用，待复测”（decisions N-9）
 }
 
 func (a *App) lineViewLocked(subID, key string, sc model.NodeScan) lineView {
-	v := lineView{Kind: sc.Kind, Colo: sc.Colo, TCP: sc.TCP, At: sc.At, Speed: sc.Speed, SpeedAvg: sc.SpeedAvg, SpeedErr: sc.SpeedErr}
+	v := lineView{Kind: sc.Kind, Colo: sc.Colo, TCP: sc.TCP, At: sc.At, Speed: sc.Speed, SpeedAvg: sc.SpeedAvg, SpeedErr: sc.SpeedErr, Fails: sc.Fails}
 	if st, now := a.speedOfLocked(subID, key); st != "" {
 		v.SpeedState, v.SpeedErr = st, ""
 		if st == "run" {
@@ -203,6 +205,8 @@ type subView struct {
 	Nodes     []nodeView `json:"nodes"`
 	Pips      []pipView  `json:"pips"`
 	NodeCount int        `json:"nodeCount"`
+	Addrs     int        `json:"addrs"`     // edgetunnel：这个订阅带进共用地址池的地址（还在订阅里的，decisions N-10）
+	AddrsGone int        `json:"addrsGone"` // 已不在最新订阅里、还通所以留用的
 	Scanning  bool       `json:"scanning"`
 	Progress  *scanProg  `json:"progress,omitempty"` // 本轮测速进度
 	ScannedAt int64      `json:"scannedAt"`          // 上一轮测速结束的时刻；0 = 核心服务启动后还没测过
@@ -283,7 +287,14 @@ func (a *App) State(me string) map[string]any {
 		}
 		for _, n := range a.nodesLocked(s) {
 			sc := a.scanLocked(n.Name)
-			nv := nodeView{ID: n.ID, Server: n.Server, Port: n.Port, Label: n.Label, Host: n.Host, Type: n.Type, From: n.From, Gone: n.Gone, Delay: sc.Delay, Exit: sc.Exit, CF: sc.CF, Err: sc.Err}
+			nv := nodeView{ID: n.ID, Server: n.Server, Port: n.Port, Label: n.Label, Host: n.Host, Type: n.Type, From: n.From, Sub: n.Sub, Gone: n.Gone, Delay: sc.Delay, Exit: sc.Exit, CF: sc.CF, Err: sc.Err}
+			if n.From == "sub" && n.Sub == s.ID {
+				if n.Gone {
+					v.AddrsGone++
+				} else {
+					v.Addrs++
+				}
+			}
 			if isET {
 				nv.lineView = a.lineViewLocked(s.ID, n.key(), sc)
 				if nv.Kind == "" && inCF(n.Server) {

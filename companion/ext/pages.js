@@ -200,11 +200,15 @@ export function exitsView(c) {
     act(() => api('POST', '/api/subscriptions', { name: '', url: url.trim(), kind }), '订阅已添加');
   };
   const subRow = (s) => row({ ic: 'sub', t: [h('span', { class: 'el' }, s.name), st.settings.defaultSubscriptionId === s.id && h('span', { class: 'tag' }, '默认')],
-    s: [s.kind === 'edgetunnel' ? h('span', { class: 'tag' }, 'edgetunnel') : h('span', { class: 'tag g' }, '通用'), `${s.nodeCount} 个节点${s.kind === 'edgetunnel' ? ` · ${(s.profiles || []).length} 条线路` : ''} · ${ago(s.fetchedAt)}`, s.lastError && h('span', { class: 'bad' }, ' · ' + s.lastError)],
-    chev: true, title: s.url,
+    // edgetunnel 订阅只当“入口模板”（连接参数）；里面的地址并进地址库，各订阅共用（decisions N-10）
+    s: [s.kind === 'edgetunnel' ? h('span', { class: 'tag' }, 'edgetunnel') : h('span', { class: 'tag g' }, '通用'),
+      s.kind === 'edgetunnel' ? `${(s.profiles || []).length} 条线路 · ${s.addrs || 0} 个地址已并入地址库${s.addrsGone ? `（另有 ${s.addrsGone} 个已不在订阅里）` : ''} · ${ago(s.fetchedAt)}` : `${s.nodeCount} 个节点 · ${ago(s.fetchedAt)}`,
+      s.lastError && h('span', { class: 'bad' }, ' · ' + s.lastError)],
+    chev: true, title: s.kind === 'edgetunnel' ? `${s.url}\n只取连接参数（域名、uuid、路径、ECH、alpn 等）；订阅里的地址并进地址库，每次更新订阅自动同步` : s.url,
     onclick: async () => {
-      const v = await choose(s.name, [['default', '设为默认订阅'], ['refresh', '立即刷新'], ['url', '修改订阅地址'], ['name', '改名'], ['del', '删除订阅']], null);
-      if (v === 'default') act(() => api('POST', `/api/subscriptions/${s.id}/default`), '已设为默认');
+      const v = await choose(s.name, [s.kind === 'edgetunnel' && ['addrs', `查看它带来的 ${(s.addrs || 0) + (s.addrsGone || 0)} 个地址`], ['default', '设为默认订阅'], ['refresh', '立即刷新'], ['url', '修改订阅地址'], ['name', '改名'], ['del', '删除订阅']].filter(Boolean), null);
+      if (v === 'addrs') c.open('exits/s-' + s.id);
+      else if (v === 'default') act(() => api('POST', `/api/subscriptions/${s.id}/default`), '已设为默认');
       else if (v === 'refresh') act(() => api('POST', `/api/subscriptions/${s.id}/refresh?force=1`), '已刷新');
       else if (v === 'name') { const t = await ask('订阅名称', { value: s.name }); if (t && t.trim()) act(() => api('PATCH', `/api/subscriptions/${s.id}`, { name: t.trim() }), '已改名'); }
       // 改地址：订阅还是这一个，用它的实例不用重新选（以前只能删了重加，实例就都断了）。新地址拉不下来就不改。
@@ -233,9 +237,17 @@ export function exitsView(c) {
   const hp = (v) => { let m = /^\[(.+)\](?::(\d+))?$/.exec(v); if (m) return [m[1], +m[2] || 0]; if (v.split(':').length > 2) return [v, 0]; m = /^(.*):(\d+)$/.exec(v); return m ? [m[1], +m[2]] : [v, 0]; };
   const nkey = (v, dport) => { const [host, port] = hp(v); return `${host.includes(':') ? '[' + host + ']' : host}:${port || dport || 443}`; };
   const pipIdx = new Map(), nodeIdx = new Map(), put = (m, k, x) => { const a = m.get(k); if (a) a.push(x); else m.set(k, [x]); };
+  const subAddr = new Map(); // 订阅带来的地址（decisions N-10）：订阅 id → 地址:端口 → { n（地址本身）, xs（各订阅里的探测结果） }
   for (const sub of st.subscriptions) {
-    for (const p of sub.pips || []) put(pipIdx, p.id, { delay: p.delay, info: p.cf || p.exit, speed: p.speed, speedState: p.speedState, err: p.err, key: p.id, pip: p.id, kind: p.kind, sub, pkey: p.type === 'proxyip' ? p.key : p.type + '|' + p.value, g: p.type !== 'proxyip' });
-    for (const n of sub.nodes || []) { if (n.from === 'sub') continue; const k = nkey(`${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port || 443}`); put(nodeIdx, k, { delay: n.delay, info: n.exit, speed: n.speed, speedState: n.speedState, err: n.err, colo: n.colo, kind: n.kind, key: k, sub, pkey: k }); }
+    for (const p of sub.pips || []) put(pipIdx, p.id, { delay: p.delay, info: p.cf || p.exit, speed: p.speed, speedState: p.speedState, err: p.err, fails: p.fails, key: p.id, pip: p.id, kind: p.kind, sub, pkey: p.type === 'proxyip' ? p.key : p.type + '|' + p.value, g: p.type !== 'proxyip' });
+    for (const n of sub.nodes || []) {
+      const k = nkey(`${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port || 443}`), x = { delay: n.delay, info: n.exit, speed: n.speed, speedState: n.speedState, err: n.err, fails: n.fails, colo: n.colo, kind: n.kind, key: k, sub, pkey: k };
+      if (n.from !== 'sub') { put(nodeIdx, k, x); continue; }
+      if (!subAddr.has(n.subId)) subAddr.set(n.subId, new Map());
+      const m = subAddr.get(n.subId), o = m.get(k) || m.set(k, { n, xs: [] }).get(k);
+      o.xs.push(x);
+      if (sub.id === n.subId) o.n = n; // 地址本身的说明（备注、是否已不在订阅里）以它自己那个订阅的为准
+    }
   }
   const dedupe = (out) => { const seen = new Map(); for (const x of out) { const o = seen.get(x.key); if (!o || (x.delay > 0 && (o.delay <= 0 || x.delay < o.delay))) seen.set(x.key, x); } return [...seen.values()]; };
   const best = (xs) => xs.filter((x) => x.delay > 0).sort((a, b) => a.delay - b.delay)[0] || null;
@@ -367,6 +379,20 @@ export function exitsView(c) {
       s: [h('span', { class: 'tag g' }, '手动添加'), sm.where(), h('span', { class: 'brk' }), h('span', {}, [`${n} 个地址`, sm.all.length > 0 && `${sm.alive.length} 个通`].filter(Boolean).join(' · '))],
       trail: groupTrail(sm), onclick: () => c.open('exits/loose') });
   };
+  // 订阅带来的地址：一个订阅一组（decisions N-10）。地址随订阅更新自动同步，这里只看、测，不单独删改。
+  const etSubs = st.subscriptions.filter((x) => x.kind === 'edgetunnel' && subAddr.get(x.id)?.size);
+  const subRows = (sid) => [...(subAddr.get(sid)?.values() || [])].map(({ n, xs }) => {
+    const ys = dedupe([...(pipIdx.get('a:' + xs[0].key) || []), ...xs]), b = best(ys);
+    return { n, id: n.id, value: xs[0].key, xs: ys, b, delay: b ? b.delay : ys.length && ys.every((y) => y.delay < 0) ? -1 : 0 };
+  });
+  const goneTag = () => h('span', { class: 'tag g', title: '最新一次拉取的订阅里已经没有它了。测过还通的暂时留用（每个国家最多留几个），不通的测完自动清掉' }, '已不在订阅里');
+  const subGroupRow = (sub) => {
+    const rows = subRows(sub.id), sm = sumOf(rows), n = rows.length, gone = rows.filter((x) => x.n.gone).length;
+    return row({ ic: sm.lead('sub'), t: [h('span', { class: 'el' }, sub.name)], cls: 'librow grp' + (n > 0 && sm.d < 0 ? ' dead' : ''), chev: true, title: '这个订阅带来的地址：每次更新订阅自动同步，各订阅都能用',
+      s: [h('span', { class: 'tag g', title: '来自订阅：订阅只取连接参数，里面的地址并进地址库' }, '来自订阅'), sm.where(), h('span', { class: 'brk' }),
+        h('span', {}, [`${n} 个地址`, sm.all.length > 0 && `${sm.alive.length} 个通`, gone > 0 && `${gone} 个已不在订阅里`, rel(sub.fetchedAt) && `订阅 ${rel(sub.fetchedAt)}更新`].filter(Boolean).join(' · '))],
+      trail: groupTrail(sm), onclick: () => c.open('exits/s-' + sub.id) });
+  };
   const rank = (x) => (x.delay > 0 ? x.delay : x.delay === 0 ? 1e6 : 2e6);
   const me = st.me, curPip = me?.proxy?.exitId ? (me.proxy.exitIp ? `${me.proxy.exitId}|${me.proxy.exitIp}` : me.proxy.exitId) : '';
   const aliveChip = (n) => n > 0 && h('div', { class: 'chips' }, h('button', { class: 'chip' + (grpF.alive ? ' on' : ''), title: '只看通的', 'aria-pressed': grpF.alive ? 'true' : 'false', onclick: () => { grpF = { ...grpF, alive: !grpF.alive }; c.render(); } }, '只看通的 ', h('i', {}, n)));
@@ -387,6 +413,25 @@ export function exitsView(c) {
       shown.map((x) => addrRow({ type: x.e.type, value: x.e.value, label: x.e.label, xs: x.xs, on: x.e.id === curPip, menu: () => entryMenu(x.e) })),
       !shown.length && h('div', { class: 'empty' }, '没有'),
       h('div', { class: 'foot noic' }, '手动加的单个 IP 都在这一组。右上角的铅笔：把整组当成一段文字来改（一行一个，删行就是删 IP）。点延迟只重测那一个。')];
+  }
+  // 子页：一个订阅带来的全部地址
+  const ssub = route2().startsWith('s-') ? st.subscriptions.find((x) => x.id === route2().slice(2)) : null;
+  if (ssub) {
+    const rows = subRows(ssub.id), sm = sumOf(rows), shown = stableOrder('grp', `s-${ssub.id}|${grpF.alive}`, rows.filter((x) => !grpF.alive || x.delay > 0).sort((a, b) => rank(a) - rank(b)), (x) => x.id);
+    const itemMenu = async (x) => {
+      const v = await choose(x.value, [x.xs.length > 0 && ['ping', '重测延迟'], x.b && ['speed', '测下载峰值'], ['copy', '复制地址']].filter(Boolean), null);
+      if (v === 'ping') pingXs(x.xs);
+      else if (v === 'speed') speedXs([x.b]);
+      else if (v === 'copy') navigator.clipboard?.writeText(x.value).then(() => toast('已复制'), () => toast('复制失败', true));
+    };
+    return [appBar([h('span', { class: 'el' }, ssub.name), h('span', { class: 'cnt' }, `${sm.alive.length} / ${rows.length}`)], { fn: backLib, title: '返回' },
+      h('button', { class: 'ib', title: '测全部延迟', 'aria-label': '测全部延迟', disabled: !sm.all.length, onclick: () => pingXs(sm.all) }, icon('bolt', 22)),
+      ibtn('refresh', '立即更新订阅', () => act(() => api('POST', `/api/subscriptions/${ssub.id}/refresh?force=1`), '已刷新'))),
+      aliveChip(sm.alive.length),
+      shown.map((x) => addrRow({ type: 'proxyip', value: x.value, label: x.n.label, xs: x.xs, on: x.id === me?.proxy?.addressId, more: x.n.gone && goneTag(), menu: () => itemMenu(x) })),
+      !rows.length && h('div', { class: 'empty' }, '这个订阅没有带地址'),
+      rows.length > 0 && !shown.length && h('div', { class: 'empty' }, '没有'),
+      h('div', { class: 'foot noic' }, '订阅只取连接参数（域名、uuid、路径、ECH、alpn 等），里面的地址并进地址库，所有 edgetunnel 订阅共用、一轮只测一遍。每次更新订阅自动同步：新的加进来，没了的标“已不在订阅里”（还通的暂时留用，不通的测完清掉）。自己加的地址不受影响。')];
   }
   // 子页：一个列表（或一个域名）里的全部地址
   const gid = route2().startsWith('g-') ? route2().slice(2) : '', ge = gid && st.exits.find((x) => x.id === gid && grouped(x));
@@ -421,9 +466,10 @@ export function exitsView(c) {
     st.subscriptions.map(subRow),
     row({ ic: 'add', t: '添加订阅', onclick: addSub }),
     custom.length > 0 && [sec('自定义地址', String(custom.length)), custom.map((n) => row({ ic: 'bolt', t: ipSpan(`${n.server.includes(':') ? '[' + n.server + ']' : n.server}:${n.port}`), s: n.label || null, trail: ibtn('del', '删除', () => act(async () => { const r = await api('DELETE', `/api/addresses/${n.id}`); if (r?.changed) toast(`有 ${r.changed} 个实例把它当入口，已换成延迟最低的`); })) }))],
-    sec('地址库（优选 IP / 反代 / 全局代理）', st.exits.length ? `${tops.length + (loose.length ? 1 : 0)} 组 · ${total} 个地址` : '0'),
+    sec('地址库（优选 IP / 反代 / 全局代理）', st.exits.length || etSubs.length ? `${tops.length + (loose.length ? 1 : 0) + etSubs.length} 组 · ${total + etSubs.reduce((n, x) => n + (subAddr.get(x.id)?.size || 0), 0)} 个地址` : '0'),
     tops.map(exitRow),
     loose.length > 0 && looseRow(),
+    etSubs.map(subGroupRow),
     row({ ic: 'add', t: '导入地址', s: '列表网址、域名、IP、socks5:// sstp://，或输入 vpngate', onclick: importAddr })];
 
   // ---------- VPN Gate 源（decisions N-5）：一行代表整个源，像展开的域名；点开按国家列出每一台 ----------

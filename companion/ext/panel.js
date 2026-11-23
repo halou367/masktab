@@ -77,8 +77,10 @@ const kindTag = (x) => (x.kind === 'cf' ? h('span', { class: 'cfm cf', title: '�
   : x.kind === 'proxy' ? h('span', { class: 'cfm cf', title: '反代：入口和出口都能当' }, '反代') : null);
 // 延迟那一格：点一下只重测这一个地址（不跑整轮）；pingKey 是 地址:端口，全局出口是 类型|值。
 const ping = (sub, key) => run(async () => { await api('POST', `/api/subscriptions/${sub.id}/ping`, { keys: [key] }); await load(); });
-const dlyBtn = (sub, x, key) => (isET(sub) && key ? h('button', { class: 'd pg ' + delayCls(x.delay), title: (x.delay > 0 ? `延迟 ${x.delay} ms${x.tcp ? `；TCP 握手 ${x.tcp} ms` : ''}` : x.err || '还没测') + '。点击重测延迟', onclick: stop(() => ping(sub, key)) }, delayText(x.delay)) : dly(x));
-const dly = (x) => h('span', { class: 'd ' + delayCls(x.delay), title: x.delay > 0 ? `延迟${x.tcp ? `；TCP 握手 ${x.tcp} ms` : ''}` : x.err || null }, delayText(x.delay));
+// 待复测：最近一轮没测通、但之前能用，还没判死（decisions N-9）
+const susT = (x) => (x.delay > 0 && x.fails > 0 ? `\n最近一次复测没通（${x.err || '超时'}），连着 2 轮不通才算不通，先照旧可用` : '');
+const dlyBtn = (sub, x, key) => (isET(sub) && key ? h('button', { class: 'd pg ' + delayCls(x.delay), title: (x.delay > 0 ? `延迟 ${x.delay} ms${x.tcp ? `；TCP 握手 ${x.tcp} ms` : ''}` : x.err || '还没测') + susT(x) + '。点击重测延迟', onclick: stop(() => ping(sub, key)) }, delayText(x.delay)) : dly(x));
+const dly = (x) => h('span', { class: 'd ' + delayCls(x.delay), title: x.delay > 0 ? `延迟${x.tcp ? `；TCP 握手 ${x.tcp} ms` : ''}${susT(x)}` : x.err || null }, delayText(x.delay));
 
 // IP 的类型和纯净度（核心服务查好放在 st.ipq 里，按 IP 取；查不到就不画，不编数字）。
 const TY = { res: ['home', '住宅宽带'], dc: ['dc', '机房 / 云服务器'], mobile: ['phone', '手机流量'] };
@@ -241,7 +243,7 @@ function exitView(me, sub) {
     p.cf?.ip ? `CF 网站看到：${p.cf.ip}  ${cname(pcc(p))} ${where(p.cf)}` : null,
     puLine(ipOf(p)),
     p.speed > 0 ? `下载：峰值 ${p.speed} Mbps，平均 ${p.speedAvg} Mbps` : null,
-    p.err ? `不通：${p.err}` : null, p.derived ? '来自订阅里的入口地址' : null].filter(Boolean).join('\n');
+    p.err ? (p.delay > 0 ? `待复测：最近一次没测通（${p.err}）` : `不通：${p.err}`) : null, p.derived ? '来自订阅里的入口地址' : null].filter(Boolean).join('\n');
   const pickIt = (id) => { view = ''; patch({ proxy: { pipId: id, exitMode: 'manual', state: 'on' } }); };
   const resChip = h('button', { class: 'chip ico' + (resOnly ? ' on' : ''), title: '只看住宅', 'aria-label': '只看住宅', 'aria-pressed': resOnly ? 'true' : 'false', onclick: () => { resOnly = !resOnly; render(); } }, icon('home', 17));
   // 类型芯片（decisions N-5）：和国家下拉一起筛；VPN Gate 源里的每一台都在 SSTP 里
@@ -280,7 +282,7 @@ function entryView(me, sub) {
     n.speed > 0 ? `下载：峰值 ${n.speed} Mbps，平均 ${n.speedAvg} Mbps` : null,
     tuneNow?.[n.id] != null ? `本时段分数 ${tuneNow[n.id]}（依据：${tv.known?.[n.id] || '本时段'}的下载记录）` : null,
     n.id === bestId && bestWhy ? `当前时段最佳：${bestWhy}` : null,
-    n.err ? `不通：${n.err}` : null, n.from === 'sub' ? (n.gone ? '已不在最新的订阅里，还通所以留用' : null) : '自己加的'].filter(Boolean).join('\n');
+    n.err ? (n.delay > 0 ? `待复测：最近一次没测通（${n.err}）` : `不通：${n.err}`) : null, n.from === 'sub' ? `来自订阅“${st.subscriptions.find((x) => x.id === n.subId)?.name || '已删除'}”${n.gone ? '（已不在最新的订阅里，还通所以留用）' : ''}` : '自己加的'].filter(Boolean).join('\n');
   const pickIt = (n) => { view = ''; patch({ proxy: et ? { nodeId: n.id, entryMode: 'manual', state: 'on' } : { nodeId: n.id, exitMode: 'manual', state: 'on' } }); };
   const kf = (k, t) => h('button', { class: 'chip' + (kindFlt === k ? ' on' : ''), title: '只看' + t, 'aria-pressed': kindFlt === k ? 'true' : 'false', onclick: () => { kindFlt = kindFlt === k ? '' : k; render(); } }, t);
   // 立即优选一轮（入口优选，decisions N-6）：测全部延迟 + 挑几个测下载、按小时记下；受每天的流量上限约束

@@ -158,6 +158,7 @@ func (a *App) applySubLocked(s *model.Subscription, nodes []model.ProxyNode, has
 				keep = append(keep, o)
 			}
 		}
+		defer a.shareScanLocked() // 新同步进来的地址：别的订阅里测过的先照抄（a.Addresses 换好之后）
 	} else {
 		if !s.KindLocked {
 			s.Kind = "generic"
@@ -276,30 +277,30 @@ const (
 	maxImport   = 500
 )
 
-// rescanET 把全部 edgetunnel 订阅重新测一遍；有一轮正在测就等它结束再测（否则新加的地址会漏掉）。
+// rescanET 把全部 edgetunnel 订阅重新测一遍（地址池是共用的，一轮就是全部，decisions N-10）；
+// 有一轮正在测就等它结束再测（否则新加的地址会漏掉）。
 func (a *App) rescanET() {
 	a.mu.Lock()
-	var ids []string
-	for _, s := range a.Subs {
-		if s.Kind == "edgetunnel" && s.Template != nil {
-			ids = append(ids, s.ID)
-		}
-	}
+	subs := a.etSubsLocked(a.Settings.DefaultSubscriptionID)
 	a.mu.Unlock()
-	for _, id := range ids {
-		// 最多等 5 分钟。以前只等 20 秒：订阅里有两三百个地址时一轮要测一分多钟，
-		// 等不到它结束，Scan 见“正在测”直接返回，新加的地址（刚导入的列表）就一直是“还没探测”（2026-11-18 需求方电脑上实测到）。
-		for i := 0; i < 1500; i++ {
-			a.mu.Lock()
-			busy := a.scanning[id]
-			a.mu.Unlock()
-			if !busy {
-				break
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-		a.Scan(id)
+	if len(subs) == 0 {
+		return
 	}
+	// 最多等 5 分钟。以前只等 20 秒：订阅里有两三百个地址时一轮要测一分多钟，
+	// 等不到它结束，Scan 见“正在测”直接返回，新加的地址（刚导入的列表）就一直是“还没探测”（2026-11-18 需求方电脑上实测到）。
+	for i := 0; i < 1500; i++ {
+		a.mu.Lock()
+		busy := false
+		for _, s := range subs {
+			busy = busy || a.scanning[s.ID]
+		}
+		a.mu.Unlock()
+		if !busy {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	a.Scan(subs[0].ID)
 }
 
 // ResolveExit 把域名出口条目解析成地址列表（决定 N-2）：TXT、A、AAAA 都查，IPv4 和 IPv6 都留下。

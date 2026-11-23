@@ -37,6 +37,7 @@ type nodeRef struct {
 	Host   string
 	Type   string
 	From   string // sub | custom | pip
+	Sub    string // From = sub：地址来自哪个订阅（N-10 起各订阅共用，不一定是正在看的这个）
 	Gone   bool   // 已不在最新一次拉取的订阅里（留用）
 }
 
@@ -83,14 +84,21 @@ func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 			n.Name, n.Host, n.Type = hname("a-", sub.ID, k), host, typ
 			out = append(out, n)
 		}
+		// 订阅只当“入口模板”用（连接参数），它带来的地址和自己加的、地址库里的一样，进共用的地址池（decisions N-10）：
+		// 先是这个订阅自己的，再是自己加的，再是别的 edgetunnel 订阅带来的，最后是地址库。同一个 地址:端口 只出现一次。
 		for _, ad := range a.Addresses {
 			if ad.SubscriptionID == sub.ID && ad.Source != "custom" {
-				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "sub", Gone: ad.Gone})
+				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "sub", Sub: sub.ID, Gone: ad.Gone})
 			}
 		}
 		for _, ad := range a.Addresses {
 			if ad.Source == "custom" {
 				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "custom"})
+			}
+		}
+		for _, ad := range a.Addresses {
+			if ad.Source != "custom" && ad.SubscriptionID != sub.ID && a.isETLocked(ad.SubscriptionID) {
+				add(nodeRef{ID: ad.ID, Server: ad.Server, Port: ad.Port, Label: ad.Label, From: "sub", Sub: ad.SubscriptionID, Gone: ad.Gone})
 			}
 		}
 		for _, e := range a.Exits {
@@ -126,6 +134,27 @@ func (a *App) nodesLocked(sub *model.Subscription) []nodeRef {
 		server, _ := n.Raw["server"].(string)
 		typ, _ := n.Raw["type"].(string)
 		out = append(out, nodeRef{ID: n.Key, Name: nodeName(sub, n.Key), Server: server, Port: port, Label: n.Name, Host: hostOfRaw(n.Raw, server), Type: typ, From: "sub"})
+	}
+	return out
+}
+
+// isETLocked 判断 id 是不是一个现存的 edgetunnel 订阅。
+func (a *App) isETLocked(id string) bool {
+	s := a.subLocked(id)
+	return s != nil && s.Kind == "edgetunnel" && s.Template != nil
+}
+
+// etSubsLocked 返回全部 edgetunnel 订阅；first 指定的那个排在最前（它的站点名优先用来探测）。
+func (a *App) etSubsLocked(first string) []*model.Subscription {
+	var out []*model.Subscription
+	for _, s := range a.Subs {
+		if s.Kind == "edgetunnel" && s.Template != nil {
+			if s.ID == first {
+				out = append([]*model.Subscription{s}, out...)
+			} else {
+				out = append(out, s)
+			}
+		}
 	}
 	return out
 }
@@ -267,7 +296,8 @@ func (a *App) saveScanLocked() { _ = writeJSON(a.p("state", "scan.json"), a.scan
 
 // Scan 测一个订阅，结果随测随发到界面。同一个订阅同时只跑一轮。
 //
-//	edgetunnel：本机直接探测全部入口和反代（见 fastscan.go），几秒钟出齐；socks5 / http 出口再经隧道单独测。
+//	edgetunnel：地址是各订阅共用的，一轮把全部 edgetunnel 订阅的地址池测一遍（每个地址只测一次，见 pool.go 的 scanET）：
+//	            本机直接探测全部入口和反代（见 fastscan.go）；socks5 / sstp 出口再经隧道单独测。
 //	通用订阅：经代理内核测每个节点的延迟和出口。
 //
 // 测完后，开着"自动"的实例按新结果重新确认一次线路。
@@ -279,7 +309,12 @@ func (a *App) Scan(subID string) {
 		return
 	}
 	isET := sub.Kind == "edgetunnel" && sub.Template != nil
-	if !isET && !a.coreOK {
+	if isET { // 共用地址池，一轮测全部 edgetunnel 订阅（pool.go）
+		a.mu.Unlock()
+		a.scanET(subID)
+		return
+	}
+	if !a.coreOK {
 		a.mu.Unlock()
 		return
 	}
@@ -308,12 +343,6 @@ func (a *App) Scan(subID string) {
 			}
 		}
 	}()
-	if isET {
-		a.scanDirect(subID)
-		a.scanGlobalExits(subID)
-		a.echCheck(subID)
-		return
-	}
 	round := func() []nodeRef {
 		a.mu.Lock()
 		nodes := a.nodesLocked(sub)
@@ -486,57 +515,98 @@ func (a *App) testExits(nodes []nodeRef, withCF bool) {
 	wg.Wait()
 }
 
-// testPips 逐个测反代：经借用的入口访问 Cloudflare 的 trace，得到用这个反代时 Cloudflare 站点看到的 IP，再测往返延迟。
+// testPips 测反代 / 全局出口：经借用的入口访问 Cloudflare 的 trace，得到用它时 Cloudflare 站点看到的 IP，再测往返延迟。
 // socks5 / http 是全局出口（所有网站都从它出去），顺带测普通网站看到的 IP。
-func (a *App) testPips(pips []pipRef) {
+//
+// 它们全挤在借来的同一个入口上，所以全进程同时只测 pipSlots 个（整段：trace、查归属、测延迟都算在里面，decisions N-9）；
+// 偶发失败（超时、被取消、被中断）的等这一遍测完再测一次；之前能用的连着 deadAfter 轮都不通才判死。
+// interactive = 手动点的（可以用另留的位置）。
+func (a *App) testPips(pips []pipGroup, interactive bool) {
 	a.mu.Lock()
 	eps := a.Settings.IPInfoEndpoints
 	a.mu.Unlock()
-	var wg sync.WaitGroup
-	for _, p := range pips {
-		wg.Add(1)
-		go func(p pipRef) {
-			defer wg.Done()
-			var cf, ex *model.IPInfo
-			var reason string
-			var cold int
-			err := a.viaScan(p.Name, func(port int, group string) error {
-				start := time.Now()
-				hc := probe.Client(port, 10*time.Second)
-				ip, loc, err := cfTrace(hc)
-				if err != nil {
-					time.Sleep(150 * time.Millisecond)
-					reason = a.core.LastError(group, start)
-					return err
-				}
-				cold = int(time.Since(start).Milliseconds())
-				i := probe.Lookup(hc, ip, loc, eps)
-				cf = &i
-				if p.Type != "proxyip" {
-					if ip2, err := exitIP(hc, false); err == nil {
-						j := probe.Lookup(hc, ip2, "", eps)
-						ex = &j
-					}
-				}
-				return nil
-			})
-			d := -1
-			if err == nil {
-				if d = a.delayOnce(p.Name, traceURL, 6000); d < 0 {
-					d = cold
-				}
-			}
-			a.mu.Lock()
-			s := a.slotLocked(p.Name)
-			s.Delay, s.CF, s.Exit, s.At, s.Err = d, cf, ex, now(), ""
+	var mu sync.Mutex
+	var again []pipGroup
+	run := func(g pipGroup, last bool) {
+		p := g.p
+		release := pipGate.acquire(interactive)
+		cf, ex, d, err, reason := a.testPip(p, eps)
+		release()
+		if err != nil && !last && cfprobe.Transient(err) {
+			mu.Lock()
+			again = append(again, g)
+			mu.Unlock()
+			return
+		}
+		a.mu.Lock()
+		for i, name := range g.names { // 各订阅里同一个全局出口的记录一起写（decisions N-10）
+			s := a.slotLocked(name)
 			if err != nil {
-				s.Err = friendlyErr(reason, err)
+				if failLocked(s, cfprobe.Transient(err), friendlyErr(reason, err)) {
+					s.CF, s.Exit, s.At = nil, nil, now()
+				}
+				continue
 			}
-			a.bumpLocked("state", "")
-			a.mu.Unlock()
-		}(p)
+			c, e := cf, ex
+			if i > 0 { // 各条记录各有一份，后面补城市时互不影响
+				c, e = cloneInfo(cf), cloneInfo(ex)
+			}
+			s.Delay, s.CF, s.Exit, s.At, s.Err, s.Fails = d, c, e, now(), "", 0
+		}
+		a.bumpLocked("state", "")
+		a.mu.Unlock()
+	}
+	var wg sync.WaitGroup
+	for _, g := range pips {
+		wg.Add(1)
+		go func(g pipGroup) { defer wg.Done(); run(g, false) }(g)
 	}
 	wg.Wait()
+	for _, g := range again {
+		wg.Add(1)
+		go func(g pipGroup) { defer wg.Done(); run(g, true) }(g)
+	}
+	wg.Wait()
+}
+
+func cloneInfo(i *model.IPInfo) *model.IPInfo {
+	if i == nil {
+		return nil
+	}
+	v := *i
+	return &v
+}
+
+// testPip 测一个反代 / 全局出口。d 是往返延迟（毫秒），测不出时用首次请求的耗时。
+func (a *App) testPip(p pipRef, eps []string) (cf, ex *model.IPInfo, d int, err error, reason string) {
+	var cold int
+	err = a.viaScan(p.Name, func(port int, group string) error {
+		start := time.Now()
+		hc := probe.Client(port, 10*time.Second)
+		ip, loc, err := cfTrace(hc)
+		if err != nil {
+			time.Sleep(150 * time.Millisecond)
+			reason = a.core.LastError(group, start)
+			return err
+		}
+		cold = int(time.Since(start).Milliseconds())
+		i := probe.Lookup(hc, ip, loc, eps)
+		cf = &i
+		if p.Type != "proxyip" {
+			if ip2, err := exitIP(hc, false); err == nil {
+				j := probe.Lookup(hc, ip2, "", eps)
+				ex = &j
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, -1, err, reason
+	}
+	if d = a.delayOnce(p.Name, traceURL, 6000); d < 0 {
+		d = cold
+	}
+	return cf, ex, d, nil, ""
 }
 
 // cfTrace 返回经该通道访问 Cloudflare 站点时对方看到的 IP 和国家。
@@ -644,10 +714,10 @@ func (a *App) entryCandsLocked(nodes []nodeRef) []cand {
 	t := time.Now()
 	for _, n := range nodes {
 		sc := a.scanLocked(n.Name)
-		c := cand{ID: n.ID, Key: n.key(), Delay: sc.Delay}
+		c := cand{ID: n.ID, Key: n.key(), Delay: suspect(sc)}
 		if sc.Delay > 0 { // 入口优选的当前时段分数（decisions N-6）：没测过下载的只按延迟算分，测过的加上速度
 			mbps, _, _, _ := a.tune.Hist[n.key()].estimate(t.Hour(), t.UnixMilli())
-			c.Score = entryScore(mbps, sc.Delay)
+			c.Score = entryScore(mbps, c.Delay)
 		}
 		if sc.Exit != nil {
 			c.Country = sc.Exit.Country
@@ -660,6 +730,14 @@ func (a *App) entryCandsLocked(nodes []nodeRef) []cand {
 	return out
 }
 
+// suspect 是自动选线时用的延迟：最近一轮没测通、还没判死的（Fails > 0），照样算能用，但往后排（decisions N-9）。
+func suspect(sc model.NodeScan) int {
+	if sc.Delay > 0 && sc.Fails > 0 {
+		return sc.Delay + suspectPenalty
+	}
+	return sc.Delay
+}
+
 func (a *App) pipCandsLocked(sub *model.Subscription, me *model.Instance) []cand {
 	used := map[string]bool{}
 	for _, o := range a.Instances {
@@ -670,7 +748,7 @@ func (a *App) pipCandsLocked(sub *model.Subscription, me *model.Instance) []cand
 	var out []cand
 	for _, p := range a.pipsLocked(sub) {
 		sc := a.scanLocked(p.Name)
-		c := cand{ID: p.ID, Key: p.key(), Delay: sc.Delay, Derived: p.Derived, Used: used[p.ID], Type: p.Type}
+		c := cand{ID: p.ID, Key: p.key(), Delay: suspect(sc), Derived: p.Derived, Used: used[p.ID], Type: p.Type}
 		if sc.CF != nil {
 			c.Country = sc.CF.Country
 		}
@@ -705,7 +783,7 @@ func (a *App) pruneGoneLocked(sub *model.Subscription) {
 	}
 	var gone []cand
 	for _, n := range a.nodesLocked(sub) {
-		if n.Gone {
+		if n.Gone && n.Sub == sub.ID { // 只管自己带来的（别的订阅的由它自己管）
 			sc := a.scanLocked(n.Name)
 			c := cand{ID: n.ID, Delay: sc.Delay}
 			if sc.Exit != nil {

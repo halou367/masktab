@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/halou367/masktab/internal/cfprobe"
@@ -261,23 +260,24 @@ func (a *App) TuneRound(subID string) int {
 	if host == "" || len(nodes) == 0 {
 		return 0
 	}
-	// 一、全部入口测延迟（每个一个小请求，和“测速”的第一步一样）
-	hosts := probeHosts(host)
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 16)
+	// 一、全部入口测延迟（每个一个小请求，和“测速”的第一步一样）。和整轮测速共用全局并发上限（decisions N-9，以前这里自己再开 16 个）；
+	// 地址池是各订阅共用的（N-10）：几分钟内刚测过的不再测，测了的结果写进每个订阅里它的记录。
+	a.mu.Lock()
+	want := map[string]bool{}
+	cut := time.Now().Add(-poolFresh).UnixMilli()
 	for _, n := range nodes {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(n nodeRef) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			r, err := traceAny(n.Server, n.Port, hosts, useTLS)
-			a.mu.Lock()
-			a.applyDirectLocked(target{key: n.key(), server: n.Server, port: n.Port, entry: n.Name}, r, err, "")
-			a.mu.Unlock()
-		}(n)
+		if s := a.scan[n.Name]; s == nil || s.Delay == 0 || s.At < cut {
+			want[n.key()] = true
+		}
 	}
-	wg.Wait()
+	var bs []*directBatch
+	var prev map[string]int
+	if len(want) > 0 {
+		bs = a.directPoolLocked(subID, want)
+		prev = a.prevLocked(allRecs(bs))
+	}
+	a.mu.Unlock()
+	a.runPool(bs, false, prev, nil)
 	// 二、挑几个测下载
 	t := time.Now()
 	a.mu.Lock()
