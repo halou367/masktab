@@ -48,7 +48,7 @@ func (a *App) addVPNGateLocked() (id string, added bool) {
 			return e.ID, false
 		}
 	}
-	e := &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: "sstp", Value: vgSource, Label: "VPN Gate", Source: vgSource,
+	e := &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: "sstp", Value: vgSource, Label: "VPN Gate", Source: vgSource, Pool: poolExit,
 		Expand: true, RefreshHours: 3, Resolved: []string{}}
 	a.Exits = append(a.Exits, e)
 	return e.ID, true

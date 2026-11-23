@@ -57,7 +57,6 @@ function syncEntry(state) {
   const auto = me.proxy.entryMode !== 'manual';
   state.entry = { key, id: n?.id, server: n?.server, port: n?.port, label: n?.label, from: n?.from, auto, pin: auto ? '' : key, delay: n?.delay || 0, exit: n?.exit,
     pool: sub.nodes.length, alive: sub.nodes.filter((x) => x.delay > 0).length, users: state.instances.filter((i) => i.proxy?.state === 'on' && (i.rt?.running || i.rt?.starting)).length, tune: auto ? me.tune : undefined };
-  state.exitRoles = state.exitRoles || Object.fromEntries((state.exits || []).filter((e) => e.type === 'proxyip').map((e) => [e.id, e.usableAsEntry === true ? 'entry' : 'exit']));
 }
 fixture.__syncSrc = syncEntry.toString();
 const light = JSON.parse(JSON.stringify(fixture)); light.settings.theme = 'light';
@@ -174,7 +173,7 @@ process.on('uncaughtException', (e) => { console.log(flow.join('\n')); console.l
 // 截图：[名字, 地址, 上下文]
 const shots = [['settings', 'app.html#settings'], ['node', 'app.html#node'], ['fp', 'app.html#fp'],
   ['instances', 'app.html#instances'], ['drawer', 'app.html#instances/p2'], ['import', 'app.html#instances/import'],
-  ['exits', 'app.html#exits'], ['addons', 'app.html#addons'], ['diag', 'app.html#diag'], ['history', 'app.html#history'], ['downloads', 'app.html#downloads'],
+  ['exits', 'app.html#exits'], ['exits-in', 'app.html#exits/in'], ['exits-out', 'app.html#exits/out'], ['addons', 'app.html#addons'], ['diag', 'app.html#diag'], ['history', 'app.html#history'], ['downloads', 'app.html#downloads'],
   ['settings-adv', 'app.html#settings/adv'], ['settings-about', 'app.html#settings/about'], ['settings-ntp', 'app.html#settings/ntp'], ['menu-page', 'app.html#menu'], ['newtab', 'newtab.html#inst=p2']];
 // 规矩（决策 UI-7）：不能有“圆角 + overflow:auto/scroll”的元素，这个组合在安卓模拟器里让 GeckoView 的 GPU 进程卡死。
 // 输入框、文本框本身可滚动且带圆角，以前实测不受影响（run 43574923756），不算在内。返回违规元素的描述。
@@ -940,7 +939,20 @@ if (desk && want('desk')) {
     const gp = await dctx.newPage(); watch(gp, 'desk-groups'); await gp.setViewportSize({ width: 1100, height: 760 });
     // 这一页跟着状态不停重画（模拟的事件接口立刻返回），用 locator.click() 会一直等“元素稳定”
     const tap = (sel, text) => gp.evaluate(([sel, text]) => { const e = [...document.querySelectorAll(sel)].find((x) => !text || x.innerText.includes(text)); if (!e) throw new Error('找不到 ' + sel + ' ' + (text || '')); e.click(); }, [sel, text || '']);
+    // 订阅与地址库首页只有两行：入口地址库、出口地址库（decisions N-13），各进一页；电脑上“返回”回首页
     await gp.goto(dbase + 'app.html#exits'); await gp.waitForTimeout(700);
+    const pools = await gp.evaluate(() => [...document.querySelectorAll('.row.poolrow')].map((e) => e.innerText.replace(/\s+/g, ' ')));
+    await tap('.row.poolrow', '入口地址库'); await gp.waitForTimeout(400);
+    const inn = await gp.evaluate(() => ({ hash: location.hash.slice(1), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')) }));
+    await tap('.librow', '来自订阅'); await gp.waitForTimeout(400);
+    const sh = await gp.evaluate(() => location.hash.slice(1));
+    await tap('.appbar button[aria-label="返回"]'); await gp.waitForTimeout(400);
+    const back0 = await gp.evaluate(() => location.hash.slice(1));
+    await tap('.appbar button[aria-label="返回"]'); await gp.waitForTimeout(400);
+    const back00 = await gp.evaluate(() => location.hash.slice(1));
+    check('电脑版订阅与地址库：首页是“入口地址库”“出口地址库”两行；入口库里是订阅带来的地址（列表、独立 IP 不在这里）；订阅地址子页返回回入口库，入口库返回回首页',
+      pools.length === 2 && /^入口地址库/.test(pools[0]) && /^出口地址库/.test(pools[1]) && inn.hash === 'exits/in' && inn.rows.length === 1 && /来自订阅/.test(inn.rows[0]) && /^s-/.test(sh.split('/')[1] || '') && back0 === 'exits/in' && back00 === 'exits', { pools, inn, sh, back0, back00 });
+    await gp.goto(dbase + 'app.html#exits/out'); await gp.waitForTimeout(700);
     const rows = await gp.evaluate(() => [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')));
     await gp.screenshot({ path: path.join(out, 'desk-groups-lib.png') });
     await tap('.librow', '独立 IP'); await gp.waitForTimeout(400);
@@ -955,9 +967,9 @@ if (desk && want('desk')) {
     const did = deskCalls.map((c) => `${c.m} ${c.p}`);
     await tap('.appbar button[aria-label="返回"]'); await gp.waitForTimeout(400);
     const back2 = await gp.evaluate(() => location.hash.slice(1));
-    check('电脑版地址库：列表是一行（几个、多久前更新、多久更新一次），单个 IP 收在“独立 IP”里，订阅带来的地址一组（decisions N-10）', rows.length === 3 && /来自订阅/.test(rows[2]) && /列表/.test(rows[0]) && /2 个地址 · 5 分钟前更新 · 每 6 小时更新/.test(rows[0]) && /^独立 IP/.test(rows[1]) && /1 个地址/.test(rows[1]), rows);
-    check('电脑版地址库：点“独立 IP”进这一组，返回回到地址库', lo.hash === 'exits/loose' && /独立 IP/.test(lo.h1) && lo.n === 1 && back1 === 'exits', { lo, back1 });
-    check('电脑版地址库：列表展开页有网址那一行、能立即更新，返回回到地址库', /best\.txt 0 \/ 2/.test(li.h1) && li.n === 2 && /https:\/\/ipdb\.example\.com\/api\/best\.txt/.test(li.src) && did.includes('POST /api/exits/L1/resolve') && back2 === 'exits', { li, did, back2 });
+    check('电脑版出口地址库：列表是一行（几个、多久前更新、多久更新一次），单个 IP 收在“独立 IP”里，没有订阅带来的地址（那些在入口库）', rows.length === 2 && !rows.some((t) => /来自订阅/.test(t)) && /列表/.test(rows[0]) && /2 个地址 · 5 分钟前更新 · 每 6 小时更新/.test(rows[0]) && /^独立 IP/.test(rows[1]) && /1 个地址/.test(rows[1]), rows);
+    check('电脑版出口地址库：点“独立 IP”进这一组，返回回到出口地址库', lo.hash === 'exits/loose' && /独立 IP/.test(lo.h1) && lo.n === 1 && back1 === 'exits/out', { lo, back1 });
+    check('电脑版出口地址库：列表展开页有网址那一行、能立即更新，返回回到出口地址库', /best\.txt 0 \/ 2/.test(li.h1) && li.n === 2 && /https:\/\/ipdb\.example\.com\/api\/best\.txt/.test(li.src) && did.includes('POST /api/exits/L1/resolve') && back2 === 'exits/out', { li, did, back2 });
     deskExits = null; await gp.close(); }
   { // 运行情况（UI-28）：总数、每个实例一行（按内存从多到少）、展开看进程分类 / 窗口和标签页 / 账号
     const up = await dctx.newPage();
@@ -1021,7 +1033,7 @@ if (want('v6')) for (const w of [412, 320]) {
       for (const x of e.querySelectorAll('*')) { const cs = getComputedStyle(x); if (cs.textOverflow === 'ellipsis' && x.scrollWidth > x.clientWidth + 1 && /[0-9a-f]{1,4}:[0-9a-f]{1,4}:/.test(x.innerText)) out.cut.push(x.innerText.slice(0, 50)); }
       for (const x of [e, ...e.querySelectorAll('*')]) { const r = x.getBoundingClientRect(); if (r.width && (r.right > W + 1 || r.left < -1)) { out.wide.push(`${x.className || x.tagName} ${Math.round(r.right)}`); break; } } }
     return out; }, [sel, V6A, V6B]);
-  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(700);
+  await pg.goto(base + 'app.html#exits/out'); await pg.waitForTimeout(700); // 这些都在出口地址库（夹具没写 pool = 出口库，decisions N-13）
   let r = await rows('button.row');
   const txt = await pg.evaluate(() => document.querySelector('#root').innerText);
   // 单个的 IPv6 是“独立 IP”那一组里的（decisions N-8）：地址库里是一行“独立 IP”，点进去那个地址写全
@@ -1029,7 +1041,7 @@ if (want('v6')) for (const w of [412, 320]) {
   const r2 = await rows('button.row');
   check(`地址库（${w} 宽）：展开的域名写明有几个 IPv6，解析失败的写出原因；单个的 IPv6 归在“独立 IP”里，点进去写全`, /展开 3 个地址（IPv6 2 个）/.test(txt) && /解析失败：这个域名不存在/.test(txt) && /独立 IP/.test(txt) && !r.has.includes('A') && r.cut.length === 0 && r.wide.length === 0
     && r2.has.includes('A') && r2.cut.length === 0 && r2.wide.length === 0, { r, r2, txt: txt.slice(0, 400) });
-  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(500);
+  await pg.goto(base + 'app.html#exits/out'); await pg.waitForTimeout(500);
   // UI-22：地址库的行和面板列表一样带探测结果（类型、住宅 / 机房、纯净度、地区 · 运营商、延迟），延迟可以点着单测
   { const lib = await pg.evaluate(() => [...document.querySelectorAll('.librow')].map((e) => ({ t: e.innerText, ld: !!e.querySelector('button.ld'), flag: !!e.querySelector('.lic .flag') })));
     const ok = lib.find((x) => /反代/.test(x.t) && /住宅/.test(x.t) && /Tokyo/.test(x.t) && /\d+ ms/.test(x.t));
@@ -1085,12 +1097,22 @@ if (want('tune')) {
   await c.close();
 }
 // 全局入口、入口 / 出口隔开（决策 N-11）：节点页的入口是全部实例共用的那一个（悬停说明、在用的实例数），两种宽度都不溢出；
-// 入口列表点一行 = 全局钉死（PUT /api/entry），“+” 加的是优选 IP（进入口池）；地址库每条标着当入口还是当出口，可以整条改。
+// 入口列表点一行 = 全局钉死（PUT /api/entry），“+” 加的是优选 IP（进入口池）；订阅与地址库分成入口地址库 / 出口地址库两页（decisions N-13），各自导入、各自的子页。
 if (want('entry')) for (const w of [412, 320]) {
   const g = JSON.parse(JSON.stringify(fixture));
-  g.exits = [{ id: 'B1', updatedAt: 1, type: 'proxyip', value: 'https://list.example.com/bestcf.txt', label: 'bestcf', source: 'list', expand: true, refreshHours: 3, resolved: ['104.16.1.1', '104.16.1.2'], resolvedAt: 1, goodAt: 1 },
-    { id: 'P1', updatedAt: 1, type: 'proxyip', value: 'https://list.example.com/proxyip.txt', label: 'proxyip', source: 'list', expand: true, refreshHours: 3, resolved: ['203.0.113.80:443'], resolvedAt: 1, goodAt: 1 }];
-  g.exitRoles = { B1: 'entry', P1: 'exit' };
+  // 两个库（decisions N-13，夹具手改）：B1 优选列表、E1 单个优选 IP 在入口地址库（pool: entry）；P1 反代列表、X1 单个 ProxyIP 在出口地址库（pool: exit）。
+  // 入口库里的地址测速结果在订阅的 nodes 里（x:地址:端口，和核心服务的 entryPoolLocked 一样）：104.16.1.1 通（SJC 机房、下载 48M、本时段分数 91.5），104.16.1.2 不通；
+  // 另加一个节点页“+”加的自定义入口地址（from: custom）。
+  g.exits = [{ id: 'B1', updatedAt: 1, type: 'proxyip', value: 'https://list.example.com/bestcf.txt', label: 'bestcf', source: 'list', expand: true, refreshHours: 3, resolved: ['104.16.1.1', '104.16.1.2'], resolvedAt: 1, goodAt: 1, pool: 'entry' },
+    { id: 'E1', updatedAt: 1, type: 'proxyip', value: '104.17.3.3:443', label: '手挑的', expand: false, refreshHours: 3, resolved: [], pool: 'entry' },
+    { id: 'P1', updatedAt: 1, type: 'proxyip', value: 'https://list.example.com/proxyip.txt', label: 'proxyip', source: 'list', expand: true, refreshHours: 3, resolved: ['203.0.113.80:443'], resolvedAt: 1, goodAt: 1, pool: 'exit' },
+    { id: 'X1', updatedAt: 1, type: 'proxyip', value: '198.51.100.44:443', expand: false, refreshHours: 3, resolved: [], pool: 'exit' }];
+  { const s0 = g.subscriptions[0], n0 = s0.nodes[0];
+    s0.nodes.push({ ...n0, id: 'x:104.16.1.1:443', server: '104.16.1.1', port: 443, label: '', from: 'pip', kind: 'cf', colo: 'SJC', delay: 66, speed: 48, subId: undefined },
+      { ...n0, id: 'x:104.16.1.2:443', server: '104.16.1.2', port: 443, label: '', from: 'pip', kind: 'cf', colo: '', delay: -1, err: '超时', subId: undefined },
+      { ...n0, id: 'x:104.17.3.3:443', server: '104.17.3.3', port: 443, label: '', from: 'pip', kind: 'cf', colo: 'HKG', delay: 71, subId: undefined },
+      { ...n0, id: 'c1', server: '104.19.8.8', port: 2053, label: '自己加的', from: 'custom', kind: 'cf', colo: 'NRT', delay: 93, subId: undefined });
+    s0.tune.scores['x:104.16.1.1:443'] = 91.5; s0.tune.known['x:104.16.1.1:443'] = '本时段'; }
   const c = await br.newContext({ viewport: { width: w, height: 860 }, deviceScaleFactor: 2, userAgent: UA, locale: 'zh-CN' }); await c.addInitScript(mock, g);
   const pg = await c.newPage(); watch(pg, 'entry-' + w);
   const wide = () => pg.evaluate(() => { const W = innerWidth; return [...document.querySelectorAll('#root *')].filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.right > W + 1 || r.left < -1); }).map((e) => e.className || e.tagName).slice(0, 3); });
@@ -1121,18 +1143,73 @@ if (want('entry')) for (const w of [412, 320]) {
   await pg.locator('.dlg textarea').fill('104.16.2.2\n104.16.2.3:2053'); await pg.locator('.dlg .btn.fill, .dlg button.pri, .dlg .acts button:last-child').last().click(); await pg.waitForTimeout(500);
   cs = await calls();
   check(`入口列表（${w} 宽）：“+”是添加优选 IP，一行一个进入口池（POST /api/addresses），不进地址库`, /优选 IP/.test(dlg) && cs.filter((x) => x.m === 'POST' && x.p === '/api/addresses').length === 2 && !cs.some((x) => x.p === '/api/exits'), { dlg, cs });
-  // 地址库：每条标着当入口还是当出口，菜单里可以整条改
+  // 订阅与地址库（decisions N-13）：首页两行（入口地址库 / 出口地址库），各进一页；没有角色标签、没有“当入口还是当出口”
   await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(700);
-  const tags = await pg.evaluate(() => [...document.querySelectorAll('.librow')].map((r) => ({ t: r.querySelector('.t')?.innerText || '', role: r.querySelector('.tag.role')?.innerText.trim() || '', tip: r.querySelector('.tag.role')?.title || '' })));
-  const bt = tags.find((x) => /bestcf/.test(x.t)), pt = tags.find((x) => /proxyip/.test(x.t));
-  check(`地址库（${w} 宽）：优选列表标“入口”，反代列表标“出口”，悬停说明`, bt?.role === '入口' && pt?.role === '出口' && /全部实例共用/.test(bt.tip) && /不会被当成入口/.test(pt.tip), tags);
-  check(`地址库（${w} 宽）：不横向溢出`, (await wide()).length === 0, await wide());
-  await pg.screenshot({ path: path.join(out, `entry-lib-${w}.png`), fullPage: true });
-  await pg.locator('.librow', { hasText: 'proxyip' }).first().click(); await pg.waitForTimeout(300);
-  await pg.locator('.scrim .opt, .ddm .opt', { hasText: '当入口还是当出口' }).first().click(); await pg.waitForTimeout(300);
-  await pg.locator('.scrim .opt, .ddm .opt', { hasText: '当入口（优选 IP）' }).first().click(); await pg.waitForTimeout(400);
+  const home = await pg.evaluate(() => ({ pools: [...document.querySelectorAll('.row.poolrow')].map((e) => ({ t: e.innerText.replace(/\s+/g, ' '), tip: e.title })), lib: document.querySelectorAll('.librow').length, role: document.querySelectorAll('.tag.role').length }));
+  check(`订阅与地址库（${w} 宽）：订阅下面只有“入口地址库”“出口地址库”两行（说明在悬停提示里），地址不摊在首页`, home.pools.length === 2 && /^入口地址库/.test(home.pools[0].t) && /^出口地址库/.test(home.pools[1].t) && /全部实例共用/.test(home.pools[0].tip) && /不随入口变/.test(home.pools[1].tip) && home.lib === 0 && home.role === 0 && (await wide()).length === 0, { home, wide: await wide() });
+  await pg.locator('.row.poolrow', { hasText: '入口地址库' }).click(); await pg.waitForTimeout(500);
+  const inn = await pg.evaluate(() => ({ hash: location.hash.slice(1), h1: document.querySelector('.appbar h1')?.innerText.replace(/\s+/g, ' ') || '', secs: [...document.querySelectorAll('.sec')].map((e) => e.innerText.replace(/\s+/g, ' ')),
+    rows: [...document.querySelectorAll('.librow')].map((e) => ({ t: e.innerText.replace(/\s+/g, ' '), tips: [...e.querySelectorAll('[title]')].map((x) => x.title).join(' | '), flag: !!e.querySelector('.lic .flag') })), role: document.querySelectorAll('.tag.role').length }));
+  const B = inn.rows.find((x) => /bestcf/.test(x.t)), SGi = inn.rows.find((x) => /来自订阅/.test(x.t)), LI = inn.rows.find((x) => /^独立 IP/.test(x.t)), CU = inn.rows.find((x) => /104\.19\.8\.8/.test(x.t));
+  check(`入口地址库（${w} 宽）：订阅带来的地址、优选列表、独立 IP、自定义入口地址都在这里；反代列表和单个 ProxyIP 不在`, inn.hash === 'exits/in' && /入口地址库/.test(inn.h1) && !!B && !!SGi && !!LI && !!CU && !inn.rows.some((x) => /proxyip|198\.51\.100\.44/.test(x.t)) && inn.role === 0 && inn.secs.some((t) => /来自订阅/.test(t)), inn);
+  check(`入口地址库（${w} 宽）：优选列表这一行写机房（SJC）、组里最高的本时段分数（92）、最低延迟、最快下载；不写国家（不放国旗）`, /SJC 1/.test(B?.t) && /\b92\b/.test(B?.t) && /66 ms/.test(B?.t) && /48\.0M/.test(B?.t) && /本时段优选分数 91\.5/.test(B?.tips) && !B?.flag, B);
+  check(`入口地址库（${w} 宽）：自定义入口地址一行（机房 NRT、延迟），标“自定义”`, /自定义/.test(CU?.t) && /NRT/.test(CU?.t) && /93 ms/.test(CU?.t) && /104\.19\.8\.8:2053/.test(CU?.t), CU);
+  check(`入口地址库（${w} 宽）：不横向溢出`, (await wide()).length === 0, await wide());
+  await pg.screenshot({ path: path.join(out, `pools-in-${w}.png`), fullPage: true });
+  // 列表展开：每个地址一行，机房、分数、延迟；不通的写原因；点开菜单能“全部实例用这个入口”（PUT /api/entry），没有改角色
+  await pg.locator('.librow', { hasText: 'bestcf' }).click(); await pg.waitForTimeout(350);
+  let opts = await pg.evaluate(() => [...document.querySelectorAll('.ddm .opt, .scrim .opt')].map((e) => e.innerText.trim()));
+  check(`入口地址库（${w} 宽）：列表菜单里没有“当入口还是当出口”`, opts.includes('立即更新') && !opts.some((t) => /当入口|当出口/.test(t)), opts);
+  await pg.locator('.ddm .opt, .scrim .opt', { hasText: '查看 2 个地址' }).first().click(); await pg.waitForTimeout(500);
+  let r = await pg.evaluate(() => ({ hash: location.hash.slice(1), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')) }));
+  check(`入口列表展开（${w} 宽）：104.16.1.1 写 SJC、本时段分数 92、66 ms、48.0M；104.16.1.2 写超时；不溢出`, r.hash === 'exits/g-B1' && r.rows.length === 2 && /104\.16\.1\.1/.test(r.rows[0]) && /SJC/.test(r.rows[0]) && /\b92\b/.test(r.rows[0]) && /66 ms/.test(r.rows[0]) && /48\.0M/.test(r.rows[0]) && /超时/.test(r.rows[1]) && (await wide()).length === 0, { r, wide: await wide() });
+  await calls();
+  await pg.locator('.librow', { hasText: '104.16.1.1' }).click(); await pg.waitForTimeout(300);
+  await pg.locator('.scrim .opt, .ddm .opt', { hasText: '全部实例用这个入口' }).first().click(); await pg.waitForTimeout(400);
+  cs = await calls(); put = cs.find((x) => x.m === 'PUT' && x.p === '/api/entry');
+  check(`入口列表展开（${w} 宽）：“全部实例用这个入口”= PUT /api/entry 钉死 104.16.1.1:443`, put?.b?.pin === '104.16.1.1:443', cs);
+  await pg.locator('.appbar button[aria-label="返回"]').click(); await pg.waitForTimeout(400);
+  const backIn = await pg.evaluate(() => location.hash.slice(1));
+  await pg.locator('.librow', { hasText: '独立 IP' }).click(); await pg.waitForTimeout(400);
+  r = await pg.evaluate(() => ({ hash: location.hash.slice(1), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')) }));
+  await calls();
+  await pg.locator('.appbar button[aria-label="批量编辑"]').click(); await pg.waitForTimeout(400);
+  const lt = await pg.locator('.dlg textarea').inputValue();
+  await pg.locator('.dlg textarea').fill('104.17.3.3:443 #手挑的\n104.17.4.4'); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(400);
   cs = await calls();
-  check(`地址库（${w} 宽）：菜单“当入口还是当出口”改成当入口：PATCH role=entry`, cs.some((x) => x.m === 'PATCH' && x.p === '/api/exits/P1' && x.b?.role === 'entry'), cs);
+  await pg.locator('.appbar button[aria-label="返回"]').click(); await pg.waitForTimeout(400);
+  const backIn2 = await pg.evaluate(() => location.hash.slice(1));
+  check(`入口地址库（${w} 宽）：入口库自己的独立 IP 是 exits/loose-in（只有入口那一个，写 HKG），整组编辑带 pool: entry；子页“返回”都回入口地址库`,
+    backIn === 'exits/in' && r.hash === 'exits/loose-in' && r.rows.length === 1 && /104\.17\.3\.3/.test(r.rows[0]) && /HKG/.test(r.rows[0]) && lt === '104.17.3.3:443 #手挑的'
+    && cs.some((x) => x.m === 'PUT' && x.p === '/api/exits/loose' && x.b?.pool === 'entry' && x.b?.text === '104.17.3.3:443 #手挑的\n104.17.4.4') && backIn2 === 'exits/in', { backIn, r, lt, cs, backIn2 });
+  // 在入口地址库里导入 = pool: entry
+  await calls();
+  await pg.locator('.appbar button[aria-label="导入入口地址"]').click(); await pg.waitForTimeout(400);
+  const idlg = await pg.evaluate(() => ({ h: document.querySelector('.dlg h3')?.textContent || '', note: document.querySelector('.dlg')?.innerText || '' }));
+  await pg.locator('.dlg textarea').fill('104.16.7.7\ncf.example.com'); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(400);
+  cs = await calls();
+  check(`入口地址库（${w} 宽）：右上角“导入入口地址”，交给核心服务时带 pool: entry`, /导入入口地址/.test(idlg.h) && /出口地址库里的地址不收/.test(idlg.note) && cs.some((x) => x.m === 'POST' && x.p === '/api/exits' && x.b?.pool === 'entry' && x.b?.text === '104.16.7.7\ncf.example.com'), { idlg, cs });
+  await pg.locator('.appbar button[aria-label="返回"]').click(); await pg.waitForTimeout(400);
+  const backHome = await pg.evaluate(() => location.hash.slice(1));
+  check(`入口地址库（${w} 宽）：“返回”回订阅与地址库`, backHome === 'exits', backHome);
+  // 出口地址库：反代列表、单个 ProxyIP；导入带 pool: exit
+  await pg.locator('.row.poolrow', { hasText: '出口地址库' }).click(); await pg.waitForTimeout(500);
+  const outp = await pg.evaluate(() => ({ hash: location.hash.slice(1), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')), role: document.querySelectorAll('.tag.role').length }));
+  check(`出口地址库（${w} 宽）：反代列表、独立 IP 在这里；优选列表、订阅地址、自定义入口不在；不溢出`, outp.hash === 'exits/out' && outp.rows.some((t) => /proxyip/.test(t)) && outp.rows.some((t) => /^独立 IP/.test(t)) && !outp.rows.some((t) => /bestcf|来自订阅|104\.19\.8\.8/.test(t)) && outp.role === 0 && (await wide()).length === 0, { outp, wide: await wide() });
+  await pg.screenshot({ path: path.join(out, `pools-out-${w}.png`), fullPage: true });
+  await pg.locator('.librow', { hasText: '独立 IP' }).click(); await pg.waitForTimeout(400);
+  r = await pg.evaluate(() => ({ hash: location.hash.slice(1), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')) }));
+  await pg.locator('.librow', { hasText: '198.51.100.44' }).click(); await pg.waitForTimeout(300);
+  opts = await pg.evaluate(() => [...document.querySelectorAll('.ddm .opt, .scrim .opt')].map((e) => e.innerText.trim()));
+  await pg.keyboard.press('Escape'); await pg.waitForTimeout(200);
+  await pg.locator('.appbar button[aria-label="返回"]').click(); await pg.waitForTimeout(400);
+  const backOut = await pg.evaluate(() => location.hash.slice(1));
+  check(`出口地址库（${w} 宽）：出口库的独立 IP 是 exits/loose（只有 ProxyIP 那一个），菜单只有改备注、删除；“返回”回出口地址库`, r.hash === 'exits/loose' && r.rows.length === 1 && /198\.51\.100\.44/.test(r.rows[0]) && opts.join() === '修改备注,删除' && backOut === 'exits/out', { r, opts, backOut });
+  await calls();
+  await pg.locator('button.row', { hasText: '导入出口地址' }).click(); await pg.waitForTimeout(400);
+  await pg.locator('.dlg textarea').fill('203.0.113.90:443'); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(400);
+  cs = await calls();
+  check(`出口地址库（${w} 宽）：“导入出口地址”交给核心服务时带 pool: exit`, cs.some((x) => x.m === 'POST' && x.p === '/api/exits' && x.b?.pool === 'exit' && x.b?.text === '203.0.113.90:443'), cs);
   await c.close();
 }
 // 在线更新（决策 N-3）：“组件与更新”页按 st.update 的各个阶段画；新标签页和设置首页有提示
@@ -1468,7 +1545,7 @@ if (want('sstp')) {
   const c = await mkctx(vg), pg = await c.newPage(); watch(pg, 'sstp');
   const calls = () => pg.evaluate(() => window.__calls.splice(0).filter((x) => x.m && x.m !== 'GET').map((x) => `${x.m} ${x.p}${x.b ? ' ' + JSON.stringify(x.b) : ''}`));
   const wide = () => pg.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
-  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(700);
+  await pg.goto(base + 'app.html#exits/out'); await pg.waitForTimeout(700); // VPN Gate、SOCKS5 都是全局出口：在出口地址库
   let r = await pg.evaluate(() => { const e = [...document.querySelectorAll('.librow')].find((x) => /VPN Gate/.test(x.innerText)); return e ? { t: e.innerText.replace(/\s+/g, ' '), flags: e.querySelectorAll('.flags .flag').length, ld: e.querySelector('button.ld')?.innerText } : null; });
   check('地址库：VPN Gate 一行代表整个源（几面国旗、SSTP 源、住宅数、各国台数、几台通、最佳延迟、最快下载）', !!r && r.flags === 3 && /SSTP 源/.test(r.t) && /住宅 4/.test(r.t) && /日本 2/.test(r.t) && /韩国 2/.test(r.t) && /5 台 · 4 台通/.test(r.t) && /每 3 小时刷新列表/.test(r.t) && r.ld === '162 ms' && /31\.0M/.test(r.t) && !(await wide()), r);
   r = await pg.evaluate(() => [...document.querySelectorAll('.librow')].map((x) => x.innerText.replace(/\s+/g, ' ')).find((t) => /198\.51\.100\.23/.test(t)) || '');
@@ -1570,24 +1647,26 @@ if (want('groups')) for (const w of [412, 320]) {
   const lib = () => pg.evaluate(() => [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')));
   const toastT = () => pg.evaluate(() => document.getElementById('toast')?.textContent || '');
   const opt = (t) => pg.locator('.ddm .opt, .scrim .opt', { hasText: t }).first();
-  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(700);
+  // 夹具里的这些都没写 pool：按出口地址库算（decisions N-13）。订阅带来的地址在入口地址库
+  await pg.goto(base + 'app.html#exits/out'); await pg.waitForTimeout(700);
   let rows = await lib();
-  const secT = await pg.evaluate(() => [...document.querySelectorAll('.sec')].map((e) => e.innerText.replace(/\s+/g, ' ')).find((t) => /地址库/.test(t)) || '');
+  const secT = await pg.evaluate(() => [...document.querySelectorAll('.sec')].map((e) => e.innerText.replace(/\s+/g, ' ')).find((t) => /全局出口/.test(t)) || '');
   const L1 = rows.find((t) => /best\.txt/.test(t)) || '', L2 = rows.find((t) => /result\.csv/.test(t)) || '', LO = rows.find((t) => /^独立 IP/.test(t)) || '', D1 = rows.find((t) => /pip\.example\.com/.test(t)) || '';
-  check(`地址库（${w} 宽）：一个列表网址是一行，写有多少个、几个通、上一次什么时候更新、多久更新一次`, rows.length === 6 && /列表/.test(L1) && /5 个地址 · 4 个通 · 2 小时前更新 · 每 3 小时更新/.test(L1) && /60 ms/.test(L1) && /22\.0M/.test(L1), { rows, L1 });
+  check(`出口地址库（${w} 宽）：一个列表网址是一行，写有多少个、几个通、上一次什么时候更新、多久更新一次`, rows.length === 5 && /列表/.test(L1) && /5 个地址 · 4 个通 · 2 小时前更新 · 每 3 小时更新/.test(L1) && /60 ms/.test(L1) && /22\.0M/.test(L1), { rows, L1 });
   check(`地址库（${w} 宽）：更新失败的列表写出原因、还在用上一次的几个、上一次成功是什么时候；没起名字的显示网址`, /raw\.example\.org\/someone/.test(L2) && /1 个地址/.test(L2) && /3 天前更新/.test(L2) && /不自动更新/.test(L2) && /更新失败：拉取列表失败（直连：HTTP 404）（还在用上一次的 1 个）/.test(L2), L2);
   check(`地址库（${w} 宽）：单个 IP 都收在“独立 IP”一行里（列表和独立 IP 里的地址不再一条条摊在地址库里），域名也写上一次更新的时间`,
-    /3 个地址 · 1 个通/.test(LO) && /88 ms/.test(LO) && !rows.some((t) => /104\.16\.9\.9|203\.0\.113\.5\d|198\.51\.100\.9:/.test(t)) && /展开 2 个地址 · 1 个通 · 30 分钟前更新 · 每 3 小时解析/.test(D1) && /6 组 · 16 个地址/.test(secT) && rows.some((t) => /198\.51\.100\.23/.test(t) && /SOCKS5/.test(t)), { rows, secT });
+    /3 个地址 · 1 个通/.test(LO) && /88 ms/.test(LO) && !rows.some((t) => /104\.16\.9\.9|203\.0\.113\.5\d|198\.51\.100\.9:/.test(t)) && /展开 2 个地址 · 1 个通 · 30 分钟前更新 · 每 3 小时解析/.test(D1) && /5 组 · 12 个地址/.test(secT) && !rows.some((t) => /来自订阅/.test(t)) && rows.some((t) => /198\.51\.100\.23/.test(t) && /SOCKS5/.test(t)), { rows, secT });
   check(`地址库（${w} 宽）：不横向溢出`, !(await wide()), await wide());
   await pg.screenshot({ path: path.join(out, `groups-lib-${w}.png`), fullPage: true });
-  // 订阅带来的地址（decisions N-10）：一个订阅一组，点开每个地址一行
-  const SG = rows.find((t) => /来自订阅/.test(t)) || '';
-  check(`地址库（${w} 宽）：订阅带来的地址一个订阅一组，标“来自订阅”，写有几个、几个通、几个已不在订阅里`, /机场/.test(SG) && /4 个地址 · 4 个通 · 1 个已不在订阅里/.test(SG), SG);
+  // 订阅带来的地址（decisions N-10）：一个订阅一组，在入口地址库里（N-13），点开每个地址一行
+  await pg.goto(base + 'app.html#exits/in'); await pg.waitForTimeout(600);
+  const SG = (await lib()).find((t) => /来自订阅/.test(t)) || '';
+  check(`入口地址库（${w} 宽）：订阅带来的地址一个订阅一组，标“来自订阅”，写有几个、几个通、几个已不在订阅里`, /机场/.test(SG) && /4 个地址 · 4 个通 · 1 个已不在订阅里/.test(SG), SG);
   await pg.locator('.librow', { hasText: '来自订阅' }).click(); await pg.waitForTimeout(500);
   const sp = await pg.evaluate(() => ({ hash: location.hash.slice(1), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')), foot: [...document.querySelectorAll('.foot')].map((e) => e.innerText).join(' ') }));
   check(`订阅地址子页（${w} 宽）：每个地址一行，已不在订阅里的有标记，底下说明随订阅自动同步`, sp.hash === 'exits/s-' + SID && sp.rows.length === 4 && sp.rows.filter((t) => /已不在订阅里/.test(t)).length === 1 && /自动同步/.test(sp.foot) && !(await wide()), sp);
   await pg.screenshot({ path: path.join(out, `groups-subaddr-${w}.png`), fullPage: true });
-  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(600);
+  await pg.goto(base + 'app.html#exits/out'); await pg.waitForTimeout(600);
   // 列表这一行的菜单：整组的操作都在这里
   await pg.locator('.librow', { hasText: 'best.txt' }).click(); await pg.waitForTimeout(350);
   let opts = await pg.evaluate(() => [...document.querySelectorAll('.ddm .opt, .scrim .opt')].map((e) => e.innerText.trim()));
@@ -1625,7 +1704,7 @@ if (want('groups')) for (const w of [412, 320]) {
   check(`列表展开（${w} 宽）：点网址那一行就是修改网址`, r === URL1, r);
   await pg.locator('.dlg .btn', { hasText: '取消' }).click(); await pg.waitForTimeout(300);
   // 独立 IP 这一组
-  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(500);
+  await pg.goto(base + 'app.html#exits/out'); await pg.waitForTimeout(500);
   await pg.locator('.librow', { hasText: '独立 IP' }).click(); await pg.waitForTimeout(500);
   r = await pg.evaluate(() => ({ hash: location.hash.slice(1), h1: document.querySelector('.appbar h1')?.innerText.replace(/\s+/g, ' '), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')), cut: [...document.querySelectorAll('.librow .ip6')].filter((x) => x.scrollWidth > x.clientWidth + 1).length }));
   check(`独立 IP（${w} 宽）：点开是这一组的每一个 IP（带备注和探测结果，IPv6 写全）`, r.hash === 'exits/loose' && /独立 IP 1 \/ 3/.test(r.h1) && r.rows.length === 3 && /104\.16\.9\.9:443/.test(r.rows[0]) && /手写的/.test(r.rows[0]) && /88 ms/.test(r.rows[0]) && r.rows[1].includes(V6) && /超时/.test(r.rows[2]) && r.cut === 0 && !(await wide()), { r, wide: await wide() });
@@ -1636,24 +1715,24 @@ if (want('groups')) for (const w of [412, 320]) {
   await pg.screenshot({ path: path.join(out, `groups-edit-${w}.png`) });
   await pg.locator('.dlg textarea').fill(`104.16.9.9:443 #手写的\n${V6}\n1.0.0.1`); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(500);
   cs = await calls(); tt = await toastT();
-  check(`独立 IP（${w} 宽）：“批量编辑”把整组列成一段文字（一行一个，带备注），保存时整段交给核心服务`, text0 === `104.16.9.9:443 #手写的\n${V6}\n198.51.100.9:2053` && cs.length === 1 && cs[0] === `PUT /api/exits/loose ${JSON.stringify({ text: `104.16.9.9:443 #手写的\n${V6}\n1.0.0.1` })}` && /加了 1 个，删了 1 个/.test(tt), { text0, cs, tt });
+  check(`独立 IP（${w} 宽）：“批量编辑”把整组列成一段文字（一行一个，带备注），保存时整段交给核心服务`, text0 === `104.16.9.9:443 #手写的\n${V6}\n198.51.100.9:2053` && cs.length === 1 && cs[0] === `PUT /api/exits/loose ${JSON.stringify({ text: `104.16.9.9:443 #手写的\n${V6}\n1.0.0.1`, pool: 'exit' })}` && /加了 1 个，删了 1 个/.test(tt), { text0, cs, tt });
   await pg.locator('.appbar button[aria-label="更多"]').click(); await pg.waitForTimeout(350);
   opts = await pg.evaluate(() => [...document.querySelectorAll('.ddm .opt, .scrim .opt')].map((e) => e.innerText.trim()));
   await opt('删掉不通的 1 个').click(); await pg.waitForTimeout(350);
   await pg.locator('.dlg .btn.danger').click(); await pg.waitForTimeout(500);
   cs = await calls();
-  check(`独立 IP（${w} 宽）：“删掉不通的”只去掉探测不通的那个（没测过的留着）`, opts.includes('批量编辑') && cs.length === 1 && cs[0] === `PUT /api/exits/loose ${JSON.stringify({ text: `104.16.9.9:443 #手写的\n${V6}` })}`, { opts, cs });
+  check(`独立 IP（${w} 宽）：“删掉不通的”只去掉探测不通的那个（没测过的留着）`, opts.includes('批量编辑') && cs.length === 1 && cs[0] === `PUT /api/exits/loose ${JSON.stringify({ text: `104.16.9.9:443 #手写的\n${V6}`, pool: 'exit' })}`, { opts, cs });
   await pg.locator('.librow', { hasText: '104.16.9.9' }).click(); await pg.waitForTimeout(350);
   opts = await pg.evaluate(() => [...document.querySelectorAll('.ddm .opt, .scrim .opt')].map((e) => e.innerText.trim()));
-  check(`独立 IP（${w} 宽）：单个 IP 的菜单只有改备注、当入口还是当出口、删除（没有域名才有的“展开”“解析”）`, opts.join() === '修改备注,当入口还是当出口,删除', opts);
+  check(`独立 IP（${w} 宽）：单个 IP 的菜单只有改备注、删除（没有改角色了，也没有域名才有的“展开”“解析”）`, opts.join() === '修改备注,删除', opts);
   await pg.keyboard.press('Escape'); await pg.waitForTimeout(200);
-  // 导入：说清楚加了几个列表、多少个地址，原来零散的并进去了几个
-  await pg.goto(base + 'app.html#exits'); await pg.waitForTimeout(500);
+  // 导入：说清楚加了几个列表、多少个地址，原来零散的并进去了几个；在出口地址库里导入 = pool: exit
+  await pg.goto(base + 'app.html#exits/out'); await pg.waitForTimeout(500);
   await calls();
-  await pg.locator('button.row', { hasText: '导入地址' }).click(); await pg.waitForTimeout(400);
+  await pg.locator('button.row', { hasText: '导入出口地址' }).click(); await pg.waitForTimeout(400);
   await pg.locator('.dlg textarea').fill('https://example.com/ip.txt\n1.2.3.4\n5.6.7.8'); await pg.locator('.dlg .btn.fill').click(); await pg.waitForTimeout(500);
   cs = await calls(); tt = await toastT();
-  check(`导入（${w} 宽）：说清楚加了几个列表、里面多少个地址、另外几条、原来零散的并进去几个`, cs.includes(`POST /api/exits ${JSON.stringify({ text: 'https://example.com/ip.txt\n1.2.3.4\n5.6.7.8' })}`) && /新增 1 个列表（128 个地址）、2 条地址；原来零散的 40 个 IP 并进了列表/.test(tt), { cs, tt });
+  check(`导入（${w} 宽）：说清楚加了几个列表、里面多少个地址、另外几条、原来零散的并进去几个`, cs.includes(`POST /api/exits ${JSON.stringify({ text: 'https://example.com/ip.txt\n1.2.3.4\n5.6.7.8', pool: 'exit' })}`) && /新增 1 个列表（128 个地址）、2 条地址；原来零散的 40 个 IP 并进了列表/.test(tt), { cs, tt });
   // 域名也能点开看解析出的每一个地址
   await pg.goto(base + 'app.html#exits/g-d1'); await pg.waitForTimeout(500);
   r = await pg.evaluate(() => ({ h1: document.querySelector('.appbar h1')?.innerText.replace(/\s+/g, ' '), rows: [...document.querySelectorAll('.librow')].map((e) => e.innerText.replace(/\s+/g, ' ')), foot: document.querySelector('.foot')?.innerText || '', src: !!document.querySelector('.srcrow') }));

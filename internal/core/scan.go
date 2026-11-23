@@ -67,16 +67,10 @@ func (p pipRef) key() string {
 func entryName(key string) string { return hname("a-", key) }
 func pipName(key string) string   { return hname("p-", key) }
 
-// entryRole：地址库里这一项当入口（true）还是当出口（false）。见 model.ExitEntry.UsableAsEntry。
+// entryRole：地址库里这一项当入口（true）还是当出口（false）——只看它在哪个库（decisions N-13），不再按网段判断。
+// 入口库里只有 proxyip 类的地址算入口（入口库的列表里万一夹着 socks5:// 之类，既不当入口也不当出口）。
 func entryRole(e *model.ExitEntry, typ, val string) bool {
-	if typ != "proxyip" || val == "" {
-		return false // 全局出口永远是出口
-	}
-	if e.UsableAsEntry != nil {
-		return *e.UsableAsEntry
-	}
-	h, _ := exits.SplitHostPort(val)
-	return inCF(h)
+	return typ == "proxyip" && val != "" && inEntryLib(e)
 }
 
 // exitItems 列出地址库一条里的每一项（类型、取值、id、备注）。源本身（VPN Gate、列表网址）不是地址。
@@ -135,15 +129,22 @@ func (a *App) entryPoolLocked() []nodeRef {
 	return out
 }
 
-// exitPoolLocked 是全局的出口库：地址库里当出口用的 ProxyIP 和全部全局出口（SOCKS5 / SSTP 等）。入口地址不再“顺带”当反代（N-11）。
+// exitPoolLocked 是全局的出口库：出口地址库里的 ProxyIP 和全部全局出口（SOCKS5 / SSTP 等）。入口地址库的东西一个都不进（N-13）。
+// 两库隔离：一个地址已经在入口池里（订阅节点地址、入口库），就不当出口（两个列表网址刚好拉到同一个地址时入口优先）。
 // Cloudflare 官方 IP 当不了 ProxyIP，不列。
 func (a *App) exitPoolLocked() []pipRef {
 	var out []pipRef
 	seen := map[string]bool{}
+	for _, n := range a.entryPoolLocked() {
+		seen[pipRef{Type: "proxyip", Value: n.key()}.key()] = true
+	}
 	for _, e := range a.Exits {
+		if inEntryLib(e) {
+			continue
+		}
 		for _, p := range exitItems(e) {
 			k := p.key()
-			if p.Value == "" || seen[k] || entryRole(e, p.Type, p.Value) {
+			if p.Value == "" || seen[k] {
 				continue
 			}
 			p.Name = pipName(k)
@@ -943,18 +944,12 @@ func (a *App) pickExitLocked(in *model.Instance, sub *model.Subscription, exclud
 		if newPip, ok = pickExit(ps, region, curPip, exclude); !ok {
 			newPip = curPip
 		}
-	} else if _, found := findCand(ps, curPip); curPip == "" || !found || exclude[pipKey(curPip)] {
-		// 没限国家：当前的照用（后台扫描没测通不算，SI-1）；没有（或已不在出口库、这次真连试过不通）就配一个和全局入口同国的
-		entry := cand{}
-		if cur, has := a.entryCurLocked(); has {
-			if c, f := findCand(a.globalCandsLocked([]nodeRef{cur}), cur.key()); f {
-				entry = c
-			}
+	} else if _, found := findCand(ps, curPip); curPip != "" && (!found || exclude[pipKey(curPip)]) {
+		// 没限国家：当前的照用（含“不指定”；后台扫描没测通不算，SI-1），不跟着入口换（N-13：入口和出口不联动）。
+		// 当前的已不在出口库、或这次真连试过不通：在出口库里挑一个能用的（自己加的、没被占用的、延迟低的优先），和入口无关；一个都没有就不指定。
+		if newPip, ok = pickExit(ps, "", "", exclude); !ok {
+			newPip, ok = "", true
 		}
-		if exclude[pipKey(curPip)] {
-			curPip = ""
-		}
-		newPip = pickPip(ps, entry, curPip)
 	}
 	if (region != "" || exitType != "") && !ok {
 		r.Notice = "noexit:" + strings.ToUpper(region) // 界面上显示成"<国家>无可用出口"（只限了类型时国家是空的）

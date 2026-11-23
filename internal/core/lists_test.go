@@ -52,7 +52,7 @@ func TestImportListURLMakesOneGroup(t *testing.T) {
 	in := a.testInst(t)
 	in.Proxy.ExitID = "old2"
 
-	res, err := a.ImportExits(u + "\n8.8.4.4:8443\n7.7.7.7\n")
+	res, err := a.ImportExits(u+"\n8.8.4.4:8443\n7.7.7.7\n", "exit")
 	if err != nil || res.Added != 2 || res.Lists != 1 || res.ListAddrs != 4 || res.Absorbed != 2 {
 		t.Fatalf("导入结果不对：%+v %v", res, err)
 	}
@@ -89,7 +89,7 @@ func TestImportListURLMakesOneGroup(t *testing.T) {
 
 	// 同一个网址再导入一次：不重复加，当成立即更新
 	set(200, "1.2.3.4:443#HK\n5.5.5.5\n")
-	res, err = a.ImportExits(u)
+	res, err = a.ImportExits(u, "exit")
 	if err != nil || res.Added != 0 || res.Updated != 1 {
 		t.Fatalf("重复导入：%+v %v", res, err)
 	}
@@ -146,23 +146,22 @@ func TestListExpands(t *testing.T) {
 	if len(entries) != 0 {
 		t.Errorf("反代列表不该进入口池（decisions N-11）：%v", entries)
 	}
-	// 手动标成“优选 IP”：整个列表当入口，出口里就没有这几项了（全局出口永远是出口）
+	// 放在入口地址库里（N-13）：整个列表当入口，出口里就没有这几项了（全局出口永远是出口）
 	a.mu.Lock()
-	yes := true
-	a.exitLocked("L").UsableAsEntry = &yes
+	a.exitLocked("L").Pool = poolEntry
 	for _, n := range a.nodesLocked(a.Subs[0]) {
 		if n.From == "pip" {
 			entries[n.ID] = n.Label
 		}
 	}
 	left := a.pipsLocked(a.Subs[0])
-	a.exitLocked("L").UsableAsEntry = nil
+	a.exitLocked("L").Pool = poolExit
 	a.mu.Unlock()
 	if len(entries) != 3 || entries["x:203.0.113.5:8443"] != "HK" {
-		t.Errorf("标成优选 IP 后当入口用的应当是三个 ProxyIP 项（全局出口不算）：%v", entries)
+		t.Errorf("在入口库时当入口用的应当是三个 ProxyIP 项（全局出口不算）：%v", entries)
 	}
-	if len(left) != 1 || left[0].Type != "socks5" {
-		t.Errorf("标成优选 IP 后出口里只剩全局出口：%+v", left)
+	if len(left) != 0 {
+		t.Errorf("在入口库时整个列表都不当出口（夹着的全局出口也不算，两库隔离）：%+v", left)
 	}
 	// 选中一项再取值
 	in := a.testInst(t)
@@ -180,7 +179,7 @@ func TestListRefresh(t *testing.T) {
 	a := healApp(t)
 	u, set := listServer(t)
 	set(200, "IP地址,端口,地区\n1.1.1.1,2053,HK\n2.2.2.2,443,JP\n")
-	if _, err := a.ImportExits(u); err != nil {
+	if _, err := a.ImportExits(u, "exit"); err != nil {
 		t.Fatal(err)
 	}
 	e := exitBy(a, func(e *model.ExitEntry) bool { return e.Source == listSource })
@@ -234,7 +233,7 @@ func TestListURLEdit(t *testing.T) {
 	a := healApp(t)
 	u, set := listServer(t)
 	set(200, "1.1.1.1\n")
-	if _, err := a.ImportExits(u); err != nil {
+	if _, err := a.ImportExits(u, "exit"); err != nil {
 		t.Fatal(err)
 	}
 	e := exitBy(a, func(e *model.ExitEntry) bool { return e.Source == listSource })
@@ -256,7 +255,7 @@ func TestListURLEdit(t *testing.T) {
 	}
 	u3, set3 := listServer(t)
 	set3(200, "这里没有地址\n")
-	res, err := a.ImportExits(u3)
+	res, err := a.ImportExits(u3, "exit")
 	if err == nil || res.Added != 0 || !strings.Contains(err.Error(), "没有找到地址") {
 		t.Fatalf("没有地址的列表不该加进来：%+v %v", res, err)
 	}
@@ -278,7 +277,7 @@ func TestSetLoose(t *testing.T) {
 		{ID: "k", Type: "socks5", Value: "u:p@3.3.3.3:1080", Resolved: []string{}},
 		{ID: "L", Type: "proxyip", Value: "https://example.com/ip.txt", Source: listSource, Expand: true, Resolved: []string{"7.7.7.7"}, ResolvedAt: now()},
 	}
-	added, removed, _, err := a.SetLoose("1.1.1.1 #新备注\n[2001:db8::1]:443\n4.4.4.4\n")
+	added, removed, _, err := a.SetLoose("1.1.1.1 #新备注\n[2001:db8::1]:443\n4.4.4.4\n", "exit")
 	if err != nil || added != 2 || removed != 1 {
 		t.Fatalf("结果不对：加 %d 删 %d %v", added, removed, err)
 	}

@@ -128,9 +128,6 @@ func (a *App) tuneCandsLocked() []tuneCand {
 	for _, n := range a.entryPoolLocked() {
 		sc := a.scanLocked(n.Name)
 		c := tuneCand{ID: n.key(), Key: n.key(), Delay: sc.Delay, V6: isV6Addr(n.Server), Fam: famOf(n.Server), Hist: a.tune.Hist[n.key()]}
-		if sc.Exit != nil {
-			c.Country = sc.Exit.Country
-		}
 		out = append(out, c)
 	}
 	return out
@@ -164,7 +161,7 @@ func (a *App) tuneViewLocked(sub *model.Subscription) *tuneView {
 		id := idOfKey(pool, r.Key)
 		v.Scores[id], v.Known[id] = r.Score, r.Src
 	}
-	if best, _, _ := tuneDecide(rs, "", ""); best.ID != "" {
+	if best, _, _ := tuneDecide(rs, ""); best.ID != "" {
 		v.Best = &tuneBest{ID: idOfKey(pool, best.Key), Key: best.Key, Score: best.Score, Mbps: round1(best.Mbps), Delay: best.Delay, V6: best.V6, Reason: tuneReason(best, tuneRank{}, t.Hour())}
 	}
 	if len(a.tuneUsersLocked()) > 0 {
@@ -337,7 +334,7 @@ func (a *App) tuneApply() {
 	if !ok {
 		return
 	}
-	if best, _, sw := tuneDecide(rs, cur.key(), ""); sw {
+	if best, _, sw := tuneDecide(rs, cur.key()); sw {
 		a.entrySwitch(cur.key(), best.Key, "tuned")
 	}
 }

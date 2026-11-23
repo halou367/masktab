@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 )
 
 // 入口优选的纯逻辑（decisions N-6）：怎么给一个入口打分、怎么按小时记、本轮测谁、什么时候换。不碰状态、不发请求，便于测试。
@@ -110,13 +109,12 @@ func entryScore(mbps float64, delay int) float64 {
 
 // tuneCand 是参与优选的一个入口。
 type tuneCand struct {
-	ID      string
-	Key     string // 地址:端口
-	Country string // 普通网站的出口国家（入口落在的机房所在国家）
-	Delay   int    // 刚测的延迟；<= 0 不通
-	V6      bool
-	Fam     string // 界面上怎么称呼：IPv4 / IPv6 / 域名（域名解析出来是哪种不一定）
-	Hist    *ipHist
+	ID    string
+	Key   string // 地址:端口
+	Delay int    // 刚测的延迟；<= 0 不通
+	V6    bool
+	Fam   string // 界面上怎么称呼：IPv4 / IPv6 / 域名（域名解析出来是哪种不一定）
+	Hist  *ipHist
 }
 
 // tuneRank 是一个入口在当前小时的分数和依据。
@@ -196,16 +194,12 @@ func tunePick(rs []tuneRank, inUse map[string]bool, max, perFamily, explore int)
 	return out
 }
 
-// tuneDecide 决定要不要把正在用的入口 cur 换掉，换成谁。只在同一个出口国家（country，空 = 不限）里挑：
-// 入口换了国家，普通网站看到的出口也跟着换国家，那就不是“换个更快的入口”了。
+// tuneDecide 决定要不要把正在用的入口 cur 换掉，换成谁。全局挑，完全不看国家（decisions N-13：入口和出口不联动，
+// 普通网站走 Workers 的出口是 Cloudflare 机房 IP，基本固定，不随入口变；入口只比“低延迟 + 高速度兼顾”的分数）。
 // 换的条件：新的有下载记录、比现在的高出 15%（至少 8 分）；现在的不通了就直接换。这样不会为了一点点差别来回换。
-func tuneDecide(rs []tuneRank, cur, country string) (best tuneRank, curR tuneRank, sw bool) {
-	fit := func(r tuneRank) bool { return country == "" || strings.EqualFold(r.Country, country) }
+func tuneDecide(rs []tuneRank, cur string) (best tuneRank, curR tuneRank, sw bool) {
 	found, curFound := false, false
 	for _, r := range rs {
-		if !fit(r) {
-			continue
-		}
 		if r.ID == cur {
 			curR, curFound = r, true
 		}

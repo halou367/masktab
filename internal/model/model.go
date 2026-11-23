@@ -150,9 +150,12 @@ type ExitEntry struct {
 	ResolvedAt   int64    `json:"resolvedAt,omitempty"`
 	// ResolveError：最近一次解析失败的原因；成功后清空。失败时 Resolved 保留上一次的结果。
 	ResolveError string `json:"resolveError,omitempty"`
-	// UsableAsEntry：这一条（列表的话是整个列表）当入口还是当出口（decisions N-11：入口池和出口库完全隔开）。
-	// true = 优选 IP，只当入口；false = ProxyIP，只当出口；nil = 自动：地址落在 Cloudflare 官方网段里的当入口，其余当出口。
-	// 全局出口（SOCKS5 / SSTP 等）永远是出口。
+	// Pool：这一条在哪个地址库（decisions N-13：入口地址库 / 出口地址库彻底分开，两库完全隔离）。
+	// "entry" = 入口地址库（优选 IP、优选域名、优选列表网址）：进全部实例共用的入口池，绝不当出口；
+	// "exit"  = 出口地址库（ProxyIP、SSTP / VPN Gate、SOCKS5 / HTTP 等全局出口、ProxyIP 列表）：只当出口。
+	// 进哪个库由用户在哪个库里导入决定，不再按网段自动判断。全局出口（非 proxyip）永远在出口库。
+	Pool string `json:"pool,omitempty"`
+	// UsableAsEntry：老数据（N-11 的角色标签）。只在升级时读一次，按它和老的自动判断结果分进两个库（migratePoolsLocked），之后清掉。
 	UsableAsEntry *bool `json:"usableAsEntry,omitempty"`
 	// Sub：从哪个 edgetunnel 订阅的节点 path 里带出来的（proxyip= / socks5:// / /video/…）。更新订阅时同步：新的加、没了的删（有实例用着的留着）。
 	Sub string `json:"sub,omitempty"`

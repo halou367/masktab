@@ -38,40 +38,6 @@ func TestPickEntry(t *testing.T) {
 	}
 }
 
-func TestPickPip(t *testing.T) {
-	own := []cand{
-		{ID: "kr-a", Key: "1.1.1.1:443", Delay: 80, Country: "KR"},
-		{ID: "kr-b", Key: "1.1.1.2:443", Delay: 60, Country: "KR", Used: true},
-		{ID: "kr-dead", Key: "1.1.1.3:443", Delay: -1, Country: "KR"},
-	}
-	derived := []cand{
-		{ID: "a:hk1", Key: "2.2.2.1:443", Delay: 50, Country: "HK", Derived: true},
-		{ID: "a:hk2", Key: "2.2.2.2:443", Delay: 90, Country: "HK", Derived: true},
-		{ID: "a:us1", Key: "3.3.3.1:443", Delay: 30, Country: "US", Derived: true},
-	}
-	all := append(append([]cand{}, own...), derived...)
-	cases := []struct {
-		name  string
-		entry cand
-		cur   string
-		want  string
-	}{
-		{"用户自己加的同国反代优先，没被占用的排前面", cand{Key: "9.9.9.9:443", Country: "KR", CFCountry: "KR"}, "", "kr-a"},
-		{"当前选的仍然同国就不换", cand{Country: "KR"}, "kr-b", "kr-b"},
-		{"当前选的不通了就换", cand{Country: "KR"}, "kr-dead", "kr-a"},
-		{"没有自己加的、默认的本来就同国：不指定", cand{Country: "US", CFCountry: "US"}, "", ""},
-		{"默认的不同国：用入口地址里同国的，和入口同一个地址的优先", cand{Key: "2.2.2.2:443", Country: "HK", CFCountry: "SG"}, "", "a:hk2"},
-		{"默认的不同国、入口自己不能当反代：取同国里最快的", cand{Key: "8.8.8.8:443", Country: "HK", CFCountry: "SG"}, "", "a:hk1"},
-		{"哪儿都没有同国的：不指定", cand{Country: "DE", CFCountry: "NL"}, "a:us1", ""},
-		{"入口的出口还不知道：不动", cand{}, "kr-b", "kr-b"},
-	}
-	for _, c := range cases {
-		if got := pickPip(all, c.entry, c.cur); got != c.want {
-			t.Errorf("%s：得到 %q，应为 %q", c.name, got, c.want)
-		}
-	}
-}
-
 func TestKeepGone(t *testing.T) {
 	gone := []cand{
 		{ID: "u1", Delay: 50, Country: "US"}, {ID: "u2", Delay: 40, Country: "US"}, {ID: "u3", Delay: 60, Country: "US"},
@@ -197,27 +163,5 @@ func TestInstModeDefault(t *testing.T) {
 	p.ExitMode, p.EntryMode = "manual", "auto"
 	if p.ExitAuto() || !p.EntryAuto() {
 		t.Error("出口、入口的模式互不影响")
-	}
-}
-
-// 入口国家：只有反代已经定下来、或者出口不限国家时才听用户指定的入口国家。
-func TestEntryWant(t *testing.T) {
-	cases := []struct {
-		name             string
-		isET             bool
-		want, exitRegion string
-		pipFixed         bool
-		out              string
-	}{
-		{"没指定：跟随出口", true, "", "JP", true, ""},
-		{"反代已定：听指定的", true, "hk", "JP", true, "HK"},
-		{"出口不限：听指定的", true, "HK", "", false, "HK"},
-		{"出口限了国家又没有反代：不听（入口换国家 = 出口换国家）", true, "HK", "JP", false, ""},
-		{"通用订阅：没有入口国家", false, "HK", "", true, ""},
-	}
-	for _, c := range cases {
-		if got := entryWant(c.isET, c.want, c.exitRegion, c.pipFixed); got != c.out {
-			t.Errorf("%s：得到 %q，应为 %q", c.name, got, c.out)
-		}
 	}
 }

@@ -347,6 +347,7 @@ func (a *App) ResolveExit(id string) (changed bool) {
 		for _, ad := range addrs {
 			next = append(next, ad.String())
 		}
+		next = a.dropOtherLibLocked(e, next) // 两库隔离：另一个库里已有的地址不收（N-13）
 		changed = !sameSet(e.Resolved, next)
 		e.ResolveError, e.Resolved, e.GoodAt = "", next, e.ResolvedAt
 	}
@@ -449,12 +450,13 @@ func (a *App) syncSubExitsLocked(s *model.Subscription, nodes []model.ProxyNode)
 			have[it.Type+"|"+it.Value] = true
 		}
 	}
+	inEntry := a.libKeysLocked(poolEntry, nil) // 入口库 / 订阅节点里已有的地址不进出口库（两库隔离，N-13）
 	for _, k := range order {
-		if have[k] {
+		p := found[k]
+		if have[k] || inEntry[libKey(p.Type, p.Value)] {
 			continue
 		}
-		p := found[k]
-		e := &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: p.Type, Value: p.Value, Label: "来自订阅“" + s.Name + "”", Expand: p.IsDomain, RefreshHours: 3, Resolved: []string{}, Sub: s.ID}
+		e := &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: p.Type, Value: p.Value, Label: "来自订阅“" + s.Name + "”", Expand: p.IsDomain, RefreshHours: 3, Resolved: []string{}, Sub: s.ID, Pool: poolExit}
 		a.Exits = append(a.Exits, e)
 		changed = true
 		if e.Expand {

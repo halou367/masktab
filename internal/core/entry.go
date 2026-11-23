@@ -161,7 +161,7 @@ func (a *App) SetEntry(pin string, auto bool) error {
 
 // entrySwitch 自动换全局入口（入口优选、当前的不通了）：from → to。钉死时不换。
 // 不断流：只改配置重载（mihomo 重载不关已有连接，N-6 实测），再经各实例的探测通道确认；
-// 换之前通着的实例有一个换完不通了，或者 Cloudflare 网站那一路的出口国家变了（本不该变），整体换回去。
+// 确认只看连通：换之前通着的实例有一个换完不通了，整体换回去。不看出口国家（N-13）。
 func (a *App) entrySwitch(from, to, notice string) bool {
 	a.mu.Lock()
 	if !a.entryAutoLocked() || a.tune.Cur != from || from == to {
@@ -221,16 +221,9 @@ func (a *App) entrySwitched(from, to, notice string) bool {
 	wg.Wait()
 	for i, c := range cs {
 		pr := prs[i]
-		ok := c.before == nil || c.before.Error != "" || pr.Error == "" // 换之前就不通的不算在入口头上
-		if ok && c.before != nil && pr.Error == "" && !sameCF(c.before, &pr) {
-			ok = false
-		}
-		if !ok {
-			why := pr.Error
-			if why == "" {
-				why = "Cloudflare 网站那一路的出口国家变了"
-			}
-			if a.entryRevert(from, to, why) {
+		// 只看连通：换之前通的换完仍然通。不查任何出口国家、不因国家回滚（N-13：入口和出口不联动）
+		if ok := c.before == nil || c.before.Error != "" || pr.Error == ""; !ok { // 换之前就不通的不算在入口头上
+			if a.entryRevert(from, to, pr.Error) {
 				return false
 			}
 			break
@@ -270,15 +263,6 @@ func (a *App) entryRevert(from, to, why string) bool {
 		log.Printf("全局入口：%s 确认没通过（%s）", to, why)
 	}
 	return back
-}
-
-// sameCF：Cloudflare 网站那一路（ProxyIP / 全局出口决定）的出口国家没变（没探到的那一路不比）。
-// 普通网站那一路（Workers 从入口落在的机房出去）跟着入口变是正常的，不比（需求方：“入口 IP 一致不可能做到出口一致，最终只看出口”）。
-func sameCF(a, b *model.ExitProbe) bool {
-	if a == nil || b == nil || a.CF == nil || b.CF == nil || a.CF.Country == "" || b.CF.Country == "" {
-		return true
-	}
-	return strings.EqualFold(a.CF.Country, b.CF.Country)
 }
 
 // entryOut 是候选入口在代理内核里的出站名：这个入口 + 某个 edgetunnel 订阅的连接参数、不带出口。
@@ -411,7 +395,7 @@ func (a *App) entryViewLocked() *entryView {
 	if v.Auto || v.PinLost {
 		t := time.Now()
 		rs := rankTune(a.tuneCandsLocked(), t.Hour(), t.UnixMilli())
-		if best, curR, _ := tuneDecide(rs, cur.key(), ""); best.ID != "" {
+		if best, curR, _ := tuneDecide(rs, cur.key()); best.ID != "" {
 			v.Tune = &tuneBest{ID: idOfKey(pool, best.Key), Key: best.Key, Score: best.Score, Mbps: round1(best.Mbps), Delay: best.Delay, V6: best.V6, Reason: tuneReason(best, curR, t.Hour())}
 		}
 	}
@@ -425,36 +409,4 @@ func idOfKey(pool []nodeRef, k string) string {
 		}
 	}
 	return ""
-}
-
-// exitRolesLocked：地址库每一条现在是当入口还是当出口（给界面标“入口 / 出口 / 混合”）。全局出口不列（永远是出口）。
-func (a *App) exitRolesLocked() map[string]string {
-	out := map[string]string{}
-	for _, e := range a.Exits {
-		if e.Type != "proxyip" {
-			continue
-		}
-		en, ex := 0, 0
-		for _, it := range exitItems(e) {
-			if it.Type != "proxyip" {
-				continue
-			}
-			if entryRole(e, it.Type, it.Value) {
-				en++
-			} else {
-				ex++
-			}
-		}
-		switch {
-		case en > 0 && ex > 0:
-			out[e.ID] = "mixed"
-		case en > 0:
-			out[e.ID] = "entry"
-		case ex > 0 || e.UsableAsEntry == nil || !*e.UsableAsEntry:
-			out[e.ID] = "exit"
-		default:
-			out[e.ID] = "entry"
-		}
-	}
-	return out
 }

@@ -167,6 +167,7 @@ func (a *App) setListLocked(e *model.ExitEntry, parsed []exits.Parsed, err error
 		e.ResolveError = err.Error()
 	} else {
 		items, labels := listItems(parsed)
+		items = a.dropOtherLibLocked(e, items) // 两库隔离：另一个库里已有的地址不收（N-13）
 		changed = !sameSet(e.Resolved, items)
 		e.ResolveError, e.Resolved, e.Labels, e.GoodAt = "", items, labels, e.ResolvedAt
 	}
@@ -187,7 +188,7 @@ func (a *App) absorbLocked(e *model.ExitEntry) int {
 	n := 0
 	for _, o := range a.Exits {
 		item, ok := at[pipRef{Type: o.Type, Value: exitValue(o, "")}.key()]
-		if o == e || o.Source != "" || o.Expand || !ok {
+		if o == e || o.Source != "" || o.Expand || !ok || libOf(o) != libOf(e) { // 只并同一个库的（N-13）
 			keep = append(keep, o)
 			continue
 		}
@@ -237,14 +238,21 @@ type ImportResult struct {
 	ListAddrs int `json:"listAddrs"` // 这些列表里一共多少个地址
 	Updated   int `json:"updated"`   // 已经有的列表，这次重新拉了几个
 	Absorbed  int `json:"absorbed"`  // 原来零散的条目并进列表几条
+	Other     int `json:"other"`     // 已经在另一个库里、没收的（两库隔离，N-13）
+	Wrong     int `json:"wrong"`     // 进不了这个库的（入口库里导 SOCKS5 / SSTP 等全局出口）
 }
 
-// ImportExits 多行粘贴导入出口条目；域名默认“展开”为 IP。
+// ImportExits 多行粘贴导入到 pool 这个库（"entry" 入口地址库 / "exit" 出口地址库，decisions N-13）；域名默认“展开”为 IP。
+// 已经在另一个库里的地址不收（Other）；入口库只收 proxyip 类（优选 IP / 域名 / 列表），全局出口不收（Wrong）。
 //
 // 文本里的“地址列表的网址”（https://…/ip.txt 这类）各成一条列表源（decisions N-8）：当场拉一次，拉不到、或者里面没有地址就不加，
 // 把原因告诉用户；已经有的同一个网址不重复加，改成立即更新一次。地址库里原来零散的同一批地址并进列表。
-func (a *App) ImportExits(text string) (ImportResult, error) {
+func (a *App) ImportExits(text, pool string) (ImportResult, error) {
 	var res ImportResult
+	pool = normPool(pool)
+	if isVPNGateText(text) && pool == poolEntry {
+		return res, errors.New("VPN Gate 是全局出口，请在出口地址库里导入")
+	}
 	if isVPNGateText(text) { // VPN Gate 源（decisions N-5）：加一条源，拉列表、测一遍
 		a.mu.Lock()
 		id, added := a.addVPNGateLocked()
@@ -281,6 +289,11 @@ func (a *App) ImportExits(text string) (ImportResult, error) {
 				e = o
 			}
 		}
+		if e != nil && libOf(e) != pool { // 这个网址在另一个库里：不收（两库隔离）
+			res.Other++
+			a.mu.Unlock()
+			continue
+		}
 		switch {
 		case e != nil: // 已经有了：当成“立即更新”
 			a.setListLocked(e, got, err)
@@ -288,7 +301,7 @@ func (a *App) ImportExits(text string) (ImportResult, error) {
 				res.Updated++
 			}
 		case err == nil:
-			e = &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: "proxyip", Value: u, Label: listName(u), Source: listSource, Expand: true, RefreshHours: 3, Resolved: []string{}}
+			e = &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: "proxyip", Value: u, Label: listName(u), Source: listSource, Expand: true, RefreshHours: 3, Resolved: []string{}, Pool: pool}
 			a.Exits = append(a.Exits, e)
 			a.setListLocked(e, got, nil)
 			res.Added++
@@ -304,15 +317,26 @@ func (a *App) ImportExits(text string) (ImportResult, error) {
 	a.mu.Lock()
 	have := map[string]bool{}
 	for _, e := range a.Exits {
-		have[e.Type+"|"+e.Value] = true
+		if libOf(e) == pool {
+			have[e.Type+"|"+e.Value] = true
+		}
 	}
+	other := a.libKeysLocked(otherPool(pool), nil)
 	var added []string
 	for _, p := range parsed {
 		if have[p.Type+"|"+p.Value] {
 			continue
 		}
+		if pool == poolEntry && p.Type != "proxyip" {
+			res.Wrong++
+			continue
+		}
+		if other[libKey(p.Type, p.Value)] {
+			res.Other++
+			continue
+		}
 		have[p.Type+"|"+p.Value] = true
-		e := &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: p.Type, Value: p.Value, Label: p.Label, Expand: p.IsDomain, RefreshHours: 3, Resolved: []string{}}
+		e := &model.ExitEntry{ID: newID(), UpdatedAt: now(), Type: p.Type, Value: p.Value, Label: p.Label, Expand: p.IsDomain, RefreshHours: 3, Resolved: []string{}, Pool: pool}
 		a.Exits = append(a.Exits, e)
 		added = append(added, e.ID)
 	}
@@ -333,6 +357,9 @@ func (a *App) ImportExits(text string) (ImportResult, error) {
 	}
 	if res.Added == 0 && res.Updated == 0 && ferr != nil {
 		return res, ferr
+	}
+	if res.Added == 0 && res.Updated == 0 && res.Other == 0 && res.Wrong > 0 {
+		return res, errors.New("入口地址库只收优选 IP、优选域名和优选列表网址；SOCKS5 / SSTP 等全局出口请在出口地址库里导入")
 	}
 	return res, nil
 }
@@ -394,7 +421,10 @@ func (a *App) listCount(id string) int {
 // SetLoose 把“独立 IP”这一组整个换成 text 里写的那些（界面上的“批量编辑”）：
 // 文本里没有的独立 IP 删掉，有的留着（id 不变，实例的选择不受影响，备注按文本里的更新），新写的加上。
 // 文本里不是单个 IP 的东西（域名、列表网址、全局代理）照“导入地址”处理，不会丢。
-func (a *App) SetLoose(text string) (added, removed, healedN int, err error) {
+//
+// pool：哪个库的独立 IP（decisions N-13：两个库各有自己的一组，互不影响）。
+func (a *App) SetLoose(text, pool string) (added, removed, healedN int, err error) {
+	pool = normPool(pool)
 	if strings.TrimSpace(text) != "" && isVPNGateText(text) {
 		return 0, 0, 0, errors.New("这里写独立的 IP；VPN Gate 源请用“导入地址”")
 	}
@@ -407,7 +437,7 @@ func (a *App) SetLoose(text string) (added, removed, healedN int, err error) {
 	a.mu.Lock()
 	var keep []*model.ExitEntry
 	for _, e := range a.Exits {
-		if !isLoose(e) {
+		if !isLoose(e) || libOf(e) != pool {
 			keep = append(keep, e)
 			continue
 		}
@@ -427,6 +457,6 @@ func (a *App) SetLoose(text string) (added, removed, healedN int, err error) {
 	changed := a.healAllLocked() // 指定了被删的那些的实例：换掉并说明（heal.go）
 	a.mu.Unlock()
 	a.healed(changed)
-	res, err := a.ImportExits(text)
+	res, err := a.ImportExits(text, pool)
 	return res.Added, removed, len(changed), err
 }

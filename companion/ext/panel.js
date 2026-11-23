@@ -145,9 +145,9 @@ function filtered(items, countryOf, ipOf) {
 }
 // 添加地址（edgetunnel 的地址库）：出口列表右下角的“+”。
 const addAddr = async () => {
-  const v = await ask('添加出口', { multiline: true, placeholder: '每行一个：ProxyIP（IP、IP:端口、域名，可加 #备注）\n或列表网址 https://…/proxyip.txt\nsocks5://用户:密码@主机:端口、sstp://…', note: '进地址库。Cloudflare 官方 IP 自动归到入口（优选 IP），其余当出口。', ok: '添加' });
+  const v = await ask('添加出口', { multiline: true, placeholder: '每行一个：ProxyIP（IP、IP:端口、域名，可加 #备注）\n或列表网址 https://…/proxyip.txt\nsocks5://用户:密码@主机:端口、sstp://…', note: '进出口地址库，只当出口。已经在入口地址库里的地址不收；优选 IP 请到入口列表的“+”或入口地址库里加。', ok: '添加' });
   if (!v || !v.trim()) return;
-  run(async () => { const r = await api('POST', '/api/exits', { text: v }); toast(r.added ? `已添加 ${r.added} 条` : '没有新地址'); await load(); });
+  run(async () => { const r = await api('POST', '/api/exits', { text: v, pool: 'exit' }); toast(r.added ? `已添加 ${r.added} 条` : r.other ? `${r.other} 个已在入口地址库里，没收` : '没有新地址'); await load(); });
 };
 // 添加优选 IP（入口列表右下角的“+”）：进入口池（全部实例共用，决策 N-11），不会被当成出口。
 const addEntry = async () => {
@@ -211,11 +211,11 @@ async function pickRegion(anchor, me, sub) {
 async function customAddr(me, sub, what) {
   const exit = what === 'exit';
   const v = await ask(exit ? '自定义 ProxyIP' : '自定义入口地址', { placeholder: exit ? '1.2.3.4、1.2.3.4:443、域名、socks5://…' : '1.2.3.4、1.2.3.4:443、域名',
-    note: exit ? 'CF 网站从它出去。会加进地址库，探测后显示国家和纯净度。' : '连到服务端用的地址（优选 IP）。进入口池，全部实例一起换过去。', ok: '使用' });
+    note: exit ? 'CF 网站从它出去。会加进出口地址库，探测后显示国家和纯净度。' : '连到服务端用的地址（优选 IP）。进入口地址库，全部实例一起换过去。', ok: '使用' });
   const text = (v || '').trim().split(/\s+/)[0];
   if (!text) return;
   run(async () => {
-    await api('POST', exit ? '/api/exits' : '/api/addresses', exit ? { text } : { server: text }); // 入口进入口池（自己加的优选 IP），不进地址库：免得被当成出口
+    await api('POST', exit ? '/api/exits' : '/api/addresses', exit ? { text, pool: 'exit' } : { server: text }); // 入口进入口池（自己加的优选 IP，入口地址库里的“自定义”），出口进出口地址库（decisions N-13）
     await load();
     const bare = text.replace(/^[a-z0-9]+:\/\//i, '').replace(/#.*$/, ''), same = (x) => x === bare || x === bare + ':443' || x.replace(/^.*@/, '') === bare;
     const s2 = st.subscriptions.find((x) => x.id === sub.id) || sub;
@@ -339,7 +339,7 @@ function subView(me, sub) {
   sub?.hasEch && row({ ic: 'lock', t: 'ECH', s: sub.echOff ? '已关（这个网络用不了时会自动关）' : '加密握手里的域名', trail: sw(!sub.echOff, 'ECH', (v) => run(() => api('POST', `/api/subscriptions/${sub.id}/ech?off=${v ? 0 : 1}`), '正在重测…')) }),
   sub?.lastError && h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, '刷新失败：' + sub.lastError)),
   row({ ic: 'add', t: '添加订阅', onclick: () => addSub(me) }),
-  row({ ic: 'tune', t: '订阅与地址库', s: '管理订阅、自定义地址和地址列表', chev: true, onclick: () => open('exits') })];
+  row({ ic: 'tune', t: '订阅与地址库', s: '管理订阅、入口地址库和出口地址库', chev: true, onclick: () => open('exits') })];
 }
 
 // ---------- 节点与出口（首页） ----------

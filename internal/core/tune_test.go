@@ -94,41 +94,42 @@ func histOf(hour int, mbps float64) *ipHist {
 // 要不要换：只在同一个出口国家里挑；明显更好才换；现在的不通了直接换；没测过下载的不会被换上去。
 func TestTuneDecide(t *testing.T) {
 	nowMs := time.Now().UnixMilli()
+	// 入口只按“低延迟 + 高速度兼顾”的分数全局挑，完全不看国家（decisions N-13）：c 在别的机房 / 国家也照样选它
 	cs := []tuneCand{
-		{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: 90, Hist: histOf(21, 8)},
-		{ID: "b", Key: "[2606:4700::1]:443", Country: "JP", Delay: 120, V6: true, Hist: histOf(21, 60)},
-		{ID: "c", Key: "3.3.3.3:443", Country: "US", Delay: 40, Hist: histOf(21, 200)},
-		{ID: "d", Key: "4.4.4.4:443", Country: "JP", Delay: 20},                        // 没测过下载
-		{ID: "e", Key: "5.5.5.5:443", Country: "JP", Delay: -1, Hist: histOf(21, 300)}, // 不通
+		{ID: "a", Key: "1.1.1.1:443", Delay: 90, Hist: histOf(21, 8)},
+		{ID: "b", Key: "[2606:4700::1]:443", Delay: 120, V6: true, Hist: histOf(21, 60)},
+		{ID: "c", Key: "3.3.3.3:443", Delay: 40, Hist: histOf(21, 200)},
+		{ID: "d", Key: "4.4.4.4:443", Delay: 20},                        // 没测过下载
+		{ID: "e", Key: "5.5.5.5:443", Delay: -1, Hist: histOf(21, 300)}, // 不通
 	}
 	rs := rankTune(cs, 21, nowMs)
 	if rs[0].ID != "c" {
-		t.Fatalf("不分国家时最好的是 c：%+v", rs[0])
+		t.Fatalf("最好的是 c：%+v", rs[0])
 	}
 	for _, r := range rs {
 		if r.ID == "e" {
 			t.Fatal("不通的不该参与")
 		}
 	}
-	best, cur, sw := tuneDecide(rs, "a", "JP")
-	if !sw || best.ID != "b" || cur.ID != "a" {
-		t.Fatalf("日本里应从 a 换到 IPv6 的 b：%v %v %v", sw, best.ID, cur.ID)
+	best, cur, sw := tuneDecide(rs, "a")
+	if !sw || best.ID != "c" || cur.ID != "a" {
+		t.Fatalf("应从 a 换到全局最好的 c：%v %v %v", sw, best.ID, cur.ID)
 	}
-	if why := tuneReason(best, cur, 21); why == "" || !strings.Contains(why, "IPv6") || !strings.Contains(why, "21 点") || !strings.Contains(why, "快 650%") {
+	if why := tuneReason(best, cur, 21); why == "" || !strings.Contains(why, "IPv4") || !strings.Contains(why, "21 点") || !strings.Contains(why, "快 2400%") {
 		t.Fatalf("理由不对：%q", why)
 	}
 	// 差一点点不换（防止来回跳）
 	cs2 := []tuneCand{
-		{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: 90, Hist: histOf(21, 30)},
-		{ID: "b", Key: "2.2.2.2:443", Country: "JP", Delay: 90, Hist: histOf(21, 33)},
+		{ID: "a", Key: "1.1.1.1:443", Delay: 90, Hist: histOf(21, 30)},
+		{ID: "b", Key: "2.2.2.2:443", Delay: 90, Hist: histOf(21, 33)},
 	}
-	if _, _, sw := tuneDecide(rankTune(cs2, 21, nowMs), "a", "JP"); sw {
+	if _, _, sw := tuneDecide(rankTune(cs2, 21, nowMs), "a"); sw {
 		t.Fatal("只快一点点不该换")
 	}
 	// 现在用的不通了：直接换到有记录的最好的
 	cs3 := []tuneCand{
-		{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: -1, Hist: histOf(21, 30)},
-		{ID: "b", Key: "2.2.2.2:443", Country: "JP", Delay: 90, Hist: histOf(21, 5)},
+		{ID: "a", Key: "1.1.1.1:443", Delay: -1, Hist: histOf(21, 30)},
+		{ID: "b", Key: "2.2.2.2:443", Delay: 90, Hist: histOf(21, 5)},
 	}
 	if famOf("7.cf.example.com") != "域名" || famOf("2606:4700::1") != "IPv6" || famOf("1.2.3.4") != "IPv4" {
 		t.Fatal("地址的称呼不对")
@@ -136,12 +137,12 @@ func TestTuneDecide(t *testing.T) {
 	if why := tuneReason(tuneRank{tuneCand: tuneCand{ID: "x", Fam: "域名", Delay: 50}, Mbps: 80, Known: true}, tuneRank{}, 9); !strings.HasPrefix(why, "域名 · 9 点下载 80 Mbps") {
 		t.Fatalf("域名的理由不对：%q", why)
 	}
-	if b, _, sw := tuneDecide(rankTune(cs3, 21, nowMs), "a", "JP"); !sw || b.ID != "b" {
+	if b, _, sw := tuneDecide(rankTune(cs3, 21, nowMs), "a"); !sw || b.ID != "b" {
 		t.Fatal("现在的不通应换")
 	}
 	// 只有没测过下载的：不换
-	cs4 := []tuneCand{{ID: "a", Key: "1.1.1.1:443", Country: "JP", Delay: 300}, {ID: "d", Key: "4.4.4.4:443", Country: "JP", Delay: 20}}
-	if _, _, sw := tuneDecide(rankTune(cs4, 21, nowMs), "a", "JP"); sw {
+	cs4 := []tuneCand{{ID: "a", Key: "1.1.1.1:443", Delay: 300}, {ID: "d", Key: "4.4.4.4:443", Delay: 20}}
+	if _, _, sw := tuneDecide(rankTune(cs4, 21, nowMs), "a"); sw {
 		t.Fatal("没测过下载的不该被换上去")
 	}
 }
@@ -150,14 +151,14 @@ func TestTuneDecide(t *testing.T) {
 func TestTunePick(t *testing.T) {
 	nowMs := time.Now().UnixMilli()
 	cs := []tuneCand{
-		{ID: "u", Key: "u:443", Country: "JP", Delay: 300, Hist: histOf(21, 2)}, // 正在用，很慢
-		{ID: "v4a", Key: "v4a:443", Country: "JP", Delay: 50, Hist: histOf(21, 50)},
-		{ID: "v4b", Key: "v4b:443", Country: "JP", Delay: 60, Hist: histOf(21, 40)},
-		{ID: "v4c", Key: "v4c:443", Country: "JP", Delay: 70, Hist: histOf(21, 30)},
-		{ID: "v6a", Key: "v6a:443", Country: "JP", Delay: 90, V6: true, Hist: histOf(21, 45)},
-		{ID: "v6b", Key: "v6b:443", Country: "JP", Delay: 95, V6: true},
-		{ID: "new", Key: "new:443", Country: "JP", Delay: 40},
-		{ID: "dead", Key: "dead:443", Country: "JP", Delay: -1},
+		{ID: "u", Key: "u:443", Delay: 300, Hist: histOf(21, 2)}, // 正在用，很慢
+		{ID: "v4a", Key: "v4a:443", Delay: 50, Hist: histOf(21, 50)},
+		{ID: "v4b", Key: "v4b:443", Delay: 60, Hist: histOf(21, 40)},
+		{ID: "v4c", Key: "v4c:443", Delay: 70, Hist: histOf(21, 30)},
+		{ID: "v6a", Key: "v6a:443", Delay: 90, V6: true, Hist: histOf(21, 45)},
+		{ID: "v6b", Key: "v6b:443", Delay: 95, V6: true},
+		{ID: "new", Key: "new:443", Delay: 40},
+		{ID: "dead", Key: "dead:443", Delay: -1},
 	}
 	got := tunePick(rankTune(cs, 21, nowMs), map[string]bool{"u:443": true}, 5, 2, 1)
 	want := map[string]bool{"u:443": true, "v4a:443": true, "v6a:443": true}
@@ -191,14 +192,14 @@ func TestTunePick(t *testing.T) {
 // 有优选分数时，自动选入口按分数（下载为主）挑，不再只看延迟。
 func TestPickEntryByScore(t *testing.T) {
 	cs := []cand{
-		{ID: "fastping", Delay: 40, Country: "JP", Score: entryScore(3, 40)},
-		{ID: "fastdl", Delay: 120, Country: "JP", Score: entryScore(60, 120)},
+		{ID: "fastping", Delay: 40, Score: entryScore(3, 40)},
+		{ID: "fastdl", Delay: 120, Score: entryScore(60, 120)},
 	}
-	if id, ok := pickEntry(cs, "JP", "", nil); !ok || id != "fastdl" {
+	if id, ok := pickEntry(cs, "", "", nil); !ok || id != "fastdl" {
 		t.Fatalf("应挑下载快的：%v", id)
 	}
 	// 当前的仍然可用就不换（换入口交给后台优选，按“明显更好”才换）
-	if id, _ := pickEntry(cs, "JP", "fastping", nil); id != "fastping" {
+	if id, _ := pickEntry(cs, "", "fastping", nil); id != "fastping" {
 		t.Fatal("当前的仍可用就不动")
 	}
 	// 都没有分数：照旧按延迟
@@ -255,7 +256,7 @@ func TestTuneRound(t *testing.T) {
 		in.Proxy.State, in.Proxy.SubscriptionID = "on", sid
 		r := a.rtLocked(in.ID)
 		r.active, r.Running, r.probePort = true, true, 1
-		r.Probe = &model.ExitProbe{CF: &model.IPInfo{IP: "203.0.113.1", Country: "JP"}, Direct: &model.IPInfo{IP: "104.28.0.1", Country: "JP"}}
+		r.Probe = &model.ExitProbe{CF: &model.IPInfo{IP: "203.0.113.1"}, Direct: &model.IPInfo{IP: "104.28.0.1"}}
 		a.mu.Unlock()
 		ins, rs = append(ins, in), append(rs, r)
 	}
@@ -268,7 +269,7 @@ func TestTuneRound(t *testing.T) {
 		pmu.Lock()
 		probed++
 		pmu.Unlock()
-		return model.ExitProbe{At: now(), CF: &model.IPInfo{IP: "203.0.113.1", Country: "JP"}, Direct: &model.IPInfo{IP: "104.28.0.2", Country: "KR"}} // 普通网站那一路换了机房：不算
+		return model.ExitProbe{At: now(), CF: &model.IPInfo{IP: "203.0.113.1"}, Direct: &model.IPInfo{IP: "104.28.0.2"}} // 普通网站那一路换了机房：不算
 	}
 	defer func() { tuneProbe = defaultTuneProbe }()
 
@@ -332,7 +333,7 @@ func TestTuneRound(t *testing.T) {
 		t.Fatalf("用量到上限后不该再测下载：%d", n)
 	}
 
-	// 确认没通过（Cloudflare 网站那一路的出口国家变了）：全部一起换回去
+	// 换入口的确认只看连通，不查出口国家（decisions N-13）：换完两路出口国家都变了也留下，不回滚
 	a.mu.Lock()
 	a.tune.Used = 0
 	a.tune.Cur = slowK
@@ -341,8 +342,17 @@ func TestTuneRound(t *testing.T) {
 		return model.ExitProbe{At: now(), CF: &model.IPInfo{Country: "US"}, Direct: &model.IPInfo{Country: "US"}}
 	}
 	a.tuneApply()
+	if a.tune.Cur == slowK {
+		t.Fatal("出口国家变了不该成为换回去的理由（只看连通）")
+	}
+	// 换完不通了：全部一起换回去
+	a.mu.Lock()
+	a.tune.Cur = slowK
+	a.mu.Unlock()
+	tuneProbe = func(int, []string) model.ExitProbe { return model.ExitProbe{At: now(), Error: "超时"} }
+	a.tuneApply()
 	if a.tune.Cur != slowK {
-		t.Fatal("CF 那一路的出口国家变了应换回去")
+		t.Fatal("换之前通、换完不通应换回去")
 	}
 	// 钉死：不换
 	a.mu.Lock()

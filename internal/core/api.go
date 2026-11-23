@@ -330,7 +330,6 @@ func (a *App) State(me string) map[string]any {
 		"me": mine, "instances": insts, "subscriptions": subs, "exits": exitsOut, "extensions": exts, "ipq": a.ipqViewLocked(),
 		"settings": a.Settings, "setup": a.setup, "seq": a.seq, "palette": model.Palette, "version": a.Version, "update": a.updateStateLocked(),
 		"entry":       ev,
-		"exitRoles":   a.exitRolesLocked(),
 		"host":        a.Host.Name,
 		"os":          runtime.GOOS,
 		"kernel":      map[string]any{"name": a.adapter.Name(), "caps": a.adapter.Caps(), "version": a.kernelVersion(), "path": a.kernelExe},
@@ -347,7 +346,6 @@ type proxyPatch struct {
 	PipID                                                                        *string // 手动选反代（反代列表里一行的 id；空 = 不指定）：关闭"自动"
 	Region                                                                       *string // 选出口地区（国家代码；空 = 不限）：打开"自动"
 	ExitType                                                                     *string // 出口自动时限定的类型（proxyip | sstp | socks5 | …；空 = 全部）
-	EntryRegion                                                                  *string // 入口自动时先在哪个国家里挑（国家代码；空 = 跟随出口）
 	Auto                                                                         *bool
 	ExitMode, EntryMode                                                          *string // auto | manual：出口、入口各自的开关。只有这两个字段（和旧的 auto）会改模式
 	Profile                                                                      *string // 换订阅里的另一套连接参数（Host / 协议）
@@ -537,13 +535,10 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 				in.Proxy.AddressMode = "custom"
 			}
 		}
-		if pp.EntryRegion != nil {
-			in.Proxy.EntryRegion = strings.ToUpper(strings.TrimSpace(*pp.EntryRegion))
-		}
 		if pp.ExitType != nil {
 			in.Proxy.ExitType = strings.ToLower(strings.TrimSpace(*pp.ExitType))
 		}
-		if pp.ExitType != nil || pp.NodeID != nil || pp.PipID != nil || pp.Region != nil || pp.EntryRegion != nil || pp.ExitMode != nil || pp.EntryMode != nil {
+		if pp.ExitType != nil || pp.NodeID != nil || pp.PipID != nil || pp.Region != nil || pp.ExitMode != nil || pp.EntryMode != nil {
 			r.seenExit = nil // "换一个"的轮转从头算
 		}
 		in.Proxy.Auto = in.Proxy.ExitAuto()
@@ -810,22 +805,22 @@ func (a *App) routes(mux *http.ServeMux) {
 		reply(w, map[string]any{"moved": moved, "to": to}, nil)
 	})
 	mux.HandleFunc("POST /api/exits", func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ Text string }
+		var b struct{ Text, Pool string } // Pool：导进哪个库（decisions N-13）："entry" 入口地址库 | "exit" 出口地址库（不写 = 出口库）
 		if err := body(r, &b); err != nil {
 			reply(w, nil, err)
 			return
 		}
-		res, err := a.ImportExits(b.Text)
+		res, err := a.ImportExits(b.Text, b.Pool)
 		reply(w, res, err)
 	})
 	// 独立 IP 这一组整个换成一段文本里写的那些（decisions N-8）
 	mux.HandleFunc("PUT /api/exits/loose", func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ Text string }
+		var b struct{ Text, Pool string } // 哪个库的独立 IP（decisions N-13）
 		if err := body(r, &b); err != nil {
 			reply(w, nil, err)
 			return
 		}
-		added, removed, changed, err := a.SetLoose(b.Text)
+		added, removed, changed, err := a.SetLoose(b.Text, b.Pool)
 		reply(w, map[string]int{"added": added, "removed": removed, "changed": changed}, err)
 	})
 	mux.HandleFunc("PATCH /api/exits/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -834,8 +829,6 @@ func (a *App) routes(mux *http.ServeMux) {
 			Expand       *bool
 			RefreshHours *int
 			URL          *string // 列表源：换网址（先拉新的，拉到了才换）
-			// Role：这一条当入口还是当出口（decisions N-11）："entry" 优选 IP | "exit" ProxyIP | "auto" 自动（Cloudflare 官方 IP 当入口）
-			Role *string
 		}
 		if err := body(r, &b); err != nil {
 			reply(w, nil, err)
@@ -861,30 +854,11 @@ func (a *App) routes(mux *http.ServeMux) {
 			if b.RefreshHours != nil {
 				e.RefreshHours = *b.RefreshHours
 			}
-			if b.Role != nil && e.Type == "proxyip" {
-				yes, no := true, false
-				switch *b.Role {
-				case "entry":
-					e.UsableAsEntry = &yes
-				case "exit":
-					e.UsableAsEntry = &no
-				default:
-					e.UsableAsEntry = nil
-				}
-			}
 			e.UpdatedAt = now()
 			a.saveLocked("exits")
 			a.bumpLocked("state", "")
 		}
-		var changed []string
-		if b.Role != nil && e != nil { // 角色变了：选着它当出口的实例要换（heal），入口池变了全局入口可能要换
-			changed = a.healAllLocked()
-		}
 		a.mu.Unlock()
-		if b.Role != nil {
-			a.healed(changed)
-			go a.rescanET()
-		}
 		if b.URL == nil && (b.Expand != nil || b.RefreshHours != nil) { // 只改备注不用重新解析
 			go a.ResolveExit(id)
 		}

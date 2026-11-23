@@ -263,6 +263,9 @@ func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	var we fileWrap[[]*model.ExitEntry]
 	load("exits.json", &we)
 	a.Exits = we.Items
+	if a.migratePoolsLocked() { // 老地址库一次性分进入口库 / 出口库（decisions N-13）
+		a.saveLocked("exits")
+	}
 	var wx fileWrap[[]*model.GlobalExtension]
 	if readJSON(a.p("config", "extensions.json"), &wx) { // 读不出来（文件坏了 / 没有）就不清：清单都没有，不能凭它删文件
 		a.Exts = wx.Items

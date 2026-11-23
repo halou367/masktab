@@ -56,9 +56,9 @@ func TestExitValue(t *testing.T) {
 func TestIPv6InLists(t *testing.T) {
 	sub := &model.Subscription{ID: "s1", Kind: "edgetunnel", Template: &model.Template{Base: map[string]any{"type": "vless"}}, Hosts: []string{"et.example.com"}}
 	a := &App{scan: map[string]*model.NodeScan{}, Subs: []*model.Subscription{sub}, Exits: []*model.ExitEntry{
-		{ID: "e1", Type: "proxyip", Value: "2606:4700:5a:8e48:1c8d:85bf:712a:164f"},
-		{ID: "e2", Type: "proxyip", Value: "v6.example.com", Expand: true, Resolved: []string{"2606:4700:57:2cb1:ff4b:741d:d9d:864"}},
-		{ID: "e3", Type: "proxyip", Value: "dual.example.com:8443", Expand: true, Resolved: []string{"203.0.113.7", "2001:db8::7", "203.0.113.9:2053", "[2001:db8::9]:2053"}},
+		{ID: "e1", Type: "proxyip", Value: "2606:4700:5a:8e48:1c8d:85bf:712a:164f", Pool: poolEntry},
+		{ID: "e2", Type: "proxyip", Value: "v6.example.com", Expand: true, Resolved: []string{"2606:4700:57:2cb1:ff4b:741d:d9d:864"}, Pool: poolEntry},
+		{ID: "e3", Type: "proxyip", Value: "dual.example.com:8443", Expand: true, Resolved: []string{"203.0.113.7", "2001:db8::7", "203.0.113.9:2053", "[2001:db8::9]:2053"}, Pool: poolExit},
 	}}
 	var nodes []string
 	for _, n := range a.nodesLocked(sub) {
@@ -67,7 +67,7 @@ func TestIPv6InLists(t *testing.T) {
 		}
 		nodes = append(nodes, n.key())
 	}
-	// 入口池只收 Cloudflare 官方 IP（这两个 2606:4700::/32）；不是官方 IP 的是 ProxyIP，只当出口（decisions N-11）
+	// 入口池只收入口地址库里的（e1、e2）；出口地址库里的是 ProxyIP，只当出口（decisions N-13）
 	wantNodes := []string{
 		"[2606:4700:5a:8e48:1c8d:85bf:712a:164f]:443", "[2606:4700:57:2cb1:ff4b:741d:d9d:864]:443",
 	}

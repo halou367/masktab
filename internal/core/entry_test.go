@@ -14,18 +14,21 @@ import (
 	"github.com/halou367/masktab/internal/subscription"
 )
 
-// 入口 / 出口隔开（decisions N-11）：入口池只有优选 IP（订阅各节点的地址、自己加的、地址库里 Cloudflare 官方 IP / 标成入口的），
-// 反代（ProxyIP）只当出口；入口地址不再“顺带”当反代；一个地址只写一种测速记录。
+// 入口 / 出口两个库（decisions N-13，取代 N-11 的角色标签）：入口池 = 订阅各节点的地址 + 入口列表里自己加的 + 入口地址库；
+// 出口池 = 出口地址库。进哪个库只看 Pool，不看网段（入口库里的非 Cloudflare 地址照样当入口，出口库里的反代只当出口）；
+// 入口地址不“顺带”当反代；一个地址只写一种测速记录。
 func TestEntryPoolIsolation(t *testing.T) {
 	a := healApp(t)
 	a.Subs = []*model.Subscription{etSub(a, "A", "甲", "104.16.0.1", "198.51.100.5")}                                   // 订阅里写的地址都是入口（哪怕不是 Cloudflare 网段：用户的订阅这么写的）
 	a.Addresses = append(a.Addresses, &model.Address{ID: "c1", Server: "cf.example.com", Port: 443, Source: "custom"}) // 自己加的优选域名
 	a.Exits = []*model.ExitEntry{
-		{ID: "best", Type: "proxyip", Value: "https://x/bestcf.txt", Source: listSource, Expand: true, Resolved: []string{"104.17.0.1", "104.17.0.2:2053"}},
-		{ID: "prox", Type: "proxyip", Value: "https://x/proxyip.txt", Source: listSource, Expand: true, Resolved: []string{"203.0.113.1:443", "socks5://u:p@192.0.2.9:1080"}},
-		{ID: "loose", Type: "proxyip", Value: "203.0.113.2"},
-		{ID: "cfloose", Type: "proxyip", Value: "104.18.0.9"},
-		{ID: "sstp", Type: "sstp", Value: "vpn:vpn@192.0.2.10:443"},
+		{ID: "best", Type: "proxyip", Value: "https://x/bestcf.txt", Source: listSource, Expand: true, Resolved: []string{"104.17.0.1", "104.17.0.2:2053"}, Pool: poolEntry},
+		{ID: "prox", Type: "proxyip", Value: "https://x/proxyip.txt", Source: listSource, Expand: true, Resolved: []string{"203.0.113.1:443", "socks5://u:p@192.0.2.9:1080"}, Pool: poolExit},
+		{ID: "loose", Type: "proxyip", Value: "203.0.113.2", Pool: poolExit},
+		{ID: "cfloose", Type: "proxyip", Value: "104.18.0.9", Pool: poolEntry},
+		{ID: "myentry", Type: "proxyip", Value: "198.51.100.77", Pool: poolEntry},    // 不在 Cloudflare 网段，但用户放进了入口库：就是入口
+		{ID: "cfexit", Type: "proxyip", Value: "104.19.0.1", Pool: poolExit},         // 在官方网段、放进了出口库：不当入口（当不了 ProxyIP，出口池也不列）
+		{ID: "sstp", Type: "sstp", Value: "vpn:vpn@192.0.2.10:443", Pool: poolEntry}, // 全局出口永远在出口库
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -36,9 +39,9 @@ func TestEntryPoolIsolation(t *testing.T) {
 		return
 	}
 	ent := keys(a.entryPoolLocked())
-	want := []string{"104.16.0.1:443", "198.51.100.5:443", "cf.example.com:443", "104.17.0.1:443", "104.17.0.2:2053", "104.18.0.9:443"}
+	want := []string{"104.16.0.1:443", "198.51.100.5:443", "cf.example.com:443", "104.17.0.1:443", "104.17.0.2:2053", "104.18.0.9:443", "198.51.100.77:443"}
 	if strings.Join(ent, ",") != strings.Join(want, ",") {
-		t.Fatalf("入口池应只有优选 IP：\n got %v\nwant %v", ent, want)
+		t.Fatalf("入口池应只有入口库和订阅的地址：\n got %v\nwant %v", ent, want)
 	}
 	var ex []string
 	for _, p := range a.exitPoolLocked() {
@@ -49,41 +52,135 @@ func TestEntryPoolIsolation(t *testing.T) {
 	}
 	wantEx := []string{"203.0.113.1:443", "socks5|u:p@192.0.2.9:1080", "203.0.113.2:443", "sstp|vpn:vpn@192.0.2.10:443"}
 	if strings.Join(ex, ",") != strings.Join(wantEx, ",") {
-		t.Fatalf("出口库应只有 ProxyIP 和全局出口：\n got %v\nwant %v", ex, wantEx)
+		t.Fatalf("出口池应只有出口库：\n got %v\nwant %v", ex, wantEx)
 	}
 	for _, tg := range a.targetsLocked() {
 		if tg.entry != "" && tg.pip != "" {
 			t.Fatalf("%s 不该两种记录都写", tg.key)
 		}
 	}
-	// 手动改角色：反代列表标成入口，就进入口池、出了出口库（全局出口仍是出口）
-	yes, no := true, false
-	a.exitLocked("prox").UsableAsEntry = &yes
-	if !strings.Contains(strings.Join(keys(a.entryPoolLocked()), ","), "203.0.113.1:443") {
-		t.Fatal("标成入口后应进入口池")
-	}
+	// 两边撞上（老数据）：入口优先，出口池里不列
+	a.Exits = append(a.Exits, &model.ExitEntry{ID: "dup", Type: "proxyip", Value: "198.51.100.77:443", Pool: poolExit})
 	for _, p := range a.exitPoolLocked() {
-		if p.key() == "203.0.113.1:443" {
-			t.Fatal("标成入口后不该还在出口库")
+		if p.key() == "198.51.100.77:443" {
+			t.Fatal("已经在入口池的地址不该再当出口")
 		}
 	}
-	// 优选列表标成出口：Cloudflare 官方 IP 当不了 ProxyIP，出口库里也不会有，入口池里也没了
-	a.exitLocked("prox").UsableAsEntry = nil
-	a.exitLocked("best").UsableAsEntry = &no
-	if strings.Contains(strings.Join(keys(a.entryPoolLocked()), ","), "104.17.0.1") {
-		t.Fatal("标成出口后不该在入口池")
-	}
-	if r := a.exitRolesLocked(); r["best"] != "exit" || r["prox"] != "exit" || r["cfloose"] != "entry" {
-		t.Fatalf("界面上的角色不对：%v", r)
-	}
-	// 实例正选着一个被改成入口的出口：算丢了，出口自动时换掉
+	// 实例正选着一个入口库里的条目当出口（老数据）：算丢了，heal 换掉
 	in := a.newInstanceLocked("persistent")
-	in.Proxy.State, in.Proxy.SubscriptionID, in.Proxy.ExitID = "on", "A", "loose"
-	a.exitLocked("loose").UsableAsEntry = &yes
+	in.Proxy.State, in.Proxy.SubscriptionID, in.Proxy.ExitID = "on", "A", "myentry"
 	a.healLocked(in)
-	if in.Proxy.ExitID == "loose" {
-		t.Fatal("被改成入口的那一项不该再当这个实例的出口")
+	if in.Proxy.ExitID == "myentry" {
+		t.Fatal("入口库的条目不该当这个实例的出口")
 	}
+}
+
+// 老地址库升级：按 N-11 的自动判断结果一次性分进两个库，之后不再自动判断。
+func TestPoolMigration(t *testing.T) {
+	a := healApp(t)
+	yes, no := true, false
+	a.Exits = []*model.ExitEntry{
+		{ID: "cf", Type: "proxyip", Value: "104.16.0.9"},                                                                                             // 官方网段 → 入口库
+		{ID: "px", Type: "proxyip", Value: "203.0.113.2"},                                                                                            // 其余 → 出口库
+		{ID: "markE", Type: "proxyip", Value: "198.51.100.3", UsableAsEntry: &yes},                                                                   // 手动标过入口 → 入口库
+		{ID: "markX", Type: "proxyip", Value: "104.16.0.10", UsableAsEntry: &no},                                                                     // 手动标过出口 → 出口库
+		{ID: "cfL", Type: "proxyip", Value: "https://x/cf.txt", Source: listSource, Expand: true, Resolved: []string{"104.17.0.1", "104.17.0.2"}},    // 全是官方网段的列表 → 入口库
+		{ID: "mixL", Type: "proxyip", Value: "https://x/mix.txt", Source: listSource, Expand: true, Resolved: []string{"104.17.0.3", "203.0.113.4"}}, // 混着 → 出口库
+		{ID: "empty", Type: "proxyip", Value: "https://x/none.txt", Source: listSource, Expand: true, Resolved: []string{}},                          // 还没拉到 → 出口库
+		{ID: "dom", Type: "proxyip", Value: "pip.example.com", Expand: false},                                                                        // 不展开的域名 → 出口库
+		{ID: "s5", Type: "socks5", Value: "u:p@192.0.2.1:1080", UsableAsEntry: &yes},                                                                 // 全局出口 → 出口库
+		{ID: "vg", Type: "sstp", Value: vgSource, Source: vgSource, Expand: true},
+		{ID: "new", Type: "proxyip", Value: "104.16.0.11", Pool: poolExit}, // 已经分过的不动
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.migratePoolsLocked() {
+		t.Fatal("应迁移")
+	}
+	want := map[string]string{"cf": "entry", "px": "exit", "markE": "entry", "markX": "exit", "cfL": "entry", "mixL": "exit", "empty": "exit", "dom": "exit", "s5": "exit", "vg": "exit", "new": "exit"}
+	for _, e := range a.Exits {
+		if e.Pool != want[e.ID] || libOf(e) != want[e.ID] || e.UsableAsEntry != nil {
+			t.Errorf("%s：迁移成 %q（%s），应为 %q；老标签应清掉：%v", e.ID, e.Pool, libOf(e), want[e.ID], e.UsableAsEntry)
+		}
+	}
+	if a.migratePoolsLocked() {
+		t.Fatal("第二次不该再改")
+	}
+	// 迁移后不再按网段判：出口库的列表后来拉到的全是官方网段，也还在出口库；入口库的列表拉到非官方网段的也还是入口
+	a.exitLocked("empty").Resolved = []string{"104.17.0.9"}
+	a.exitLocked("cfL").Resolved = []string{"203.0.113.50"}
+	a.migratePoolsLocked()
+	if libOf(a.exitLocked("empty")) != poolExit || libOf(a.exitLocked("cfL")) != poolEntry {
+		t.Fatal("迁移后不该再自动改库")
+	}
+	if !strings.Contains(fmt.Sprint(func() (o []string) {
+		for _, n := range a.entryPoolLocked() {
+			o = append(o, n.key())
+		}
+		return
+	}()), "203.0.113.50:443") {
+		t.Fatal("入口库里的地址不论网段都是入口")
+	}
+}
+
+// 导入进哪个库由用户在哪个库里导入决定；两库完全隔离：另一个库已有的地址不收，入口库不收全局出口，列表更新时去掉另一个库已有的。
+func TestImportIntoPools(t *testing.T) {
+	a := healApp(t)
+	a.Subs = []*model.Subscription{etSub(a, "A", "甲", "104.16.0.1")}
+	res, err := a.ImportExits("104.16.5.5\n203.0.113.7:443\ncf.example.org\nsocks5://u:p@192.0.2.1:1080\n", "entry")
+	if err != nil || res.Added != 3 || res.Wrong != 1 {
+		t.Fatalf("入口库导入：%+v %v", res, err)
+	}
+	res, err = a.ImportExits("203.0.113.7\n104.16.0.1\n203.0.113.8\nsocks5://u:p@192.0.2.1:1080\n", "exit")
+	if err != nil || res.Added != 2 || res.Other != 2 {
+		t.Fatalf("出口库导入：已在入口库（含订阅节点地址）的不收：%+v %v", res, err)
+	}
+	if _, err := a.ImportExits("vpngate", "entry"); err == nil {
+		t.Fatal("VPN Gate 不能进入口库")
+	}
+	if _, err := a.ImportExits("socks5://u:p@192.0.2.2:1080", "entry"); err == nil {
+		t.Fatal("入口库只导全局出口时应提示")
+	}
+	if res, _ := a.ImportExits("203.0.113.8", "entry"); res.Added != 0 || res.Other != 1 {
+		t.Fatalf("已在出口库的不能再进入口库：%+v", res)
+	}
+	a.mu.Lock()
+	lib := map[string]string{}
+	for _, e := range a.Exits {
+		lib[e.Value] = e.Pool
+	}
+	a.mu.Unlock()
+	if lib["104.16.5.5"] != "entry" || lib["203.0.113.7:443"] != "entry" || lib["cf.example.org"] != "entry" || lib["203.0.113.8"] != "exit" || lib["u:p@192.0.2.1:1080"] != "exit" {
+		t.Fatalf("各进各的库：%v", lib)
+	}
+	// 列表：出口库里的列表拉到入口库已有的地址，不收
+	u, set := listServer(t)
+	set(200, "104.16.5.5\n203.0.113.9\n")
+	if res, err := a.ImportExits(u, "exit"); err != nil || res.Lists != 1 || res.ListAddrs != 1 {
+		t.Fatalf("列表里已在入口库的地址不该进出口库：%+v %v", res, err)
+	}
+	// 同一个列表网址再到入口库导：不收
+	if res, _ := a.ImportExits(u, "entry"); res.Other != 1 || res.Added != 0 {
+		t.Fatalf("同一个列表网址不能两个库都有：%+v", res)
+	}
+	// 独立 IP 整组编辑只动自己那个库
+	if _, removed, _, err := a.SetLoose("104.16.5.5\n", "entry"); err != nil || removed != 1 {
+		t.Fatalf("编辑入口库的独立 IP：应删掉 203.0.113.7：%v %d", err, removed)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if e := exitByValue(a, "203.0.113.8"); e == nil || e.Pool != poolExit {
+		t.Fatal("编辑入口库的独立 IP 不该动出口库的")
+	}
+}
+
+func exitByValue(a *App, v string) *model.ExitEntry {
+	for _, e := range a.Exits {
+		if e.Value == v {
+			return e
+		}
+	}
+	return nil
 }
 
 // 全局统一入口：几个实例（不同订阅）在同一时刻用同一个入口；钉死 / 改回自动时全部一起换；钉的那个没了暂时按自动走。
@@ -326,5 +423,65 @@ func TestSubExitsSync(t *testing.T) {
 	}
 	if left["proxyip|203.0.113.7:443"] != "S" || left["proxyip|203.0.113.9:443"] != "" {
 		t.Fatalf("还在的留着；用户自己的不动：%v", left)
+	}
+}
+
+// 入口和出口彻底不联动（decisions N-13）：入口只按分数 / 延迟全局挑，不看任何国家（实例限了出口国家也不管）；
+// 换入口不动任何实例的出口；出口没限国家时照用当前的（含“不指定”），当前的没了才在出口库里挑，和入口落在哪国无关。
+func TestEntryExitDecoupled(t *testing.T) {
+	a := healApp(t)
+	a.Subs = []*model.Subscription{etSub(a, "A", "甲", "104.16.0.1", "104.16.0.2")}
+	a.Exits = []*model.ExitEntry{
+		{ID: "px1", Type: "proxyip", Value: "203.0.113.1", Pool: poolExit},
+		{ID: "px2", Type: "proxyip", Value: "203.0.113.2", Pool: poolExit},
+	}
+	a.scan[entryName("104.16.0.1:443")] = &model.NodeScan{Delay: 30, Exit: &model.IPInfo{Country: "US"}, CF: &model.IPInfo{Country: "US"}}
+	a.scan[entryName("104.16.0.2:443")] = &model.NodeScan{Delay: 200, Exit: &model.IPInfo{Country: "JP"}, CF: &model.IPInfo{Country: "JP"}}
+	a.scan[pipName("203.0.113.1:443")] = &model.NodeScan{Delay: 100, CF: &model.IPInfo{Country: "JP"}}
+	a.scan[pipName("203.0.113.2:443")] = &model.NodeScan{Delay: 50, CF: &model.IPInfo{Country: "DE"}}
+	tuneProbe = func(int, []string) model.ExitProbe { return model.ExitProbe{CF: &model.IPInfo{Country: "JP"}} }
+	defer func() { tuneProbe = defaultTuneProbe }()
+	mk := func(region, exit string) *model.Instance {
+		in := a.testInst(t)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		in.Proxy.State, in.Proxy.SubscriptionID, in.Proxy.ExitMode, in.Proxy.Region, in.Proxy.ExitID, in.Proxy.EntryRegion = "on", "A", "auto", region, exit, "JP"
+		a.rtLocked(in.ID).active = true
+		return in
+	}
+	jp := mk("JP", "")        // 出口限日本
+	keep := mk("", "px1")     // 没限国家，当前用 px1
+	none := mk("", "")        // 没限国家，“不指定”
+	lost := mk("", "deleted") // 没限国家，当前的已经不在出口库
+	a.mu.Lock()
+	cur, _ := a.entryCurLocked()
+	if cur.key() != "104.16.0.1:443" {
+		a.mu.Unlock()
+		t.Fatalf("入口应全局挑延迟最低的（不管实例限了日本、入口落在美国）：%s", cur.key())
+	}
+	sub := a.Subs[0]
+	for _, in := range []*model.Instance{jp, keep, none, lost} {
+		a.pickExitLocked(in, sub, nil)
+	}
+	if pipID(jp) != "px1" || pipID(keep) != "px1" || pipID(none) != "" || pipID(lost) != "px2" {
+		a.mu.Unlock()
+		t.Fatalf("出口：限日本→px1；没限国家照用当前→px1、不指定→不指定；当前的没了→出口库里最好的 px2（和入口国家无关）：%q %q %q %q", pipID(jp), pipID(keep), pipID(none), pipID(lost))
+	}
+	a.mu.Unlock()
+	// 换入口（落在日本的那个）：谁的出口都不动；再走一遍出口自动也不动
+	if err := a.SetEntry("104.16.0.2:443", false); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, in := range []*model.Instance{jp, keep, none, lost} {
+		before := pipID(in)
+		a.pickExitLocked(in, sub, nil)
+		if pipID(in) != before {
+			t.Fatalf("换入口后出口不该跟着换：%q → %q", before, pipID(in))
+		}
+	}
+	if pipID(keep) != "px1" || pipID(none) != "" {
+		t.Fatal("换入口后没限国家的实例出口应保持")
 	}
 }
