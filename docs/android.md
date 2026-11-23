@@ -12,7 +12,7 @@
 | 多实例 | 每个实例 = `GeckoSessionSettings.contextId("mt-<id>")` 的容器，Cookie / 存储 / 缓存隔离；每实例一组标签页，切实例只换显示的那组，后台实例的会话一直活着 |
 | 核心服务 | **和电脑版是同一个程序**（`cmd/masktab`，随包 `jniLibs/<abi>/libmasktab.so`，app 把它当子进程以 `-host android` 启动，决策 D-4）：实例、订阅（含 edgetunnel）、出口 / 入口选线、测速、密码库都是它管 |
 | 代理 | mihomo 安卓二进制随包（`jniLibs/<abi>/libmihomo.so`），由核心服务生成配置并启动；每个实例一个本地 mixed 入站（端口 21000 + 编号）；内置扩展用 `proxy.onRequest` 按标签所属实例分流 |
-| 指纹 | 每实例种子；UA 是安卓火狐（只换 Android 版本号）；内置扩展在 document_start 改页面：画布 / 音频噪声、核数、屏幕、语言、时区；Gecko 指纹保护打开 |
+| 指纹 | 每实例种子；UA 用内核原样的安卓火狐 UA；Gecko 指纹保护（FPP）管画布随机化、核数分档、屏幕；时区由内核按标签页设（实验接口，decisions A-21），页面里只留音频噪声和时区兜底；语言用内核原生设置 |
 | 密码库 | 核心服务的密码库（和电脑版同一份代码）；密钥由 Android Keystore 包着，启动时交给核心服务；按实例隔离；复用桌面 `autofill.js` |
 | 实例管理 | 复用桌面 `instances.js` 的 `lite` 模式（一行一张卡片、站点图标、长按拖动排序、账号与 Cookie 抽屉、导入邮箱） |
 | 界面 | 新标签页、设置各页、节点与出口、指纹与伪装、订阅与地址库、实例管理、诊断的内容都和电脑版共用同一份文件（`ntp.js` `pages.js` `panel.js` `instances.js`，样式 `ui.css`），手机只有外壳（工具栏、浮层、返回键、系统栏）是自己的 |
@@ -105,13 +105,13 @@ android/
 
 ### 指纹
 
-- UA：`GeckoSession.getDefaultUserAgent()` 按种子把 `Android N` 换成 12–15 之一；`rv:` 与内核版本照实写，不伪装成 Chrome。
+- UA：`GeckoSession.getDefaultUserAgent()` 原样（2026-11-23 起不再按种子换 Android 版本号，它和 `navigator.appVersion` 对不上，decisions A-20）。
 - 页面（`ext/fp.js`）：通过 `window.wrappedJSObject` + `exportFunction` 改页面自己的原型，不插 `<script>`（会被 CSP 拦）。
-  画布 `getImageData` / `toDataURL` / `toBlob` 加位置相关的最低位噪声；`AudioBuffer.getChannelData` 幂等噪声；`hardwareConcurrency` 4/6/8；`screen.availHeight` 少 0–32 像素；
-  `navigator.language(s)`；时区：`getTimezoneOffset`、本地时间各分量、`toString` 系列、`toLocale*`、`Intl.DateTimeFormat`（没指定时区的格式化器）。
+  `AudioBuffer.getChannelData` 幂等噪声；时区兜底（内核按标签页的时区覆盖没生效时）：`getTimezoneOffset`、本地时间各分量、`toString` 系列、`toLocale*`、`Intl.DateTimeFormat`（没指定时区的格式化器）。
+  画布、`hardwareConcurrency`、`screen.availHeight` 不再在页面里改，交给内核 FPP（主线程和 Worker 一致，decisions A-20）。
   `deviceMemory` 火狐本来不暴露。时区与语言默认跟随出口，可在“指纹与时区”里固定。`Accept-Language` 请求头由后台按实例改写。
 - 注入时机（第二版改过，决策 A-7）：每个网页和内嵌框架在 `document_start` 由 `fp-boot.js` **同步**向后台要本标签页所属实例的参数——发一条消息（后台据此认出标签页 → 实例）加一个同步请求（后台把参数放在跳转地址里交回），拿到立刻装上，早于网页自己的脚本。每个页面多花约 10–40 毫秒（沙箱桌面火狐实测）。同步没拿到时退回异步（向 app 要），这时页面最早的脚本可能看到真实值；日志 `MaskTab 指纹参数 <域名> #<编号> 同步|异步|没装上` 能看出走的哪条路。
-- Gecko 偏好（`geckoview-config.yaml`）：`privacy.fingerprintingProtection`、WebRTC 只走代理且不暴露本机地址、关闭 Service Worker（见下文限制）、关闭内核自带的记住密码。
+- Gecko 偏好（`geckoview-config.yaml`）：`network.proxy.type: 0`（不用系统代理，代理失败不切换，decisions A-18）、关 DNS 预取 / 预连接、`privacy.fingerprintingProtection`、WebRTC 只走代理且不暴露本机地址、关闭 Service Worker（见下文限制）、关闭内核自带的记住密码。
 - 验证：沙箱里真火狐 160 装上整个内置扩展，两个实例各开自检页 `android/scripts/fpcheck.html`，各拿到各的时区 / 语言；CI 模拟器（GeckoView）里同样的检查见“验证情况”。**真机没有验证。**
 
 ### 密码库与自动填写

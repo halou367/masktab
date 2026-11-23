@@ -809,3 +809,8 @@ v0.1.55 只套了 UI-9 的四条规则，页面还是旧样子，需求方不认
 ## 动效（2026-11-21，分支 fix/ui-motion，UI-33）
 - 基于最新 main（94ec99c）合入 fix/ui-jank（UI-32、悬停意图延迟），再加：弹窗先按上次高度撑开（去小白条）、离开收起 0.18 秒、实例启动中 ＋ 转圈 + 色条走光。
 - go test ./internal/tabbar ./internal/core 通过（沙箱 linux）；Windows 真机未测。
+
+## 手机伪装与直连泄露（2026-11-23，分支 fix/android-fp，decisions A-18 ~ A-22）
+- 按安卓指纹体检报告修：内核 `network.proxy.type: 0`（线路断了 / 被拒绝不再从系统代理 FlClash 出去）、关预取预连接、拒绝改 SOCKS 型、非网页请求不再直连（A-18）；
+  语言不再被追加系统语言（A-19）；核数、画布、可用屏幕高度、UA 版本号交给内核（A-20）；时区由内核按标签页设、Worker 一起对（A-21，实验接口）；Service Worker 只评估、仍关（A-22）。
+- 本地：`check.sh fast`、`pages` 通过，Kotlin 类型检查通过。模拟器结果见 decisions 各条“验证”。真机没测。

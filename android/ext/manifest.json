@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "MaskTab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MaskTab 安卓版内置扩展：按实例分流代理、页面指纹、自动填写、实例菜单与管理页。",
   "browser_specific_settings": {
     "gecko": { "id": "masktab@halou367" }
@@ -26,6 +26,9 @@
     "128": "assets/icon128.png"
   },
   "web_accessible_resources": ["fpcfg.json"],
+  "experiment_apis": {
+    "mtEmu": { "schema": "exp/schema.json", "parent": { "scopes": ["addon_parent"], "script": "exp/api.js", "paths": [["mtEmu"]] } }
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

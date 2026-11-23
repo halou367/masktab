@@ -58,15 +58,12 @@ class Inst(
 
 object Fp {
     /**
-     * 与种子对应的安卓火狐 UA：内核版本照实写（rv 与实际引擎一致，不伪装成 Chrome、不改版本号），
-     * 只按种子换“Android 版本号”，不同实例不同、同一实例不变。
+     * 安卓火狐 UA：用内核原样的（decisions A-20）。以前按种子把“Android 版本号”换成 12–15，但 navigator.appVersion 由内核按真系统版本拼
+     * （Gecko Navigator::GetAppVersion 不看会话 UA，只认全局偏好），两者一比就对不上（体检时模拟器里 UA “Android 12”、appVersion “Android 15”）。
+     * 版本号本身信息量很小（Gecko 只对 10 以上照实报），不值得为它露这个破绽。参数 seed 留着，调用处不用改。
      */
-    fun userAgent(seed: Long): String {
-        val base = GeckoSession.getDefaultUserAgent()
-        if ("ua" in Host.fpOff) return base // 人机验证诊断：用内核原本的 UA
-        val v = listOf(12, 13, 14, 15)[((seed ushr 5) % 4).toInt()]
-        return base.replace(Regex("Android [0-9.]+"), "Android $v")
-    }
+    @Suppress("UNUSED_PARAMETER")
+    fun userAgent(seed: Long): String = GeckoSession.getDefaultUserAgent()
 
     /** 交给内置扩展的每实例参数（页面里的伪装由扩展的 fp.js 按种子推导）。 */
     fun cfg(i: Inst): JSONObject = jsonOf("id" to i.id, "no" to i.no, "seed" to i.seed, "tz" to i.tz, "lang" to i.lang, "port" to i.port, "direct" to false, "off" to JSONArray(Host.fpOff.toList()))

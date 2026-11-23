@@ -1,0 +1,18 @@
+[
+  {
+    "namespace": "mtEmu",
+    "description": "MaskTab 内置扩展的实验接口：按标签页设内核的时区覆盖（BrowsingContext.timezoneOverride）。",
+    "functions": [
+      {
+        "name": "setTimezone",
+        "type": "function",
+        "async": true,
+        "description": "把标签页顶层浏览上下文的时区覆盖设成 tz（空串 = 取消覆盖，用系统时区）。返回设之后内核里的值。",
+        "parameters": [
+          { "name": "tabId", "type": "integer", "minimum": 0 },
+          { "name": "tz", "type": "string" }
+        ]
+      }
+    ]
+  }
+]

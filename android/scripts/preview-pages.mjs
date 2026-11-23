@@ -226,13 +226,13 @@ if (want('flow')) {
     check(`设置 → ${label}`, i.hash === route && i.title === title, i);
     if (label === '指纹与伪装') check('指纹与伪装：列出 10 项一致性检查', i.chk === 10, i);
     if (label === '人机验证诊断') {
-      // 手机专有（决策 A-9）：11 个伪装项各一个开关；“全部关掉”把 11 项写进设置；被拒绝的请求能列出来
+      // 手机专有（决策 A-9）：8 个伪装项各一个开关（A-20 去掉了画布、核数屏幕、UA 三项）；“全部关掉”把 8 项写进设置；被拒绝的请求能列出来
       const nsw = await pg.locator('.row .sw, .row [role=switch], .row input[type=checkbox]').count();
-      check('人机验证诊断：11 个伪装项各有一个开关', nsw === 11, nsw);
+      check('人机验证诊断：8 个伪装项各有一个开关', nsw === 8, nsw);
       await pg.locator('button.row', { hasText: '全部关掉' }).first().click();
       await pg.waitForTimeout(300);
       const b = (await calls()).filter((c) => c.m === 'PATCH' && c.p === '/api/settings').pop()?.b;
-      check('“全部关掉”把 11 项写进设置的 fpOff', Array.isArray(b?.fpOff) && b.fpOff.length === 11 && b.fpOff.includes('cfframe') && b.fpOff.includes('block'), b);
+      check('“全部关掉”把 8 项写进设置的 fpOff', Array.isArray(b?.fpOff) && b.fpOff.length === 8 && b.fpOff.includes('cfframe') && b.fpOff.includes('block'), b);
       await pg.locator('button.row', { hasText: '验证失败之后马上点这里' }).first().click();
       await pg.waitForTimeout(300);
       const txt = await pg.locator('#root, body').first().innerText();
@@ -1562,22 +1562,23 @@ if (want('groups')) for (const w of [412, 320]) {
 }
 console.log(flow.join('\n'));
 
-// fp.js：在普通页面环境里直接改 window，检查各项是否生效、同种子稳定、不同种子不同
+// fp.js：在普通页面环境里直接改 window。画布、核数、可用屏幕高度不再在页面里改（decisions A-20，交给内核 FPP）；时区照改（内核覆盖没生效时的兜底）
 if (want('fp')) {
   const pg = await ctx.newPage();
   await pg.goto(base + 'newtab.html#inst=p2&go=about:blank');
   await pg.addScriptTag({ path: path.join(dir, 'fp.js') });
   const fp = await pg.evaluate(() => {
     const draw = () => { const c = document.createElement('canvas'); c.width = 120; c.height = 40; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 120, 40); x.fillStyle = '#069'; x.font = '16px sans-serif'; x.fillText('MaskTab 指纹', 4, 26); return c.toDataURL(); };
-    const before = draw();
+    const before = draw(), cores0 = navigator.hardwareConcurrency, avail0 = screen.availHeight;
     const prof1 = window.MTFP.profile(111), prof2 = window.MTFP.profile(222);
     const ok = window.MTFP.run(window, { seed: 111, tz: 'Asia/Tokyo', lang: 'ja-JP' });
     const after1 = draw(), after2 = draw();
     const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
-    return { ok, changed: before !== after1, stable: after1 === after2, cores: navigator.hardwareConcurrency, prof1, prof2, lang: navigator.language, langs: [...navigator.languages],
+    return { ok, changed: before !== after1, stable: after1 === after2, cores: navigator.hardwareConcurrency === cores0, avail: screen.availHeight === avail0, prof1, prof2, lang: navigator.language, langs: [...navigator.languages],
       tzo: d.getTimezoneOffset(), hours: d.getHours(), str: d.toString(), loc: d.toLocaleString('en-US'), intl: new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false }).format(d), ro: Intl.DateTimeFormat().resolvedOptions().timeZone };
   });
   console.log(JSON.stringify(fp, null, 1));
+  check('fp.js 不再改画布 / 核数 / 可用屏幕高度（交给内核 FPP，主线程和 Worker 一致，A-20）；时区照改', fp.ok && !fp.changed && fp.stable && fp.cores && fp.avail && fp.tzo === -540 && fp.hours === 9 && fp.ro === 'Asia/Tokyo', fp);
   // 人机验证诊断关掉某几项时，fp.js 对应的部分保持内核原样，其余照改
   const pg2 = await ctx.newPage();
   await pg2.goto(base + 'newtab.html#inst=p2&go=about:blank');
@@ -1587,11 +1588,11 @@ if (want('fp')) {
     const draw = () => { const c = document.createElement('canvas'); c.width = 60; c.height = 20; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 60, 20); x.fillStyle = '#069'; x.fillText('MaskTab', 4, 14); return c.toDataURL(); };
     const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
     const b = { cv: draw(), tzo: d.getTimezoneOffset(), lang: navigator.language, cores: navigator.hardwareConcurrency, nat: Date.prototype.getTimezoneOffset };
-    window.MTFP.run(window, { seed: 111, tz: 'Pacific/Kiritimati', lang: 'ja-JP', off: ['canvas', 'tz', 'hw'] });
+    window.MTFP.run(window, { seed: 111, tz: 'Pacific/Kiritimati', lang: 'ja-JP', off: ['tz'] });
     return { cv: draw() === b.cv, tz: d.getTimezoneOffset() === b.tzo && Date.prototype.getTimezoneOffset === b.nat, cores: navigator.hardwareConcurrency === b.cores, lang: navigator.language };
   });
-  check('诊断关掉画布 / 时区 / 核心数：这三样保持原样；语言默认不在页面里改（A-10，改由内核原生设置）', fp2.cv && fp2.tz && fp2.cores && fp2.lang === b0lang, fp2);
-  console.log(flow[flow.length - 1]);
+  check('诊断关掉时区：时区保持原样；画布、核心数本来就不改；语言默认不在页面里改（A-10，改由内核原生设置）', fp2.cv && fp2.tz && fp2.cores && fp2.lang === b0lang, fp2);
+  console.log(flow.slice(-2).join('\n'));
 }
 // 下载内容页（决策 A-14）：四种状态各一条；窄屏上长文件名省略、右边的按钮不被挤出去；点一条 = 打开，按钮各发各的请求。
 const dl0 = flow.length;

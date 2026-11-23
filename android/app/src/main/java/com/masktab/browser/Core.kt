@@ -128,7 +128,14 @@ object Core {
 
     // ---------- 内核 ----------
 
-    /** Gecko 偏好：开指纹保护；WebRTC 只走代理、不暴露本机地址；关 Service Worker（它的请求不带标签页，没法按实例分流，见 docs/android.md）。 */
+    /**
+     * Gecko 偏好：开指纹保护；WebRTC 只走代理、不暴露本机地址；关 Service Worker（它的请求不带标签页，没法按实例分流，见 docs/android.md）。
+     * 代理（decisions A-18）：network.proxy.type = 0（不用系统代理）。默认的 5 = 跟系统，Gecko 会把系统代理（开着 FlClash 时就是它）
+     * 接在扩展返回的代理后面当备用：实例线路断了、被拒绝的请求会改从系统代理出去。设成 0 以后内核没有“默认代理”，也不做代理失败切换，
+     * 线路断了就是断了（R-1）。只管 Gecko 的网络：核心服务（Go）、mihomo、Kotlin 里的 HttpURLConnection 不走 Gecko，不受影响。
+     * 以前写的 network.proxy.failover_direct 在正式版内核里不存在（只在 MOZ_PROXY_DIRECT_FAILOVER 编译开关下），已删。
+     * DNS 预取、链接预取、预测器、推测连接都关掉：它们在本机解析域名或提前建连接，不经实例线路的 proxyDNS。
+     */
     private fun writeGeckoConfig(): String {
         val f = File(app.filesDir, "geckoview-config.yaml")
         // 人机验证诊断（决策 A-9）可以把这两项暂时还原成内核默认；重启 app 生效
@@ -141,9 +148,15 @@ object Core {
               media.peerconnection.ice.proxy_only_if_behind_proxy: true
               media.peerconnection.ice.default_address_only: true
               media.peerconnection.ice.no_host: true
+              network.proxy.type: 0
               network.proxy.socks_remote_dns: true
-              network.proxy.failover_direct: false
               network.proxy.allow_bypass: false
+              network.dns.disablePrefetch: true
+              network.dns.disablePrefetchFromHTTPS: true
+              network.prefetch-next: false
+              network.predictor.enabled: false
+              network.predictor.enable-prefetch: false
+              network.http.speculative-parallel-limit: 0
               dom.serviceWorkers.enabled: $sw
               signon.rememberSignons: false
             """.trimIndent() + "\n",
@@ -525,7 +538,7 @@ object Core {
     fun extState(): JSONObject {
         val arr = JSONArray()
         for (i in Host.insts) arr.put(Fp.cfg(i))
-        return jsonOf("t" to "state", "insts" to arr, "searchUrl" to Host.searchUrl, "off" to JSONArray(Host.fpOff.toList()))
+        return jsonOf("t" to "state", "insts" to arr, "searchUrl" to Host.searchUrl, "cur" to (Host.cur()?.id ?: ""), "off" to JSONArray(Host.fpOff.toList()))
     }
     /** 重启整个 app（人机验证诊断改了内核偏好之后用）：先请系统重新打开主界面，再结束本进程；核心服务随输入管道关闭自己退出。 */
     fun restartApp() {
@@ -540,7 +553,10 @@ object Core {
     /**
      * 网页语言（决策 A-10）：用内核原生设置，按当前显示的实例走。内核给出的 navigator.language(s)、Worker 里的 navigator、
      * Accept-Language 请求头、Intl 默认语言都跟着变，彼此一致（JS 注入改不到 Worker，会被 Turnstile 判 600010）。
-     * 代价：GeckoRuntime 全局只有一份，后台实例的标签页也会跟着当前实例的语言；GeckoView 还会把系统语言追加在后面（computeAcceptLanguages）。
+     * 代价：GeckoRuntime 全局只有一份，后台实例的标签页也会跟着当前实例的语言。
+     * 系统语言（decisions A-19）：GeckoView 的 computeAcceptLanguages 会把 LocaleList.getDefault()（系统 / 本 app 的语言）无条件追加在后面，
+     * 网页里 navigator.languages 变成 en-US,en,zh-CN、请求头也带 zh-CN。所以调 setLocales 时临时把进程的默认语言换成实例语言，
+     * 调完马上换回来：setLocales → commitLocales 是同步的，只在这一瞬间读默认语言；我们在主线程里调，app 自己的界面按 Configuration 取资源，不受影响。
      */
     private var appliedLang = "" // "" = 系统语言（启动时内核本来就是系统语言，不用设）
     fun applyLocale() {
@@ -555,7 +571,25 @@ object Core {
             val ll = android.os.LocaleList.getDefault()
             (0 until ll.size()).map { ll.get(it).toLanguageTag() }.ifEmpty { listOf(java.util.Locale.getDefault().toLanguageTag()) }
         }
-        try { rt.settings.setLocales(locs.toTypedArray()); logi("网页语言 → ${locs.joinToString(",")}${if (l.isEmpty()) "（系统）" else ""}") } catch (e: Exception) { logw("设置网页语言失败", e) }
+        try { withDefaultLocales(if (l.isNotEmpty()) locs else null) { rt.settings.setLocales(locs.toTypedArray()) }; logi("网页语言 → ${locs.joinToString(",")}${if (l.isEmpty()) "（系统）" else ""}") } catch (e: Exception) { logw("设置网页语言失败", e) }
+    }
+
+    /** 在 [f] 执行期间把进程的默认语言换成 [tags]（null = 不换），之后原样换回（LocaleList 和 Locale 的各类别都还原）。 */
+    private inline fun withDefaultLocales(tags: List<String>?, f: () -> Unit) {
+        if (tags == null) { f(); return }
+        val oldList = android.os.LocaleList.getDefault()
+        val oldLoc = java.util.Locale.getDefault()
+        val oldFmt = java.util.Locale.getDefault(java.util.Locale.Category.FORMAT)
+        val oldDisp = java.util.Locale.getDefault(java.util.Locale.Category.DISPLAY)
+        try {
+            android.os.LocaleList.setDefault(android.os.LocaleList.forLanguageTags(tags.joinToString(",")))
+            f()
+        } finally {
+            android.os.LocaleList.setDefault(oldList)
+            java.util.Locale.setDefault(oldLoc)
+            java.util.Locale.setDefault(java.util.Locale.Category.FORMAT, oldFmt)
+            java.util.Locale.setDefault(java.util.Locale.Category.DISPLAY, oldDisp)
+        }
     }
 
     /**
