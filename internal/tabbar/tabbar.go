@@ -10,6 +10,7 @@ package tabbar
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -66,10 +67,9 @@ func (r Rect) Move(dx, dy int) Rect { return Rect{r.L + dx, r.T + dy, r.R + dx, 
 
 // 实例栏的尺寸（100% 缩放下的像素；乘以缩放比例后使用）。
 const (
-	BarH    = 38  // 栏高（含压在窗口上的那一截）
-	tabH    = 26  // 标签高
-	tabMaxW = 190 // 标签最宽
-	tabMinW = 44  // 再窄就只剩编号
+	BarH    = 38 // 栏高（含压在窗口上的那一截）
+	tabH    = 26 // 标签高
+	tabMinW = 44 // 再窄就只剩编号（× 也不画）
 	tabGap  = 4
 	padX    = 8  // 栏左右留白
 	plusW   = 28 // “＋”
@@ -77,41 +77,94 @@ const (
 	// 栏的下沿压住窗口上沿多少。内核窗口最上面有 6 像素只是标题栏的底色（标签页从第 7 像素开始），
 	// 栏用同一个颜色压住其中 5 像素：窗口上面两个圆角留出的缺口被盖住，栏和窗口看起来是一整块
 	Overlap = 5
+
+	// 标签的宽（decisions UI-34，需求方：“最小的长短多长，展开的实例标签就多长，这样长的就是当前的短的就是其他”）：
+	// 当前的约是别的两倍；别的最宽 otherMax、最窄 otherMin（再窄就不挤了，改成左右滚）；当前的至少 activeMin（名字要认得出）、最宽 activeMax。
+	otherMax  = 120
+	otherMin  = 76
+	activeMin = 150
+	activeMax = 240
+	fadeW     = 18 // 滚动时两头渐隐多宽（那一头后面还有东西才画）
 )
 
-// Slot 是一个标签占的位置（相对实例栏左上角）。
+// Slot 是一个标签占的位置（相对实例栏左上角，已经按滚动挪过）。
 type Slot struct {
 	Tab   Rect
 	Close Rect // “×”；标签太窄时为空
 }
 
 // Layout 是一排标签的排版结果。
+// 收起的色条和展开的标签用的是同一份（Strip 只是把高度换成色条那一条），所以展开时水平方向一点不动，只往下长（UI-34）。
 type Layout struct {
-	Slots []Slot
-	Plus  Rect
+	Slots  []Slot
+	Plus   Rect
+	View   Rect // 标签能露出来的那一段（左右）：放不下时标签在这里面左右滚，两边以外不画、点不到
+	Scroll int  // 滚过去了多少
+	Max    int  // 最多能滚多少（0 = 放得下，不用滚）
+	Active int  // 当前的是第几个（没有 = -1）
 }
 
 func px(v int, scale float64) int { return int(float64(v)*scale + 0.5) }
 
-// Lay 把 n 个标签排进宽 width 的实例栏：平分空间，最宽 tabMaxW，排不下就一起变窄。
-func Lay(width, n int, scale float64) Layout {
-	var l Layout
+// TabWidths 给出 n 个标签各多宽：当前的（active）约是别的两倍，地方不够先一起变窄，窄到 otherMin 就不再窄（交给滚动）。
+// room 是能放标签的地方（不含标签之间的缝）。
+func TabWidths(room, n, active int, scale float64) []int {
+	out := make([]int, n)
+	if n == 0 {
+		return out
+	}
+	oMax, oMin, aMin, aMax := px(otherMax, scale), px(otherMin, scale), px(activeMin, scale), px(activeMax, scale)
+	if active < 0 || active >= n {
+		u := min(max(room/n, oMin), oMax)
+		for i := range out {
+			out[i] = u
+		}
+		return out
+	}
+	if n == 1 {
+		out[0] = min(max(room, aMin), aMax)
+		return out
+	}
+	u := min(room/(n+1), oMax)
+	a := min(max(2*u, aMin), aMax)
+	if a > 2*u { // 当前的要保证认得出：先给够它，剩下的别的平分
+		u = min((room-a)/(n-1), oMax)
+	}
+	u = max(u, oMin)
+	a = min(max(2*u, aMin), aMax)
+	for i := range out {
+		out[i] = u
+	}
+	out[active] = a
+	return out
+}
+
+// Lay 把 n 个标签排进宽 width 的实例栏。active：当前的是第几个（没有传 -1），它约是别的两倍宽；
+// scroll：滚过去多少（放得下时不用滚，超出范围的自动收回来）。放不下时 ＋ 钉在右边，标签在 View 里左右滚。
+func Lay(width, n, active, scroll int, scale float64) Layout {
+	l := Layout{Active: active}
+	if active >= n {
+		l.Active = -1
+	}
 	pad, gap, plus, h := px(padX, scale), px(tabGap, scale), px(plusW, scale), px(tabH, scale)
 	top := (px(BarH-Overlap, scale)-h)/2 + px(1, scale) // 在没压住窗口的那一截里居中，略靠下
 	if n <= 0 {
+		l.View = Rect{pad, top, pad, top + h}
 		l.Plus = Rect{pad, top, pad + plus, top + h}
 		return l
 	}
-	room := width - 2*pad - plus - gap*n
-	w := room / n
-	if m := px(tabMaxW, scale); w > m {
-		w = m
+	avail := width - 2*pad - plus - gap // 标签连同它们之间的缝能用的地方（＋ 前面也隔一条缝）
+	ws := TabWidths(avail-gap*(n-1), n, l.Active, scale)
+	content := gap * (n - 1)
+	for _, w := range ws {
+		content += w
 	}
-	if w < px(12, scale) {
-		w = px(12, scale)
-	}
-	x := pad
-	for i := 0; i < n; i++ {
+	view := min(content, max(avail, 0))
+	l.View = Rect{pad, top, pad + view, top + h}
+	l.Max = content - view
+	l.Scroll = min(max(scroll, 0), l.Max)
+	x := pad - l.Scroll
+	for _, w := range ws {
 		s := Slot{Tab: Rect{x, top, x + w, top + h}}
 		if w >= px(tabMinW+closeW, scale) {
 			c := px(closeW, scale)
@@ -120,8 +173,85 @@ func Lay(width, n int, scale float64) Layout {
 		l.Slots = append(l.Slots, s)
 		x += w + gap
 	}
-	l.Plus = Rect{x, top, x + plus, top + h}
+	l.Plus = Rect{l.View.R + gap, top, l.View.R + gap + plus, top + h}
 	return l
+}
+
+// Reveal 返回让第 i 个标签整个露出来要滚到哪儿（已经露全了就原样返回 scroll）；两边各留一点，免得正好压在渐隐里。
+func (l Layout) Reveal(i, scroll int, scale float64) int {
+	if i < 0 || i >= len(l.Slots) || l.Max == 0 {
+		return scroll
+	}
+	m := min(px(fadeW, scale), max((l.View.W()-l.Slots[i].Tab.W())/2, 0))
+	at := l.Slots[i].Tab.Move(l.Scroll, 0) // 不滚时它在哪
+	switch {
+	case at.L-scroll < l.View.L+m:
+		scroll = at.L - l.View.L - m
+	case at.R-scroll > l.View.R-m:
+		scroll = at.R - l.View.R + m
+	}
+	return min(max(scroll, 0), l.Max)
+}
+
+// Shown 报告第 i 个标签是不是整个露在 View 里。
+func (l Layout) Shown(i int) bool {
+	return i >= 0 && i < len(l.Slots) && l.Slots[i].Tab.L >= l.View.L && l.Slots[i].Tab.R <= l.View.R
+}
+
+// Fades 报告两头要不要渐隐：那一头后面还有滚出去的标签才画。
+func (l Layout) Fades() (left, right bool) { return l.Scroll > 0, l.Scroll < l.Max }
+
+// ---------- 滚动（UI-34）：实例多到放不下时，滚轮上下 = 左右滚；收起、展开共用一个位置 ----------
+
+// Scroller 是一条栏的滚动位置：Pos 是现在画在哪儿，Goal 是要滚到哪儿。滚轮一格不跳过去，每帧走剩下的一截（先快后慢）。
+type Scroller struct{ Pos, Goal float64 }
+
+// wheelStep 是滚轮一格（120）滚多少像素（100% 缩放）。
+const wheelStep = 96
+
+// Wheel 接一次滚轮：delta 是系统给的（一格 ±120；触控板、高精度滚轮会给零碎的小数），horiz 是横向滚轮 / 触控板横划。
+// 纵向：往上（delta > 0）= 往左；横向：往右（delta > 0）= 往右。返回滚动位置变没变。
+// 零碎的（不到一格）当场跟过去：触控板自己带惯性，再加一层缓动反而发飘；整格的交给 Step 走过去。
+func (s *Scroller) Wheel(delta int, horiz bool, max int, scale float64) bool {
+	if max <= 0 {
+		return false
+	}
+	d := float64(delta) / 120 * float64(wheelStep) * scale
+	if !horiz {
+		d = -d
+	}
+	old := s.Goal
+	s.Goal = math.Max(0, math.Min(float64(max), s.Goal+d))
+	if delta%120 != 0 {
+		s.Pos = math.Max(0, math.Min(float64(max), s.Pos+(s.Goal-old)))
+	}
+	return s.Goal != old
+}
+
+// scrollTau：Step 的快慢。约 3 倍（≈ 140 毫秒）走完，和展开的 150 毫秒一个节奏，都是一开始最快（UI-17、UI-33）。
+const scrollTau = 45 * time.Millisecond
+
+// Step 往 Goal 走 dt 这一段，返回画面要不要重画（整数像素变了）。
+func (s *Scroller) Step(dt time.Duration) bool {
+	if s.Pos == s.Goal {
+		return false
+	}
+	old := int(math.Round(s.Pos))
+	k := 1 - math.Exp(-float64(dt)/float64(scrollTau))
+	s.Pos += (s.Goal - s.Pos) * k
+	if math.Abs(s.Goal-s.Pos) < 0.5 {
+		s.Pos = s.Goal
+	}
+	return int(math.Round(s.Pos)) != old
+}
+
+// Px 是现在该画在哪儿（整数像素）。
+func (s *Scroller) Px() int { return int(math.Round(s.Pos)) }
+
+// Clamp 在排版变了（宽度、实例数变了）以后把位置收回能滚的范围里。
+func (s *Scroller) Clamp(max int) {
+	m := float64(max)
+	s.Pos, s.Goal = math.Max(0, math.Min(m, s.Pos)), math.Max(0, math.Min(m, s.Goal))
 }
 
 // 点到了什么。
@@ -135,6 +265,9 @@ const (
 // Hit 返回 (x, y) 落在哪里；HitTab / HitClose 时 idx 是第几个标签。
 func (l Layout) Hit(x, y int) (kind, idx int) {
 	for i, s := range l.Slots {
+		if x < l.View.L || x >= l.View.R { // 滚出去的那一截：看不见，也点不到
+			break
+		}
 		if s.Close.W() > 0 && s.Close.Has(x, y) {
 			return HitClose, i
 		}
@@ -170,7 +303,7 @@ func Over(bar Rect, x, y int, scale float64) bool {
 // Carry 给出窗口该挪多少：挪完以后，它自己那条实例栏的第一个标签上被抓住的那一点正好在鼠标 (x, y) 底下。
 // vis 是窗口现在看得见的那一圈；grabX 是抓的那一点离标签左边多远，grabY 是离栏顶多远。
 func Carry(vis Rect, x, y, grabX, grabY int, scale float64) (dx, dy int) {
-	return carry(BarRect(vis, scale), Lay(vis.W(), 1, scale).Slots[0].Tab, x, y, grabX, grabY, scale)
+	return carry(BarRect(vis, scale), Lay(vis.W(), 1, 0, 0, scale).Slots[0].Tab, x, y, grabX, grabY, scale)
 }
 
 func carry(bar, tab Rect, x, y, grabX, grabY int, scale float64) (dx, dy int) {
@@ -212,7 +345,7 @@ func Filled(win, vis, work Rect, scale float64) Rect {
 // ---------- 自动收起（decisions UI-17）：平时是窗口顶上的一条色条，鼠标放上去才展开 ----------
 //
 // 收起：每个实例一小段颜色，画在窗口最上面 5 像素里（那里本来只是标题栏的底色），不出窗口的边。
-// 一样粗、段与段之间的缝一样宽；当前的那段是实例自己的颜色、和标签一样宽，别的暗一些灰一些、短一些（见 Strip、StripColor）。
+// 一样粗；每一段的左右就是展开后它那个标签的左右（UI-34），当前的约是别的两倍长、是实例自己的颜色，别的暗一些灰一些（见 Strip、StripColor）。
 // 接鼠标的那一条比看得见的色条高：还包括窗口上沿外面的 4 像素（看不见）。这一条是实例栏自己的窗口：
 // 鼠标到了上面不会变成“改窗口大小”的箭头，也拖不到窗口，只管展开。
 // 展开：整条栏盖在浏览器自己那排标签页上，鼠标离开就收回去。右上角三个窗口按钮不盖。
@@ -224,39 +357,31 @@ const (
 	openDY  = 6   // 展开时标签比平时靠下这么多：stripUp，再加 2（和浏览器的标签页一样从窗口的第 7 个像素开始）
 )
 
-// stripShort 是色条里没选中的那一段有多长（占标签的宽的几成）。
-const stripShort = 0.55
-
-// Strip 是收起时的色条：每个实例一段（相对实例栏左上角），从第一个标签的左边起一段挨一段排，**段与段之间的缝都一样宽**（和标签之间的缝一样）。
-// 都一样粗、都在窗口里面；当前的（active，没有就传 -1）和标签一样宽，别的短。所以除了第一段，色条和展开后的标签左右对不上，展开时各自滑过去。
-func Strip(l Layout, active int, scale float64) []Rect {
+// Strip 是收起时的色条：每个实例一段（相对实例栏左上角）。**左右和展开后的标签一模一样**（同一份排版、同一个滚动位置），
+// 只是高度是窗口最上面那一条（UI-34，需求方：“最小的长短多长，展开的实例标签就多长……不会位移相当于拉下来了”）。
+// 当前的约是别的两倍长（排版定的），颜色见 StripColor。滚出 View 的部分不画（Morph 里裁掉）。
+// （UI-17 那一版色条一段挨一段排、别的只有标签的 55%，展开时各自横着滑过去；需求方嫌会位移、对不上。）
+func Strip(l Layout, scale float64) []Rect {
 	out := make([]Rect, len(l.Slots))
-	if len(out) == 0 {
-		return out
-	}
-	gap, x := stripGap(l, scale), l.Slots[0].Tab.L
 	for i, s := range l.Slots {
-		w := s.Tab.W()
-		if i != active {
-			w = int(float64(w)*stripShort + 0.5)
-		}
-		out[i] = Rect{x, px(stripUp, scale), x + w, px(StripH, scale)}
-		x += w + gap
+		out[i] = Rect{s.Tab.L, px(stripUp, scale), s.Tab.R, px(StripH, scale)}
 	}
 	return out
 }
 
-func stripGap(l Layout, scale float64) int {
-	if len(l.Slots) > 1 {
-		return l.Slots[1].Tab.L - l.Slots[0].Tab.R
-	}
-	return px(tabGap, scale)
+// PlusStrip 是收起时 ＋ 那一段（淡淡的一小段，和展开后的 ＋ 左右对齐）。
+func PlusStrip(l Layout, scale float64) Rect {
+	return Rect{l.Plus.L, px(stripUp, scale), l.Plus.R, px(StripH, scale)}
 }
 
-// StripHit 报告收起时横坐标 x（相对实例栏左边）落在色条的第几段上；缝算给近的那一段，色条以外返回 -1。
-func StripHit(l Layout, active, x int, scale float64) int {
-	half := (stripGap(l, scale) + 1) / 2
-	for i, r := range Strip(l, active, scale) {
+// StripHit 报告收起时横坐标 x（相对实例栏左边）落在色条的第几段上；缝算给近的那一段，滚出 View 的、色条以外返回 -1。
+func StripHit(l Layout, x int, scale float64) int {
+	if x < l.View.L-px(4, scale) || x >= l.View.R+px(4, scale) {
+		return -1
+	}
+	x = min(max(x, l.View.L), l.View.R-1)
+	half := (px(tabGap, scale) + 1) / 2
+	for i, r := range Strip(l, scale) {
 		if x >= r.L-half && x < r.R+half {
 			return i
 		}
@@ -280,7 +405,8 @@ func CompactRect(vis Rect, scale float64, open bool) Rect {
 
 // Down 把整个排版往下挪 d。
 func (l Layout) Down(d int) Layout {
-	out := Layout{Plus: l.Plus.Move(0, d)}
+	out := l
+	out.Slots, out.Plus, out.View = nil, l.Plus.Move(0, d), l.View.Move(0, d)
 	for _, s := range l.Slots {
 		if s.Close.W() > 0 {
 			s.Close = s.Close.Move(0, d)
@@ -292,19 +418,18 @@ func (l Layout) Down(d int) Layout {
 }
 
 // LayCompact 是自动收起时的排版：和平时一样，只是靠下一点。色条的每一段就是对应标签的左右位置。
-func LayCompact(width, n int, scale float64) Layout {
-	return Lay(width, n, scale).Down(px(openDY, scale))
+func LayCompact(width, n, active, scroll int, scale float64) Layout {
+	return Lay(width, n, active, scroll, scale).Down(px(openDY, scale))
 }
 
-// Band 是收起时“鼠标放上去就展开”的那一条（相对实例栏左上角）：左右是整条色条再各放宽 4 像素，
-// 上下是窗口上沿外面 stripUp 加色条的高。色条有多长和哪个是当前的无关（标签都一样宽）。没有实例时是 ＋ 的位置。
-// 段与段之间的缝也算（画的时候这一条整个都接鼠标），不然鼠标正好落在缝里就漏到下面的窗口上去了。
+// Band 是收起时“鼠标放上去就展开”的那一条（相对实例栏左上角）：左右是露出来的色条到 ＋ 那一段，两头再各放宽 4 像素，
+// 上下是窗口上沿外面 stripUp 加色条的高。没有实例时是 ＋ 的位置。
+// 段与段之间的缝也算（画的时候这一条整个都接鼠标），不然鼠标正好落在缝里就漏到下面的窗口上去了；鼠标在这一条上滚滚轮也归这条栏（UI-34）。
 func Band(l Layout, scale float64) Rect {
 	if len(l.Slots) == 0 {
 		return Rect{l.Plus.L, 0, l.Plus.R, px(StripH, scale)}
 	}
-	st := Strip(l, 0, scale)
-	return Rect{max(0, st[0].L-px(4, scale)), 0, st[len(st)-1].R + px(4, scale), px(StripH, scale)}
+	return Rect{max(0, max(l.View.L, l.Slots[0].Tab.L)-px(4, scale)), 0, l.Plus.R + px(4, scale), px(StripH, scale)}
 }
 
 // Reach 报告鼠标是不是在收起的色条上（该展开了）。
@@ -369,7 +494,7 @@ func Stay(open Rect, x, y int, scale float64) bool {
 // CarryCompact 同 Carry，用于自动收起的栏（拖着的时候它是展开的）。
 func CarryCompact(vis Rect, x, y, grabX, grabY int, scale float64) (dx, dy int) {
 	bar := CompactRect(vis, scale, true)
-	return carry(bar, LayCompact(bar.W(), 1, scale).Slots[0].Tab, x, y, grabX, grabY, scale)
+	return carry(bar, LayCompact(bar.W(), 1, 0, 0, scale).Slots[0].Tab, x, y, grabX, grabY, scale)
 }
 
 // FilledCompact 同 Filled，用于自动收起的栏：窗口占满可用区域（色条在窗口里面，上面不用让）。

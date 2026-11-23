@@ -52,7 +52,7 @@
 | 伴随扩展换版本后后台跟着换（决策 EXT-2） | `internal/core/launch.go` 的 `writeCompanion`（后台脚本叫 `sw-<版本号>.js`）、`companion/ext/swlife.js`（装好就接手）；测试 `companion_test.go`、`scripts/sw-upgrade-e2e.mjs`（进 `check.sh ext`） |
 | 在线更新 | `internal/update`（查版本）、`internal/core/update*.go`（下载安装；先走节点见 `nodeSources`，实测 `scripts/update-node-e2e.mjs`）、`installer/masktab.nsi`、手机 `Updater.kt` |
 | Windows 任务栏图标 | `internal/tbicon`、`internal/core/taskbar_windows.go` |
-| 合并窗口（Windows，实例标签栏；拖出来 / 并进去分成几组） | `internal/tabbar`（排版和判断 `tabbar.go`、`render.go`；几组和拖动 `bar_windows.go`；画 `paint_windows.go`）、`internal/core/mergewin.go`；真机调试 `scripts/win-dev.ps1`（`drag` / `snap`）；decisions UI-15、UI-16 |
+| 合并窗口（Windows，实例标签栏；拖出来 / 并进去分成几组） | `internal/tabbar`（排版和判断 `tabbar.go`、`render.go`；几组和拖动 `bar_windows.go`；画 `paint_windows.go`）、`internal/core/mergewin.go`；真机调试 `scripts/win-dev.ps1`（`drag` / `snap`）；宽度、滚动、色条对齐见 UI-34（页面检查 `instbar` 段：`cmd/instbar-preview` 编成 WebAssembly + `scripts/instbar-preview.html`）；decisions UI-15、UI-16 |
 | 程序入口、命令行参数 | `cmd/masktab/main.go` |
 
 ## 界面（`companion/ext`，手机共用其中一部分）

@@ -6,30 +6,121 @@ import (
 )
 
 func TestLay(t *testing.T) {
-	l := Lay(1200, 3, 1)
-	if len(l.Slots) != 3 || l.Slots[0].Tab.W() != tabMaxW {
-		t.Fatalf("三个标签、地方够：每个该是最宽 %d，得到 %+v", tabMaxW, l.Slots)
+	// 地方够：别的最宽 otherMax，当前的是它两倍（UI-34）
+	l := Lay(1200, 3, 1, 0, 1)
+	if len(l.Slots) != 3 || l.Slots[0].Tab.W() != otherMax || l.Slots[1].Tab.W() != 2*otherMax || l.Max != 0 {
+		t.Fatalf("三个标签、地方够：别的 %d、当前的 %d，得到 %+v max %d", otherMax, 2*otherMax, l.Slots, l.Max)
 	}
 	if l.Slots[1].Tab.L != l.Slots[0].Tab.R+tabGap || l.Plus.L != l.Slots[2].Tab.R+tabGap {
 		t.Fatalf("标签之间、和＋之间隔 %d：%+v ＋%+v", tabGap, l.Slots, l.Plus)
 	}
-	// 挤：20 个标签排进 600 宽，不能超出去，× 收起来
-	l = Lay(600, 20, 1)
-	if l.Plus.R > 600-padX+1 {
-		t.Fatalf("20 个标签排进 600 宽，＋超出去了：%+v", l.Plus)
+	// 有点挤：一起变窄，当前的还是两倍
+	l = Lay(1000, 9, 2, 0, 1)
+	o, a := l.Slots[0].Tab.W(), l.Slots[2].Tab.W()
+	if l.Max != 0 || a < 2*o-1 || a > 2*o+1 || o >= otherMax || l.Plus.R > 1000-padX {
+		t.Fatalf("9 个排进 1000：别的 %d 当前 %d max %d ＋%v", o, a, l.Max, l.Plus)
 	}
-	if l.Slots[0].Close.W() != 0 {
-		t.Fatalf("标签很窄时不该有 ×：%+v", l.Slots[0])
+	// 再挤：当前的至少 activeMin（名字认得出），别的窄到 otherMin 就不再窄，改成滚；＋ 钉在右边，标签不压到 ＋ 上
+	l = Lay(600, 20, 0, 0, 1)
+	if l.Slots[1].Tab.W() != otherMin || l.Slots[0].Tab.W() != max(activeMin, 2*otherMin) || l.Max <= 0 {
+		t.Fatalf("20 个排进 600：%v max %d", l.Slots[:2], l.Max)
+	}
+	if l.Plus.R != 600-padX || l.View.R+tabGap != l.Plus.L || l.View.L != padX {
+		t.Fatalf("放不下时 ＋ 钉在右边：view %v ＋%v", l.View, l.Plus)
+	}
+	if l.Slots[1].Close.W() == 0 {
+		t.Fatal("别的标签最窄时也还有 ×（悬停时画）")
+	}
+	// 滚：整排往左挪，超出范围的收回来
+	r := Lay(600, 20, 0, 100, 1)
+	if r.Scroll != 100 || r.Slots[3].Tab.L != l.Slots[3].Tab.L-100 || r.Plus != l.Plus {
+		t.Fatalf("滚 100：%v ＋%v", r.Slots[3], r.Plus)
+	}
+	if Lay(600, 20, 0, 99999, 1).Scroll != l.Max || Lay(600, 20, 0, -5, 1).Scroll != 0 || Lay(1200, 3, 1, 50, 1).Scroll != 0 {
+		t.Fatal("滚动没收在范围里")
+	}
+	// 没有当前的：一样宽
+	if l := Lay(1200, 3, -1, 0, 1); l.Slots[0].Tab.W() != l.Slots[1].Tab.W() || l.Active != -1 {
+		t.Fatalf("没有当前的：%v", l.Slots)
+	}
+	// 只有一个：当前的那么宽
+	if l := Lay(1200, 1, 0, 0, 1); l.Slots[0].Tab.W() != 2*otherMax {
+		t.Fatalf("一个：%v", l.Slots)
 	}
 	// 放大 150%
-	l = Lay(1800, 2, 1.5)
-	if l.Slots[0].Tab.W() != 285 || l.Slots[0].Tab.H() != 39 {
-		t.Fatalf("150%% 缩放：%+v", l.Slots[0].Tab)
+	l = Lay(1800, 2, 0, 0, 1.5)
+	if l.Slots[0].Tab.W() != 360 || l.Slots[1].Tab.W() != 180 || l.Slots[0].Tab.H() != 39 {
+		t.Fatalf("150%% 缩放：%+v", l.Slots)
+	}
+}
+
+// 实例多到放不下（UI-34）：滚到当前的、看得见的才点得到、滚轮
+func TestScroll(t *testing.T) {
+	l := Lay(700, 16, 12, 0, 1)
+	if l.Shown(12) {
+		t.Fatalf("没滚时第 13 个不该露全：%v view %v", l.Slots[12], l.View)
+	}
+	go1 := l.Reveal(12, 0, 1)
+	r := Lay(700, 16, 12, go1, 1)
+	if !r.Shown(12) || r.Slots[12].Tab.R > r.View.R-fadeW || go1 <= 0 {
+		t.Fatalf("Reveal 以后第 13 个该整个露出来、不压在渐隐里：%v view %v", r.Slots[12], r.View)
+	}
+	if r.Reveal(12, go1, 1) != go1 {
+		t.Fatal("已经露全了就别再动")
+	}
+	if Lay(700, 16, 0, go1, 1).Reveal(0, go1, 1) != 0 {
+		t.Fatal("滚回第一个")
+	}
+	// View 外面点不到：滚出去的那一截点在 ＋ 前面的缝里不算标签
+	if k, _ := r.Hit(r.View.R+1, r.View.T+5); k != HitNone {
+		t.Fatalf("View 外面点到了 %d", k)
+	}
+	if k, i := r.Hit((r.Slots[12].Tab.L+r.Slots[12].Tab.R)/2, r.View.T+5); k != HitTab || i != 12 {
+		t.Fatalf("点当前的：%d %d", k, i)
+	}
+	// 滚轮：往下 = 往右，一格不跳过去、每帧走一截（先快后慢）
+	var s Scroller
+	if !s.Wheel(-120, false, r.Max, 1) || s.Goal != wheelStep || s.Pos != 0 {
+		t.Fatalf("往下滚一格：%+v", s)
+	}
+	s.Step(16 * time.Millisecond)
+	first := s.Pos
+	for i := 0; i < 30; i++ {
+		s.Step(16 * time.Millisecond)
+	}
+	if first < wheelStep*0.25 || first > wheelStep*0.5 || s.Pos != s.Goal {
+		t.Fatalf("缓动：第一帧 %.1f，最后 %.1f", first, s.Pos)
+	}
+	s.Wheel(120, false, r.Max, 1) // 往上 = 往左
+	if s.Goal != 0 {
+		t.Fatalf("往上滚回去：%+v", s)
+	}
+	for i := 0; i < 100; i++ { // 一直往下滚：停在最右
+		s.Wheel(-120, false, r.Max, 1)
+	}
+	if s.Goal != float64(r.Max) {
+		t.Fatalf("滚到底：%+v max %d", s, r.Max)
+	}
+	// 触控板横划：零碎的，当场跟上、方向照原样（往右划 = 往右）
+	var tp Scroller
+	tp.Wheel(30, true, r.Max, 1)
+	if tp.Pos != tp.Goal || tp.Pos != wheelStep/4 {
+		t.Fatalf("触控板：%+v", tp)
+	}
+	// 放得下：不滚
+	var n Scroller
+	if n.Wheel(-120, false, 0, 1) || n.Goal != 0 {
+		t.Fatal("放得下时不该滚")
+	}
+	n.Pos, n.Goal = 300, 300
+	n.Clamp(100)
+	if n.Pos != 100 || n.Goal != 100 {
+		t.Fatal("Clamp")
 	}
 }
 
 func TestHit(t *testing.T) {
-	l := Lay(1200, 2, 1)
+	l := Lay(1200, 2, 0, 0, 1)
 	s := l.Slots[1]
 	for _, c := range []struct {
 		name      string
@@ -115,7 +206,7 @@ func TestLabelAndColor(t *testing.T) {
 func TestDraw(t *testing.T) {
 	blue, red := [3]int{26, 115, 232}, [3]int{217, 48, 37}
 	lk := LookOn(FrameGuess(red))
-	l := Lay(800, 2, 1)
+	l := Lay(800, 2, 0, 0, 1)
 	c := Draw(800, l, []TabPaint{{Color: red, Active: true}, {Color: blue}}, lk, 1, false)
 	mid := func(r Rect) [3]int { return c.At(r.L+20, (r.T+r.B)/2) }
 	if mid(l.Slots[0].Tab) != red {
@@ -177,7 +268,7 @@ func TestCarry(t *testing.T) {
 	dx, dy := Carry(vis, 640, 480, 40, 12, 1)
 	moved := vis.Move(dx, dy)
 	bar := BarRect(moved, 1)
-	tab := Lay(moved.W(), 1, 1).Slots[0].Tab
+	tab := Lay(moved.W(), 1, 0, 0, 1).Slots[0].Tab
 	if bar.L+tab.L+40 != 640 || bar.T+12 != 480 {
 		t.Fatalf("抓的那一点没在鼠标底下：栏 %+v 标签 %+v", bar, tab)
 	}
@@ -212,18 +303,18 @@ func TestCompact(t *testing.T) {
 	if r := CompactRect(Rect{0, 0, 300, 400}, 1, false); r.R != 300 {
 		t.Fatalf("窄窗口不该再让出按钮：%v", r)
 	}
-	l := LayCompact(open.W(), 3, 1)
+	l := LayCompact(open.W(), 3, 0, 0, 1)
 	if l.Slots[0].Tab.T != 10 || l.Slots[0].Tab.B != 36 || l.Slots[0].Tab.L != 8 {
 		t.Fatalf("展开时标签该从窗口的第 7 个像素开始：%v", l.Slots[0].Tab)
 	}
 	if k, i := l.Hit(300, 20); k != HitTab || i != 1 {
 		t.Fatalf("展开后点第二个标签：%d %d", k, i)
 	}
-	// 鼠标在色条那一条上才算（段与段之间的缝、两头各 4 像素也算）；窗口里面（标题栏、浏览器的标签页）、色条右边的空白不算
+	// 鼠标在色条那一条上才算（段与段之间的缝、＋ 那一小段、两头各 4 像素也算）；窗口里面（标题栏、浏览器的标签页）、色条右边的空白不算
 	for _, c := range []struct {
 		x, y int
 		want bool
-	}{{150, 196, true}, {150, 204, true}, {150, 205, false}, {150, 195, false}, {299, 200, true}, {515, 200, true}, {525, 200, false}, {105, 200, true}, {102, 200, false}, {720, 200, false}, {900, 200, false}} {
+	}{{150, 196, true}, {150, 204, true}, {150, 205, false}, {150, 195, false}, {299, 200, true}, {515, 200, true}, {525, 200, true}, {631, 200, true}, {633, 200, false}, {105, 200, true}, {102, 200, false}, {720, 200, false}, {900, 200, false}} {
 		if got := Reach(shut, l, c.x, c.y, 1); got != c.want {
 			t.Fatalf("Reach(%d,%d) = %v", c.x, c.y, got)
 		}
@@ -235,7 +326,7 @@ func TestCompact(t *testing.T) {
 	dx, dy := CarryCompact(vis, 640, 480, 40, 12, 1)
 	moved := vis.Move(dx, dy)
 	bar := CompactRect(moved, 1, true)
-	tab := LayCompact(bar.W(), 1, 1).Slots[0].Tab
+	tab := LayCompact(bar.W(), 1, 0, 0, 1).Slots[0].Tab
 	if bar.L+tab.L+40 != 640 || bar.T+12 != 480 {
 		t.Fatalf("挪完以后抓的点在 %d,%d", bar.L+tab.L+40, bar.T+12)
 	}
@@ -249,31 +340,29 @@ func TestCompact(t *testing.T) {
 func TestMorph(t *testing.T) {
 	red, blue, yellow := [3]int{217, 48, 37}, [3]int{26, 115, 232}, [3]int{249, 171, 0}
 	lk := LookOn([3]int{249, 171, 0}) // 标题栏是黄的
-	l := LayCompact(800, 3, 1)
+	l := LayCompact(800, 3, 2, 0, 1)
 	tabs := []TabPaint{{Color: red}, {Color: blue}, {Color: yellow, Active: true}}
 	mid := func(i int) int { return (l.Slots[i].Tab.L + l.Slots[i].Tab.R) / 2 }
 
-	// 收着：只有色条。一段挨一段排，缝都一样宽（和标签之间的缝一样）；选中的和标签一样宽，没选中的短
-	st := Strip(l, 2, 1)
-	gap := l.Slots[1].Tab.L - l.Slots[0].Tab.R
-	if st[0].L != l.Slots[0].Tab.L || st[1].L-st[0].R != gap || st[2].L-st[1].R != gap {
-		t.Fatalf("色条的缝不一样宽：%v", st)
-	}
-	if st[2].W() != l.Slots[2].Tab.W() || st[0].W() != st[1].W() || st[0].W() >= st[2].W()*2/3 || st[0].W() < st[2].W()/3 {
-		t.Fatalf("色条的长短：%v", st)
-	}
-	for on := -1; on < 3; on++ { // 换一个当前的，缝还是一样宽，整条一样长（没有当前的除外）
-		o := Strip(l, on, 1)
-		if o[1].L-o[0].R != gap || o[2].L-o[1].R != gap || (on >= 0 && o[2].R != st[2].R) {
-			t.Fatalf("当前是第 %d 个时：%v", on, o)
+	// 收着：只有色条。每一段的左右和展开后的标签一模一样（UI-34：展开只是往下拉，水平不动）；当前的约是别的两倍长
+	st := Strip(l, 1)
+	for i := range st {
+		if st[i].L != l.Slots[i].Tab.L || st[i].R != l.Slots[i].Tab.R {
+			t.Fatalf("第 %d 段色条 %v 和标签 %v 左右对不上", i, st[i], l.Slots[i].Tab)
 		}
 	}
-	if b := Band(l, 1); b.L != st[0].L-4 || b.R != st[2].R+4 || b.T != 0 || b.B != 9 {
+	if d := st[2].W() - 2*st[0].W(); d < -1 || d > 1 || st[0].W() != st[1].W() {
+		t.Fatalf("色条的长短：%v", st)
+	}
+	if p := PlusStrip(l, 1); p.L != l.Plus.L || p.R != l.Plus.R {
+		t.Fatalf("＋ 那一段和 ＋ 对不上：%v %v", p, l.Plus)
+	}
+	if b := Band(l, 1); b.L != st[0].L-4 || b.R != l.Plus.R+4 || b.T != 0 || b.B != 9 {
 		t.Fatalf("接鼠标的那一条 %v", b)
 	}
-	// 按在色条上：算哪一段（缝算给近的），色条以外不算
-	for _, c := range [][2]int{{st[0].L + 3, 0}, {st[0].R + 1, 0}, {st[1].L - 1, 1}, {st[1].R - 1, 1}, {st[2].L + 50, 2}, {st[2].R + 1, 2}, {st[2].R + 9, -1}, {1, -1}} {
-		if got := StripHit(l, 2, c[0], 1); got != c[1] {
+	// 按在色条上：算哪一段（缝算给近的），＋ 那一段、色条以外不算
+	for _, c := range [][2]int{{st[0].L + 3, 0}, {st[0].R + 1, 0}, {st[1].L - 1, 1}, {st[1].R - 1, 1}, {st[2].L + 50, 2}, {st[2].R + 1, 2}, {l.Plus.L + 5, -1}, {st[2].R + 40, -1}} {
+		if got := StripHit(l, c[0], 1); got != c[1] {
 			t.Fatalf("StripHit(%d) = %d，该是 %d", c[0], got, c[1])
 		}
 	}
@@ -306,7 +395,10 @@ func TestMorph(t *testing.T) {
 			t.Fatalf("x=%d 该是一丝透明度：%d", x, alpha(x, 5))
 		}
 	}
-	for _, pt := range [][2]int{{2, 5}, {st[2].R + 6, 5}, {l.Plus.L + 5, 5}, {780, 5}, {smid(0), 20}, {300, 12}} { // 色条以外：全透明，点得穿
+	if alpha((l.Plus.L+l.Plus.R)/2, 6) != 255 || c.At((l.Plus.L+l.Plus.R)/2, 6) != PlusStripColor(lk) {
+		t.Fatalf("收着时 ＋ 那一小段该画出来：%d %v", alpha((l.Plus.L+l.Plus.R)/2, 6), c.At((l.Plus.L+l.Plus.R)/2, 6))
+	}
+	for _, pt := range [][2]int{{2, 5}, {l.Plus.R + 6, 5}, {780, 5}, {smid(0), 20}, {300, 12}} { // 色条以外：全透明，点得穿
 		if alpha(pt[0], pt[1]) != 0 {
 			t.Fatalf("%v 该是透明的", pt)
 		}
@@ -330,8 +422,8 @@ func TestMorph(t *testing.T) {
 
 	// 中间：标签长了一半，底色半透明、只铺到一半，字还没出来
 	c = Morph(800, l, tabs, lk, 1, 0.5, false)
-	r := MorphRect(l.Slots[1].Tab, st[1], 0.5) // 没选中的第二个：从色条里的位置滑到标签的位置，一边长宽
-	if r.T != 7 || r.B != 23 || r.L <= st[1].L || r.L >= l.Slots[1].Tab.L || r.R <= st[1].R || r.R >= l.Slots[1].Tab.R {
+	r := MorphRect(l.Slots[1].Tab, st[1], 0.5)                                       // 没选中的第二个：一半的时候往下长了一半
+	if r.T != 7 || r.B != 23 || r.L != l.Slots[1].Tab.L || r.R != l.Slots[1].Tab.R { // 只往下长，左右一点不动
 		t.Fatalf("一半的时候标签在 %v", r)
 	}
 	if MorphRect(l.Slots[1].Tab, st[1], 0) != st[1] || MorphRect(l.Slots[1].Tab, st[1], 1) != l.Slots[1].Tab {
@@ -419,7 +511,7 @@ func TestHoverIntent(t *testing.T) {
 
 // 有实例正在打开：＋ 变成转圈（和平时的 ＋ 画出来不一样），收起的色条上有光走过（UI-33）。
 func TestBusyPlus(t *testing.T) {
-	l := Lay(800, 2, 1)
+	l := Lay(800, 2, 0, 0, 1)
 	tabs := []TabPaint{{Color: [3]int{200, 40, 40}, Active: true}, {Color: [3]int{40, 40, 200}}}
 	lk := LookOn([3]int{30, 30, 30})
 	a := Draw(800, l, tabs, lk, 1, false)

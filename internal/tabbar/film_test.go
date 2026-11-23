@@ -23,10 +23,10 @@ func TestFilm(t *testing.T) {
 	}
 	shots := []shot{{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, EaseOut(0.08)}, {0, EaseOut(0.16)}, {0, EaseOut(0.3)}, {0, EaseOut(0.5)}, {0, 1}}
 	const w, rowH = 900, 64
-	l := LayCompact(w, len(cols), 1)
 	img := image.NewRGBA(image.Rect(0, 0, w, len(shots)*rowH))
 	for k, sh := range shots {
 		bg := bgs[sh.on]
+		l := LayCompact(w, len(cols), sh.on, 0, 1)
 		tabs := make([]TabPaint, len(cols))
 		for i := range cols {
 			tabs[i] = TabPaint{Color: cols[i], Active: i == sh.on}

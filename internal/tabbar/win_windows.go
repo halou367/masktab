@@ -72,6 +72,8 @@ var (
 	pGetAncestor              = user32.NewProc("GetAncestor")
 
 	pCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	pIntersectClipRect  = gdi32.NewProc("IntersectClipRect")
+	pSelectClipRgn      = gdi32.NewProc("SelectClipRgn")
 	pCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
 	pGetPixel           = gdi32.NewProc("GetPixel")
 	pGdiFlush           = gdi32.NewProc("GdiFlush")
@@ -153,6 +155,8 @@ const (
 	wmLButtonUp     = 0x0202
 	wmLButtonDbl    = 0x0203
 	wmMButtonUp     = 0x0208
+	wmMouseWheel    = 0x020A
+	wmMouseHWheel   = 0x020E
 	wmCaptureChange = 0x0215
 	wmMouseLeave    = 0x02A3
 	wmApp           = 0x8000 // 重新对一遍

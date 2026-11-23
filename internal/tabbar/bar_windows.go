@@ -45,6 +45,11 @@ type group struct {
 	hv       Hover     // 悬停的意图延迟和迟滞（tabbar.go 的 Hover）
 	pin      time.Time // 测试脚本刚发过鼠标消息：这之前不收起（真鼠标不在这儿）
 
+	// 放不下时左右滚（UI-34）：收起、展开共用一个位置
+	sc        Scroller
+	scAt      time.Time // 上一次往前走滚动是什么时候（Step 按这一段时间走）
+	revealKey string    // 当前实例 + 实例数 + 宽：变了就把当前实例滚到看得见
+
 	lastWin Rect // 当前窗口最近一次的外框：它没了以后，下一个摆在这里
 	normal  Rect // 没铺满时的外框
 	filled  bool // 铺满屏幕（代替最大化）
@@ -946,7 +951,8 @@ func (m *mgr) snapshot() {
 		}
 		x := map[string]any{"bar": g.hwnd, "shown": g.shown, "rect": g.rect, "scale": g.scale, "active": g.active, "activeNo": no[g.active],
 			"filled": g.filled, "slots": slots, "plus": g.lay.Plus, "bg": g.bg, "tabs": tabs, "drop": g.drop, "open": g.open,
-			"band": Band(g.lay, g.scale).Move(g.rect.L, g.rect.T)} // band：收着时鼠标放上去就展开的那一条（屏幕坐标），测试脚本用
+			"band": Band(g.lay, g.scale).Move(g.rect.L, g.rect.T),              // band：收着时鼠标放上去就展开的那一条（屏幕坐标），测试脚本用
+			"view": g.lay.View, "scroll": g.lay.Scroll, "scrollMax": g.lay.Max} // 放不下时左右滚（UI-34）
 		groups = append(groups, x)
 		if g == m.cur || cur == nil {
 			cur = x
@@ -1327,6 +1333,44 @@ func (g *group) mouseMove(x, y int) {
 	g.setHover(g.lay.Hit(x, y))
 }
 
+// wheel：鼠标在栏上（收着的色条或展开的栏）滚了滚轮（UI-34）。纵向滚轮 = 左右滚，横向滚轮、触控板横划照原方向。
+// 一格的交给 scrollTick 每帧走过去；触控板那种零碎的当场跟上。滚完鼠标底下换了标签，悬停跟着换。
+func (g *group) wheel(delta int, horiz bool) {
+	if !g.sc.Wheel(delta, horiz, g.lay.Max, g.scale) {
+		return
+	}
+	g.repaintIfChanged()
+	g.hoverAfterScroll()
+}
+
+func (g *group) hoverAfterScroll() {
+	if g.m.st.Compact && !g.open {
+		return
+	}
+	x, y := cursor()
+	g.setHover(g.lay.Hit(x-g.rect.L, y-g.rect.T))
+}
+
+// scrollTick 跟着定时器（约 16 毫秒一次）把还没走完的滚动往前走一截。
+func (m *mgr) scrollTick() {
+	now := time.Now()
+	for _, g := range m.groups {
+		if g.sc.Pos == g.sc.Goal {
+			g.scAt = time.Time{}
+			continue
+		}
+		dt := 16 * time.Millisecond
+		if !g.scAt.IsZero() {
+			dt = min(now.Sub(g.scAt), 50*time.Millisecond)
+		}
+		g.scAt = now
+		if g.sc.Step(dt) && g.shown {
+			g.repaintIfChanged()
+			g.hoverAfterScroll()
+		}
+	}
+}
+
 func (g *group) click(x, y, sx, sy int) {
 	m := g.m
 	m.cur = g
@@ -1434,6 +1478,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 					if m.st.Compact {
 						m.hoverTick()
 					}
+					m.scrollTick()
 					m.busyTick()
 					m.leave()
 				}
@@ -1478,6 +1523,12 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 			m.leave()
 		}
 		return 0
+	case wmMouseWheel, wmMouseHWheel:
+		if m.enter() {
+			g.wheel(int(int16(wp>>16)), ms == wmMouseHWheel)
+			m.leave()
+		}
+		return 0
 	case wmMouseMove, wmLButtonDown, wmLButtonDbl, wmLButtonUp, wmMButtonUp:
 	default:
 		return def()
@@ -1495,7 +1546,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 		case !g.open && !m.drag.on: // 正拖着的时候不走这里：松手、移动都要交给下面的拖动处理，不能在这儿吃掉
 			// 真鼠标到了收着的色条上：记下来，停够 HoverIn 就展开（定时器那边接着看）；按下去当场展开。
 			// 没动鼠标就直接按下去了（鼠标本来就停在这儿）：马上展开（不放过渡），按的是哪一段色条就当作点了哪个标签的正中间
-			// （色条是一段挨一段排的，和展开后的标签左右对不上，所以要换算）
+			// （色条和标签左右一样（UI-34），换算只是把高度挪到标签那一行；缝算给近的那一段）
 			if ms != wmLButtonDown {
 				if ms == wmMouseMove && g.wantOpen(false, time.Now()) {
 					g.setOpen(true)
@@ -1503,13 +1554,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 				}
 				return 0
 			}
-			on := -1
-			for i, t := range g.tabs {
-				if t.ID == g.active {
-					on = i
-				}
-			}
-			hit := StripHit(g.lay, on, x, g.scale)
+			hit := StripHit(g.lay, x, g.scale)
 			g.open = true
 			g.rect = Rect{}
 			g.place()
@@ -1521,13 +1566,7 @@ func wndProc(hwnd, ms, wp, lp uintptr) uintptr {
 			}
 		case ms == wmLButtonDown && y < px(StripH, g.scale) && time.Since(g.openedAt) < 400*time.Millisecond:
 			// 栏刚展开（不到 0.4 秒）就按在色条那几行上：人还来不及看展开后的标签，瞄的是色条里的那一段，照色条的位置算
-			on := -1
-			for i, t := range g.tabs {
-				if t.ID == g.active {
-					on = i
-				}
-			}
-			if hit := StripHit(g.lay, on, x, g.scale); hit >= 0 && hit < len(g.lay.Slots) {
+			if hit := StripHit(g.lay, x, g.scale); hit >= 0 && hit < len(g.lay.Slots) {
 				tab := g.lay.Slots[hit].Tab
 				x, y = (tab.L+tab.R)/2, (tab.T+tab.B)/2
 			}

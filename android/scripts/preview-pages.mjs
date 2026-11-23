@@ -14,12 +14,12 @@ const [dir, out, desk] = process.argv.slice(2).filter((a) => !a.startsWith('--')
 // 分段跑（--only=段名,段名）：整套要两分多钟，改哪一块就只跑哪一段；scripts/check.sh pages 会把各段分给几个进程同时跑。
 // 段名见下面每一段开头的 want('…')；不带 --only 就全跑。新加的检查放进合适的段，或者新开一段（记得写进 scripts/check.sh 的 PAGE_SECTIONS）。
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean);
-const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads', 'mail', 'jank'];
+const SECTIONS = ['shots', 'narrow', 'light', 'flow', 'newtab', 'desk', 'v6', 'tune', 'update', 'safe', 'import', 'a11y', 'heal', 'sstp', 'groups', 'fp', 'downloads', 'mail', 'jank', 'instbar'];
 for (const s of ONLY) if (!SECTIONS.includes(s)) { console.error(`没有这一段：${s}（有：${SECTIONS.join(' ')}）`); process.exit(2); }
 const took = []; let cur = null;
 const want = (name) => { const t = Date.now(); if (cur) took.push(`${cur.name} ${((t - cur.t) / 1000).toFixed(0)}s`); cur = null; const ok = !ONLY.length || ONLY.includes(name); if (ok) cur = { name, t }; return ok; };
 fs.mkdirSync(out, { recursive: true });
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json' };
+const types = { '.wasm': 'application/wasm', '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json' };
 const srv = http.createServer((q, r) => {
   const f = path.join(dir, decodeURIComponent(new URL(q.url, 'http://x').pathname));
   if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); r.end(); return; }
@@ -1989,6 +1989,95 @@ if (desk && want('jank')) {
   await ac.close(); jsrv.close();
 }
 if (flow.length > jl0) console.log(flow.slice(jl0).join('\n'));
+
+// ---------- 电脑的实例栏（决策 UI-34，2026-11-23 需求方：“最小的长短多长，展开的实例标签就多长，这样长的就是当前的短的就是其他，
+// 并且不会位移相当于拉下来了。并且特别多的时候滚轮滚动可以实现左右滑动滚动的效果来查看选取”） ----------
+// 实例栏是 Windows 上原生画的（internal/tabbar）；这里把同一份 Go 代码编成 WebAssembly（cmd/instbar-preview），
+// 在 scripts/instbar-preview.html 里画出来，用真鼠标悬停、真滚轮、真点击。字是页面画的（Windows 上由系统画）。实例名是假的。
+const il0 = flow.length;
+if (want('instbar')) {
+  if (!fs.existsSync(path.join(dir, 'instbar.wasm'))) check('实例栏：instbar.wasm 编出来了（scripts/check.sh pages 里编）', false, dir);
+  else {
+    const ic = await br.newContext({ viewport: { width: 940, height: 170 }, deviceScaleFactor: 2, locale: 'zh-CN' });
+    const ip = await ic.newPage(); watch(ip, 'instbar');
+    const info = () => ip.evaluate(() => window.__ib.info());
+    const until = async (f, ms = 3000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await ip.waitForTimeout(30)) { const v = await ip.evaluate(f); if (v) return v; } return null; };
+    const lr = (r) => [r.L, r.R];
+    const same = (a, b) => a.tabs.every((t, i) => t.now.L === b.tabs[i].now.L && t.now.R === b.tabs[i].now.R);
+    const shot = (name) => ip.screenshot({ path: `${out}/instbar-${name}.png`, clip: { x: 0, y: 0, width: 900, height: 100 } });
+    for (const set of ['many', 'few']) {
+      const nm = set === 'many' ? '多' : '少';
+      await ip.goto(base + `instbar-preview.html?set=${set}`);
+      await ip.waitForFunction(() => window.__ib?.ready, null, { timeout: 10000 });
+      const S = await ip.evaluate(() => window.__ib.S);
+      await ip.mouse.move(450, 140); // 鼠标先放在网页里
+      await ip.waitForTimeout(100);
+      const shut = await info();
+      await shot(`${set}-shut`);
+      const act = shut.tabs[shut.active], others = shut.tabs.filter((t, i) => i !== shut.active);
+      check(`实例栏（${nm}）：收起的色条和展开后的标签左右一模一样（每个实例、＋）`, shut.tabs.every((t) => t.strip.L === t.tab.L && t.strip.R === t.tab.R) && shut.plusStrip.L === shut.plus.L && shut.plusStrip.R === shut.plus.R, shut.tabs.map((t) => [lr(t.strip), lr(t.tab)]));
+      check(`实例栏（${nm}）：当前的比别的长（约两倍），别的一样长`, others.every((t) => t.tab.R - t.tab.L === others[0].tab.R - others[0].tab.L) && (act.tab.R - act.tab.L) >= 1.8 * (others[0].tab.R - others[0].tab.L), [act.tab, others[0].tab]);
+      check(`实例栏（${nm}）：当前的整个露在外面（没被滚出去）`, act.tab.L >= shut.view.L && act.tab.R <= shut.view.R, { tab: act.tab, view: shut.view });
+      // 悬停展开：过渡中途、展开以后，每个标签的左右都不动（只往下长）
+      const bx = (shut.band.L + shut.band.R) / 2 / S, by = (shut.band.T + shut.band.B) / 2 / S;
+      await ip.mouse.move(Math.min(bx, (act.tab.L + act.tab.R) / 2 / S), by);
+      const mid = await until(() => { const e = window.__ib.e(); return e > 0.05 && e < 0.95 ? window.__ib.info() : null; }, 1500);
+      const opened = await until(() => window.__ib.e() === 1 && window.__ib.info());
+      check(`实例栏（${nm}）：悬停展开，过渡中途和展开后每个标签的左右都和色条一样（零位移，只往下拉）`, !!mid && !!opened && same(shut, opened) && opened.tabs.every((t, i) => t.now.L === shut.tabs[i].strip.L && t.now.R === shut.tabs[i].strip.R) && mid.tabs.every((t, i) => t.now.L === shut.tabs[i].strip.L && t.now.R === shut.tabs[i].strip.R), { mid: mid && mid.tabs.slice(0, 3).map((t) => t.now), e: mid && mid.e });
+      await ip.mouse.move(Math.min(bx, (act.tab.L + act.tab.R) / 2 / S), 22);
+      await ip.waitForTimeout(250);
+      await shot(`${set}-open`);
+      if (set === 'many') {
+        check('实例栏（多）：放不下时能左右滚，＋ 钉在右边', shut.max > 0 && shut.plus.L === shut.view.R + 4 * S, { max: shut.max, view: shut.view, plus: shut.plus });
+        const a0 = await info();
+        await ip.mouse.move(300, 22);
+        await ip.mouse.wheel(0, -200); // 往上一格 = 往左（Playwright 在 2 倍屏上发 200 页面收到 deltaY = 100，算一格）
+        await ip.waitForTimeout(60);
+        const midScroll = await info();
+        await until(() => !window.__ib.moving());
+        const a1 = await info();
+        check('实例栏（多）：滚轮往上一格 = 往左滚，平滑走过去（中途有一帧在半路），整排一起挪', a1.scroll < a0.scroll && midScroll.scroll !== a1.scroll && a1.tabs.every((t, i) => t.tab.L - a0.tabs[i].tab.L === a0.scroll - a1.scroll) && a1.e === 1, { from: a0.scroll, mid: midScroll.scroll, to: a1.scroll });
+        for (let k = 0; k < 12; k++) await ip.mouse.wheel(0, 200); // 往下一直滚 = 滚到最右
+        await until(() => !window.__ib.moving());
+        const a2 = await info();
+        check('实例栏（多）：一直往下滚，停在最右（最后一个露出来）', a2.scroll === a2.max && a2.tabs[a2.tabs.length - 1].tab.R <= a2.view.R, { scroll: a2.scroll, max: a2.max });
+        await shot('many-open-scrolled');
+        // 展开时点选滚出来的最后一个：它成了当前的、变宽、仍然整个看得见（自己滚过去）
+        const lastT = a2.tabs[a2.tabs.length - 1];
+        await ip.mouse.click((lastT.tab.L + 20 * S) / S, (lastT.tab.T + lastT.tab.B) / 2 / S);
+        await until(() => !window.__ib.moving());
+        await ip.waitForTimeout(50);
+        const a3 = await info();
+        const l3 = a3.tabs[a3.tabs.length - 1];
+        check('实例栏（多）：滚过去点选最后一个，它成了当前的、变宽、整个看得见', a3.active === a3.tabs.length - 1 && l3.tab.R - l3.tab.L > lastT.tab.R - lastT.tab.L && l3.tab.L >= a3.view.L && l3.tab.R <= a3.view.R, { active: a3.active, tab: l3.tab, view: a3.view });
+        // 触控板横划：零碎的，当场跟上（不再缓动）、方向照原样
+        await ip.mouse.wheel(-30, 0);
+        await ip.waitForTimeout(30);
+        const a4 = await info();
+        check('实例栏（多）：触控板往左划，当场往左滚', a4.scroll < a3.scroll && a4.pos === a4.goal, { from: a3.scroll, to: a4.scroll });
+        // 收起：和展开共用同一个滚动位置，色条还是对着标签
+        await ip.mouse.move(450, 150);
+        const s2 = await until(() => window.__ib.e() === 0 && window.__ib.info(), 2000);
+        check('实例栏（多）：收起后滚动位置不变（收起、展开共用），色条和标签左右一样', !!s2 && s2.scroll === a4.scroll && s2.tabs.every((t) => t.strip.L === t.tab.L && t.strip.R === t.tab.R), { scroll: s2 && s2.scroll, want: a4.scroll });
+        await shot('many-shut-scrolled');
+        // 收着时在色条上滚也一样（鼠标停在色条那一条上，不等展开就滚）
+        await ip.mouse.move(300, by);
+        await ip.mouse.wheel(0, -200);
+        await until(() => !window.__ib.moving());
+        const s3 = await info();
+        check('实例栏（多）：在收着的色条上滚轮也能滚', s3.scroll < s2.scroll, { from: s2.scroll, to: s3.scroll });
+      } else {
+        const f0 = await info();
+        await ip.mouse.wheel(0, 200);
+        await ip.waitForTimeout(200);
+        const f1 = await info();
+        check('实例栏（少）：放得下，没有滚动，滚轮不挪', f0.max === 0 && f1.scroll === 0 && same(f0, f1), { max: f0.max, scroll: f1.scroll });
+      }
+    }
+    await ic.close();
+  }
+}
+if (flow.length > il0) console.log(flow.slice(il0).join('\n'));
 want('');
 if (took.length) console.log('用时：' + took.join('，'));
 console.log(errors.length ? '页面错误：\n' + errors.join('\n') : '页面没有脚本错误');
