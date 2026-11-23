@@ -71,34 +71,86 @@ async function paint(st) {
   await chrome.action.setTitle({ title: lines.join('\n') });
 }
 
-// 扩展“重载”（决策 EXT-1）：库里某个扩展的文件原地换过了（版本没变），而本实例是在那之前启动的——
-// 把它关一下再开，浏览器就重新读它的后台脚本和内容脚本（实测：fingerprint-chromium 148；manifest 不会重读，那种情况核心服务会提示重启）。
-// 做过的记在 storage.session 里（后台脚本会被浏览器收走再拉起，不能记在变量里；浏览器一关就清，下次启动本来就是新文件）。
-let reloading = false;
-async function hotReload(st) {
+// 扩展“重载”（决策 EXT-1、EXT-2）：库里某个扩展的文件原地换过了（代码、版本号、manifest 都算），而本实例是在那之前启动的——
+// 先叫它自己重新加载（库里那一份入库时加了一个只认伴随扩展的钩子，chrome.runtime.reload() 会连 manifest 一起重读）；
+// 叫不应（老目录启动的、后台脚本起不来）就关一下再开（只重读代码）；之后版本号还对不上，报给核心服务标“需重启”。
+// 另外：停用了、移出本实例范围、从库里移除的扩展，当场在本实例里关掉；又该有了再打开——都不用重启。
+// 重载做过的记在 storage.session（后台脚本会被浏览器收走再拉起；浏览器一关就清，下次启动本来就是新文件）。
+// 我们替用户关掉的记在 storage.local（关掉的状态浏览器会记到下次启动，得记得是我们关的，该有时再打开；用户自己关的不替他开）。
+let syncing = false, syncAgain = false;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function askReload(id) { // 叫扩展自己重新加载；1.5 秒没回话算叫不应
+  return new Promise((res) => {
+    const t = setTimeout(() => res(false), 1500);
+    try {
+      chrome.runtime.sendMessage(id, { masktab: 'reload' }, (r) => { clearTimeout(t); void chrome.runtime.lastError; res(!!r?.ok); });
+    } catch { clearTimeout(t); res(false); }
+  });
+}
+async function waitVersion(id, ver, ms) { // 重新加载要一小会儿：这期间 get 可能拿不到它
+  for (let t = 0; t < ms; t += 250) {
+    const i = await chrome.management.get(id).catch(() => null);
+    if (i && i.version === ver) return true;
+    await sleep(250);
+  }
+  return false;
+}
+async function syncExts(st) {
   const me = st.me, since = me?.rt?.since || 0;
-  if (reloading || !me || !since || !chrome.management?.setEnabled) return;
-  const due = (st.extensions || []).filter((x) => x.enabled && x.codeAt > since && (x.scope === 'all' || (x.instanceIds || []).includes(me.id)));
-  if (!due.length) return;
-  reloading = true;
+  if (!me || !since || !chrome.management?.setEnabled) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true;
   try {
-    const { extDone = {} } = await chrome.storage.session.get('extDone');
-    for (const x of due) {
-      if (extDone[x.extId] === x.codeAt) continue;
-      extDone[x.extId] = x.codeAt;
-      await chrome.storage.session.set({ extDone }); // 先记再做：万一出错也不会每次刷新状态都再来一遍
-      const info = await chrome.management.get(x.extId).catch(() => null); // 本实例启动之后才加的：浏览器里还没有它
-      if (!info || !info.enabled) continue; // 用户自己在 chrome://extensions 里关掉的：不替他打开
-      await chrome.management.setEnabled(x.extId, false);
-      await chrome.management.setEnabled(x.extId, true);
+    do {
+      syncAgain = false;
+      await syncOnce(st, me, since);
+    } while (syncAgain);
+  } catch { /* 下次状态变化再对一遍；用户可以再点一次“重载” */ } finally { syncing = false; }
+}
+async function syncOnce(st, me, since) {
+  const lib = st.extensions || [];
+  const want = (x) => x.enabled && (x.scope === 'all' || (x.instanceIds || []).includes(me.id));
+  const { extDone = {} } = await chrome.storage.session.get('extDone');
+  const { extOff = {} } = await chrome.storage.local.get('extOff');
+  const all = await chrome.management.getAll();
+  const loaded = new Map(all.map((i) => [i.id, i]));
+  const libIds = new Set(lib.map((x) => x.extId));
+  // 1. 开关：只动全局库里的扩展（伴随扩展自己、默认搜索那个小扩展不在库里）
+  for (const x of lib) {
+    const info = loaded.get(x.extId);
+    if (!info) continue; // 本实例启动之后才加的：浏览器里还没有，要重启（核心服务已标）
+    if (!want(x) && info.enabled) { extOff[x.extId] = 1; await chrome.storage.local.set({ extOff }); await chrome.management.setEnabled(x.extId, false); }
+    else if (want(x) && !info.enabled && extOff[x.extId]) { delete extOff[x.extId]; await chrome.storage.local.set({ extOff }); await chrome.management.setEnabled(x.extId, true); }
+  }
+  // 从库里移除的（以前在库里见过、现在没了）：本实例启动时加载了它，当场关掉；下次启动就不加载了。用户自己装的不碰。
+  const { libSeen = [] } = await chrome.storage.local.get('libSeen');
+  for (const info of all) {
+    if (info.id === chrome.runtime.id || libIds.has(info.id) || !libSeen.includes(info.id) || !info.enabled) continue;
+    extOff[info.id] = 1; await chrome.storage.local.set({ extOff }); await chrome.management.setEnabled(info.id, false);
+  }
+  const seen = [...new Set([...libSeen, ...libIds])];
+  if (seen.length !== libSeen.length) await chrome.storage.local.set({ libSeen: seen });
+  // 2. 重载：文件在本实例启动之后换过的
+  for (const x of lib) {
+    if (!(x.codeAt > since) || !want(x) || extDone[x.extId] === x.codeAt) continue;
+    extDone[x.extId] = x.codeAt;
+    await chrome.storage.session.set({ extDone }); // 先记再做：万一出错也不会每次刷新状态都再来一遍
+    const info = await chrome.management.get(x.extId).catch(() => null);
+    if (!info || !info.enabled) continue; // 用户自己在 chrome://extensions 里关掉的：不替他打开
+    let ok = await askReload(x.extId) && await waitVersion(x.extId, x.version, 6000);
+    if (!ok) { // 叫不应：关一下再开（代码会重读，manifest 不会）
+      await chrome.management.setEnabled(x.extId, false).catch(() => {});
+      await chrome.management.setEnabled(x.extId, true).catch(() => {});
+      ok = await waitVersion(x.extId, x.version, 1500);
     }
-  } catch { /* 下次状态变化不再重试；用户可以再点一次“重载” */ } finally { reloading = false; }
+    if (!ok) await api('POST', '/api/extensions/stale', { extId: x.extId }).catch(() => {});
+  }
 }
 
 async function refresh() {
   const st = await api('GET', '/api/state');
   await paint(st);
-  hotReload(st);
+  syncExts(st);
   mailNotify(st).catch(() => {});
   return st;
 }

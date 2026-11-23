@@ -1,7 +1,7 @@
 // 扩展“重载”的实测：真的核心服务 + 真的内核（fingerprint-chromium）+ 真的伴随扩展，两个实例开着。
 //   node scripts/ext-reload-e2e.mjs --bin <masktab> --data <数据目录，里面（或程序目录里）要已经有内核和 mihomo，比如冒烟测试用过的那个> [--visible]
 // 查：从文件夹加扩展 → 改代码点“重载” → 两个开着的实例不重启就用上新的后台脚本和内容脚本（网页刷新一下）；
-//     同一个路径再加一次还是那一个；改了 manifest 就提示重启，重启后生效。
+//     同一个路径再加一次还是那一个；改 manifest、改版本号也不用重启（decisions EXT-2）；停用 / 启用当场生效。
 import fs from 'node:fs'; import path from 'node:path'; import http from 'node:http'; import { spawn } from 'node:child_process';
 const arg = (k) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : ''; };
 const BIN = arg('--bin'), DATA = arg('--data');
@@ -103,8 +103,11 @@ try {
   const r2 = await api('POST', `/api/extensions/${x.id}/reload`);
   check(r2.outcome === 'hot' && r2.extId === x.extId, '改了代码点“重载”：核心服务说“马上生效”', JSON.stringify(r2));
   for (const [n, i] of [['一', a], ['二', b]]) {
-    const cs = await until(async () => { const m = await pageMarks(i.id); return /"cs":"v2"/.test(m) ? m : ''; });
-    const bg = await until(async () => { const t = await bgTag(i.id, x.extId); return t === 'bg2' ? t : ''; });
+    // 第一次重载时伴随扩展可能刚好在睡（浏览器收走了它的后台），要等状态推过来把它叫醒：多给点时间，并记下用了多久
+    const t0 = Date.now();
+    const cs = await until(async () => { const m = await pageMarks(i.id); return /"cs":"v2"/.test(m) ? m : ''; }, 25000);
+    const bg = await until(async () => { const t = await bgTag(i.id, x.extId); return t === 'bg2' ? t : ''; }, 25000);
+    console.log(`  实例${n}：${((Date.now() - t0) / 1000).toFixed(1)} 秒后用上第 2 版`);
     check(!!cs && bg === 'bg2', `实例${n}没重启：新开的网页里内容脚本是第 2 版，后台脚本也是第 2 版`, JSON.stringify({ cs: await pageMarks(i.id), bg: await bgTag(i.id, x.extId) }));
   }
   st = await api('GET', '/api/state');
@@ -117,19 +120,32 @@ try {
   const cs3 = await until(async () => { const m = await pageMarks(b.id); return /"cs":"v3"/.test(m) ? m : ''; });
   check(r3.outcome === 'hot' && !!cs3, '再改一次再重载：实例二里是第 3 版', JSON.stringify({ o: r3.outcome, cs: await pageMarks(b.id) }));
 
-  // 改 manifest（多一段内容脚本，版本号不动）→ 要重启
+  // 改 manifest（多一段内容脚本，版本号不动）→ 也不用重启了：伴随扩展叫它自己重新加载，manifest 一起重读（decisions EXT-2）
   writeExt(4, { extra: true });
   const r4 = await api('POST', `/api/extensions/${x.id}/reload`);
+  check(r4.outcome === 'hot', '改了 manifest 再重载：核心服务说“马上生效”', JSON.stringify(r4));
+  for (const [n, i] of [['一', a], ['二', b]]) {
+    const m = await until(async () => { const v = await pageMarks(i.id); return /"cs":"v4"/.test(v) && /"d":"v4"/.test(v) ? v : ''; }, 20000);
+    check(!!m, `实例${n}没重启：manifest 里新加的那段内容脚本也生效了`, await pageMarks(i.id));
+  }
+  // 改版本号 → 也不用重启，浏览器里看到的版本号跟着变
+  writeExt(5, { extra: true, version: '1.1.0' });
+  const r5 = await api('POST', `/api/extensions/${x.id}/reload`);
+  const ver = async (id) => { const c = await cdp(prof(id)); try { const { targetId } = await c.send('Target.createTarget', { url: `chrome-extension://${x.extId}/manifest.json` }); await sleep(700); const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true }); const v = val(await c.send('Runtime.evaluate', { expression: 'chrome.runtime.getManifest().version', returnByValue: true }, sessionId)); await c.send('Target.closeTarget', { targetId }); return v; } finally { c.close(); } };
+  const v5 = await until(async () => ((await ver(b.id).catch(() => '')) === '1.1.0' ? '1.1.0' : ''), 20000);
+  const bg5 = await until(async () => ((await bgTag(b.id, x.extId)) === 'bg5' ? 'bg5' : ''));
+  check(r5.outcome === 'hot' && v5 === '1.1.0' && bg5 === 'bg5', '改了版本号再重载：实例二没重启，浏览器里已是 1.1.0、后台脚本第 5 版', JSON.stringify({ o: r5.outcome, v: await ver(b.id).catch((e) => e.message), bg: await bgTag(b.id, x.extId) }));
   st = await api('GET', '/api/state');
-  const flagged = st.instances.filter((i) => made.includes(i.id) && (i.rt.needRestart || []).includes('extensions')).length;
-  check(r4.outcome === 'restart' && flagged === 2, '改了 manifest 再重载：核心服务说“要重启”，两个实例都标了“需重启”', JSON.stringify({ o: r4.outcome, flagged }));
-  const m4 = await until(async () => { const m = await pageMarks(a.id); return /"cs":"v4"/.test(m) ? m : ''; });
-  check(!!m4 && !/"d":/.test(m4), '重启之前：原有的内容脚本已经是第 4 版，manifest 里新加的那一段还没有（浏览器不重读 manifest）', await pageMarks(a.id));
-  await api('POST', `/api/instances/${a.id}/restart`);
-  await sleep(3000); await waitRunning(a.id);
-  const m5 = await until(async () => { const m = await pageMarks(a.id).catch(() => ''); return /"d":"v4"/.test(m) ? m : ''; }, 20000);
-  st = await api('GET', '/api/state'); const ia = st.instances.find((i) => i.id === a.id);
-  check(!!m5 && !(ia.rt.needRestart || []).includes('extensions') && ia.rt.pid !== pids[0], '重启实例一之后：manifest 里新加的那一段也生效了，“需重启”消失', JSON.stringify({ m: await pageMarks(a.id).catch(() => ''), need: ia.rt.needRestart }));
+  const pids5 = st.instances.filter((i) => made.includes(i.id)).map((i) => i.rt.pid);
+  check(!st.instances.some((i) => made.includes(i.id) && (i.rt.needRestart || []).includes('extensions')) && pids5.join() === pid0.join(), '改 manifest、改版本号之后：没有实例被标“需重启”，浏览器进程没换', JSON.stringify({ pid0, pids5, need: st.instances.map((i) => i.rt.needRestart) }));
+  // 停用 → 开着的实例里当场关掉；再启用 → 当场打开（都不用重启）
+  await api('PATCH', `/api/extensions/${x.id}`, { enabled: false });
+  const off = await until(async () => { const v = await pageMarks(a.id); return !/"cs":/.test(v) ? 'off' : ''; });
+  st = await api('GET', '/api/state');
+  check(!!off && !st.instances.some((i) => made.includes(i.id) && (i.rt.needRestart || []).includes('extensions')), '停用：实例一新开的网页里没有它的内容脚本了，也没标“需重启”', await pageMarks(a.id));
+  await api('PATCH', `/api/extensions/${x.id}`, { enabled: true });
+  const on = await until(async () => { const v = await pageMarks(a.id); return /"cs":"v5"/.test(v) ? v : ''; });
+  check(!!on, '再启用：实例一里当场又有了', await pageMarks(a.id));
 
   // 在 chrome://extensions 里打开“在无痕模式下启用”：扩展会重新加载一次，不该因为“没开开发者模式”被停用（需求方 2026-11-17 遇到：
   // 伴随扩展被停用，还要自己开开发者模式、再把扩展打开）。伴随扩展和从文件夹加的扩展都查；重启实例以后也要还开着、还记着。

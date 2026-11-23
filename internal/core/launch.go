@@ -1,8 +1,6 @@
 package core
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -388,7 +385,7 @@ func (a *App) Launch(id string) error {
 		}
 		return nil
 	}
-	exts, extHash, shared := a.extsForLocked(in)
+	exts, extIDs, shared := a.extsForLocked(in)
 	in.LastUsedAt = now()
 	a.saveLocked("instances")
 	inCopy := *in
@@ -464,7 +461,7 @@ func (a *App) Launch(id string) error {
 	r.Seen, r.startedAt = 0, now()
 	r.Since = r.startedAt
 	r.cmd, r.Running, r.Starting, r.Pid, r.LaunchedTZ, r.Cut, r.Step = cmd, true, false, cmd.Process.Pid, tz, "", 0
-	r.extSetHash, r.pulled, r.done = extHash, pulled, make(chan struct{})
+	r.extIDs, r.extStale, r.pulled, r.done = extIDs, false, pulled, make(chan struct{})
 	if openErr != "" { // 代理没准备好也开了窗口：主通道接着断着，原因给用户看；下面的 refresh 会再确认一次
 		r.Cut, r.Error = "出口还没确认", openErr
 	}
@@ -764,26 +761,55 @@ func (a *App) shutdown() {
 	a.dropLock()
 }
 
-// extsForLocked 返回该实例应加载的全局扩展目录、集合哈希、以及其中数据模式为"共享"的扩展。
-func (a *App) extsForLocked(in *model.Instance) (dirs []string, hash string, shared []*model.GlobalExtension) {
-	var ids []string
+// extsForLocked 返回该实例应加载的全局扩展目录、扩展 ID、以及其中数据模式为"共享"的扩展。
+func (a *App) extsForLocked(in *model.Instance) (dirs []string, ids []string, shared []*model.GlobalExtension) {
 	for _, x := range a.Exts {
 		if !x.Enabled || (x.Scope == "selected" && !contains(x.InstanceIDs, in.ID)) {
 			continue
 		}
-		dirs = append(dirs, a.p("extensions", x.ExtID, x.Version))
-		id := x.ExtID + "@" + x.Version
-		if x.MRev > 0 { // 版本号没动但 manifest 改过：也算“换了一份”，要重启
-			id += "#" + strconv.Itoa(x.MRev)
-		}
-		ids = append(ids, id)
+		dirs = append(dirs, a.extDir(x))
+		ids = append(ids, x.ExtID)
 		if x.Data == "shared" {
 			shared = append(shared, x)
 		}
 	}
-	sort.Strings(ids)
-	h := sha1.Sum([]byte(strings.Join(ids, ",")))
-	return dirs, hex.EncodeToString(h[:]), shared
+	return dirs, ids, shared
+}
+
+// extDir 是库里某个扩展的代码目录：固定的 live；老版本按版本号分的目录还没搬过来时用老的。
+func (a *App) extDir(x *model.GlobalExtension) string {
+	live := extlib.Dir(a.p("extensions"), x.ExtID)
+	if _, err := os.Stat(live); err != nil {
+		if old := a.p("extensions", x.ExtID, x.Version); fileExists(old) {
+			return old
+		}
+	}
+	return live
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// migrateExtDirs 把老版本按版本号分的扩展目录搬成固定的 live（decisions EXT-2）。核心服务刚启动、还没有实例在跑时做；搬不动（文件被占着）就先用老的。
+func (a *App) migrateExtDirs() {
+	for _, x := range a.Exts {
+		live := extlib.Dir(a.p("extensions"), x.ExtID)
+		old := a.p("extensions", x.ExtID, x.Version)
+		if fileExists(live) || !fileExists(old) {
+			continue
+		}
+		if err := os.Rename(old, live); err != nil {
+			log.Printf("扩展 %s 的目录没能换成固定目录：%v", x.Name, err)
+		}
+	}
+}
+
+// extStaleLocked：开着的、要用这个扩展的实例里它没法当场换新（只能重启）——标上“需重启”。
+func (a *App) extStaleLocked(x *model.GlobalExtension) {
+	for _, in := range a.Instances {
+		if r := a.rt[in.ID]; r != nil && r.Running && contains(r.extIDs, x.ExtID) {
+			r.extStale = true
+		}
+	}
 }
 
 // anyRunningLocked 报告有没有实例开着（或正在启动）。
@@ -801,7 +827,10 @@ func (a *App) anyRunningLocked() bool {
 func (a *App) sweepExtDirs() {
 	keep := map[string]bool{}
 	for _, x := range a.Exts {
-		keep[x.ExtID+"/"+x.Version] = true
+		keep[x.ExtID+"/"+extlib.Live] = true
+		if !fileExists(extlib.Dir(a.p("extensions"), x.ExtID)) { // 没搬成固定目录的：老目录还在用
+			keep[x.ExtID+"/"+x.Version] = true
+		}
 	}
 	ids, _ := os.ReadDir(a.p("extensions"))
 	for _, id := range ids {
@@ -829,14 +858,22 @@ func (a *App) sweepExtDirs() {
 
 // markExtChanged 扩展库变化后，给集合哈希已不同的运行中实例打"需重启"标记（F-EXT-8）。
 func (a *App) markExtChangedLocked() {
+	// 只有“该有却没加载”的扩展要重启（浏览器开着时装不进新扩展）；停用、移出范围、移除的由伴随扩展当场关掉，
+	// 代码、版本号、manifest 换了由伴随扩展叫它自己重新加载，都不用重启（decisions EXT-2）。
 	for _, in := range a.Instances {
 		r := a.rt[in.ID]
 		if r == nil || !r.Running {
 			continue
 		}
-		_, h, _ := a.extsForLocked(in)
+		_, ids, _ := a.extsForLocked(in)
 		r.NeedRestart = without(r.NeedRestart, "extensions")
-		if h != r.extSetHash {
+		need := r.extStale
+		for _, id := range ids {
+			if !contains(r.extIDs, id) {
+				need = true
+			}
+		}
+		if need {
 			r.NeedRestart = append(r.NeedRestart, "extensions")
 		}
 	}

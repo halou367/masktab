@@ -983,6 +983,20 @@ func (a *App) routes(mux *http.ServeMux) {
 		x, outcome, err := a.ReloadExtension(r.PathValue("id"), strings.TrimSpace(b.Path), me(r))
 		reply(w, extResult{x, outcome}, err)
 	})
+	// 伴随扩展报：某个扩展叫它重新加载、关一下再开之后，版本号还是旧的（实例是老目录启动的、扩展后台起不来……）——只能重启（decisions EXT-2）。
+	mux.HandleFunc("POST /api/extensions/stale", func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ ExtID string }
+		_ = body(r, &b)
+		a.mu.Lock()
+		if rr := a.rt[me(r)]; rr != nil && rr.Running {
+			rr.extStale = true
+			log.Printf("扩展 %s 在实例 %s 里没能当场换新，标需重启", b.ExtID, me(r))
+			a.markExtChangedLocked()
+			a.bumpLocked("state", "")
+		}
+		a.mu.Unlock()
+		reply(w, nil, nil)
+	})
 	mux.HandleFunc("PATCH /api/extensions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
 			Enabled     *bool
@@ -1105,7 +1119,7 @@ func (a *App) putExtension(store, path, fromInst string, force bool) (*model.Glo
 		if old == nil {
 			return nil
 		}
-		return extlib.KeyOf(a.p("extensions", old.ExtID, old.Version))
+		return extlib.KeyOf(a.extDir(old))
 	}
 	switch {
 	case store != "":
@@ -1155,24 +1169,18 @@ func (a *App) putExtension(store, path, fromInst string, force bool) (*model.Glo
 	case x == nil:
 		x = &model.GlobalExtension{ID: newID(), ExtID: info.ExtID, Enabled: true, Scope: "all", InstanceIDs: []string{}, Data: a.Settings.NewExtData}
 		a.Exts = append(a.Exts, x)
-	case x.Version != info.Version:
+	case !info.Replaced:
+		// 库里原来没有固定目录（老版本留下的按版本号分的目录没能搬过来）：开着的实例指着旧目录，这一次要重启（decisions EXT-2）。
 		outcome = "restart"
-		if !a.anyRunningLocked() {
-			// 换了版本：旧版本的文件可能正被开着的实例用着（浏览器是按需从这个目录读的，删了那个实例里的扩展当场就坏），
-			// 有实例开着就先留着，下次启动核心服务时清（sweepExtDirs）。
-			_ = os.RemoveAll(a.p("extensions", x.ExtID, x.Version))
-		}
-		x.MRev = 0
-	case info.Replaced && !info.Changed && !force:
+		a.extStaleLocked(x)
+	case !info.Changed && !force:
 		outcome = "same"
-	default: // 版本没变，文件原地换了
+	default:
+		// 原地换了文件：代码、版本号、manifest 变了都一样——开着的实例里伴随扩展叫它自己重新加载（decisions EXT-2）。
 		outcome = "hot"
 		x.CodeAt = now()
-		if info.ManifestChanged {
-			outcome = "restart"
-			x.MRev++
-		}
 	}
+	x.MRev = 0
 	if path != "" {
 		x.Path = path
 	}

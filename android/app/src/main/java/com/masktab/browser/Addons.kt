@@ -72,4 +72,17 @@ object Addons {
             r.accept({ if (op == "remove") Core.actions.remove(id); done(null) }, { err -> done(err?.message ?: "失败") })
         }
     }
+
+    /** 检查更新：向 addons.mozilla.org 要新版本，有就当场换上（GeckoView 里不用重启 app）。回调 msg 是给用户看的一句话。 */
+    fun update(id: String, done: (String?, String?) -> Unit) {
+        val c = Core.runtime?.webExtensionController ?: return done(null, "内核未就绪")
+        list { l ->
+            val e = l.firstOrNull { it.id == id } ?: return@list done(null, "扩展不存在")
+            val old = e.metaData.version
+            c.update(e).accept({ n ->
+                if (n == null || n.metaData.version == old) done("已是最新版本（$old）", null)
+                else { watch(n); done("已更新到 ${n.metaData.version}，刷新网页就用上新的", null) }
+            }, { err -> done(null, "检查更新失败：" + (err?.message ?: "未知原因")) })
+        }
+    }
 }

@@ -10,8 +10,8 @@ import (
 )
 
 // 需求方 2026-11-18：“一个路径的插件可以一直重复添加……应该锁定一个路径之后插件重载，路径内更新就会更新，并且所有实例都更新，刷新即可生效不需要重启”。
-// 这里查核心服务这一半：同一个路径只有一个扩展（ID 不变）；只改代码 = hot（开着的实例不标“需重启”，codeAt 往后走，伴随扩展据此把它关一下再开）；
-// 改了 manifest 或版本号 = restart（标“需重启”）；没改 = same。浏览器那一半见 scripts/ext-reload-e2e.mjs。
+// 这里查核心服务这一半：同一个路径只有一个扩展（ID 不变）；改代码、改 manifest、改版本号都 = hot（开着的实例不标“需重启”，codeAt 往后走，
+// 伴随扩展据此叫它重新加载，decisions EXT-2）；没改 = same；新加的扩展开着的实例要重启，停用 / 移出范围不用。浏览器那一半见 scripts/ext-reload-e2e.mjs。
 func TestExtensionReload(t *testing.T) {
 	a, err := Open(t.TempDir(), t.TempDir(), "0.1.72")
 	if err != nil {
@@ -39,8 +39,8 @@ func TestExtensionReload(t *testing.T) {
 	in := &model.Instance{ID: "i1", No: 1}
 	a.mu.Lock()
 	a.Instances = append(a.Instances, in)
-	_, h, _ := a.extsForLocked(in)
-	a.rt[in.ID] = &Runtime{Running: true, extSetHash: h, Since: now() - 1000}
+	_, ids, _ := a.extsForLocked(in)
+	a.rt[in.ID] = &Runtime{Running: true, extIDs: ids, Since: now() - 1000}
 	a.mu.Unlock()
 	need := func() bool {
 		a.mu.Lock()
@@ -60,7 +60,7 @@ func TestExtensionReload(t *testing.T) {
 		t.Fatalf("改代码后重载：%+v %q %v（需重启 %v）", x3, out, err, need())
 	}
 	x3at := x3.CodeAt
-	if b, _ := os.ReadFile(a.p("extensions", id, "2.2.0", "bg.js")); string(b) != "2" {
+	if b, _ := os.ReadFile(a.p("extensions", id, "live", "bg.js")); string(b) != "2" {
 		t.Fatalf("库里的文件没换：%q", b)
 	}
 	// 什么都没改也点“重载”：强制重新加载一次（hot，codeAt 往后走），不是 same
@@ -69,20 +69,36 @@ func TestExtensionReload(t *testing.T) {
 	if err != nil || out != "hot" || x4.CodeAt <= x3at || need() {
 		t.Fatalf("没改也重载：%+v %q %v", x4, out, err)
 	}
-	// 改 manifest（版本号没动）：要重启
+	// 改 manifest（版本号没动）：也不用重启了
 	manifest("2.2.0", `,"permissions":["storage"]`)
-	if _, out, err = a.ReloadExtension(x.ID, "", ""); err != nil || out != "restart" || !need() || len(a.Exts) != 1 {
+	if _, out, err = a.ReloadExtension(x.ID, "", ""); err != nil || out != "hot" || need() || len(a.Exts) != 1 {
 		t.Fatalf("改 manifest 后重载：%q %v（需重启 %v）", out, err, need())
 	}
-	// 实例重启过了（装的是现在这一份）；再改版本号：还是要重启，ID 不变
-	a.mu.Lock()
-	_, h, _ = a.extsForLocked(in)
-	a.rt[in.ID].extSetHash, a.rt[in.ID].NeedRestart = h, nil
-	a.mu.Unlock()
+	// 改版本号：也不用重启，ID 不变、目录不变
 	manifest("2.3.0", `,"permissions":["storage"]`)
 	x5, out, err := a.ReloadExtension(x.ID, "", "")
-	if err != nil || out != "restart" || x5.ExtID != id || x5.Version != "2.3.0" || !need() || len(a.Exts) != 1 {
+	if err != nil || out != "hot" || x5.ExtID != id || x5.Version != "2.3.0" || need() || len(a.Exts) != 1 {
 		t.Fatalf("改版本号后重载：%+v %q %v（需重启 %v）", x5, out, err, need())
+	}
+	// 伴随扩展报“没能当场换新”：标需重启
+	a.mu.Lock()
+	a.rt[in.ID].extStale = true
+	a.markExtChangedLocked()
+	a.mu.Unlock()
+	if !need() {
+		t.Fatal("伴随扩展报了换不了，应标需重启")
+	}
+	a.mu.Lock()
+	a.rt[in.ID].extStale, a.rt[in.ID].NeedRestart = false, nil
+	a.mu.Unlock()
+	// 停用：不用重启（伴随扩展当场关掉它）
+	f := false
+	if err := a.PatchExtension(x.ID, &f, nil, nil, nil, ""); err != nil || need() {
+		t.Fatalf("停用：%v（需重启 %v）", err, need())
+	}
+	tr := true
+	if err := a.PatchExtension(x.ID, &tr, nil, nil, nil, ""); err != nil || need() {
+		t.Fatalf("再启用（浏览器里本来就加载着）：%v（需重启 %v）", err, need())
 	}
 
 	// 以前加的（没记路径）：名字一样的本地扩展认成同一个，并把路径记下来
@@ -109,7 +125,7 @@ func TestExtensionReload(t *testing.T) {
 	src2 := t.TempDir()
 	_ = os.WriteFile(filepath.Join(src2, "manifest.json"), []byte(`{"manifest_version":3,"name":"Other","version":"1.0"}`), 0o644)
 	x7, out, err := a.AddExtension("", src2, "")
-	if err != nil || out != "added" || x7.ExtID == id || len(a.Exts) != 2 {
-		t.Fatalf("另一个扩展：%+v %q %v", x7, out, err)
+	if err != nil || out != "added" || x7.ExtID == id || len(a.Exts) != 2 || !need() {
+		t.Fatalf("另一个扩展：%+v %q %v（新加的扩展开着的实例要重启：%v）", x7, out, err, need())
 	}
 }

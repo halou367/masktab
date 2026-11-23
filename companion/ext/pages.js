@@ -29,7 +29,7 @@ export function settingsHome(c) {
     row({ ic: 'globe', t: '节点与出口', s: ex ? [flag(ex.country), `${cname(ex.country)} · `, h('span', { class: 'mono' }, ex.ip)] : me?.proxy.state === 'on' ? '出口探测中' : '直连', chev: true, onclick: () => c.open('node') }),
     row({ ic: 'sub', t: '订阅与地址库', s: `${st.subscriptions.length} 个订阅 · 地址库 ${st.exits.reduce((n, e) => n + (e.source || (e.type === 'proxyip' && e.expand) ? (e.resolved || []).length : 1), 0)} 个地址`, chev: true, onclick: () => c.open('exits') }),
     me?.kind !== 'normal' && row({ ic: 'finger', t: '指纹与伪装', s: dz.total ? `一致性 ${dz.pass}/${dz.total}` : '出口探测后判断', chev: true, onclick: () => c.open('fp') }),
-    row({ ic: 'ext', t: '扩展', s: hosted(st) ? 'Firefox 扩展（全部实例共用）' : `${st.extensions.length} 个 · ${st.extensions.filter((x) => x.enabled).length} 个已启用`, chev: true, onclick: () => c.open(hosted(st) ? 'addons' : 'extensions') }),
+    row({ ic: 'ext', t: hosted(st) ? '扩展' : '共享扩展', s: hosted(st) ? 'Firefox 扩展（全部实例共用）' : `${st.extensions.length} 个 · ${st.extensions.filter((x) => x.enabled).length} 个已启用`, chev: true, onclick: () => c.open(hosted(st) ? 'addons' : 'extensions') }),
     row({ ic: 'update', t: '组件与更新', s: st.update?.available ? h('span', { class: 'mid' }, `有新版本 ${st.update.latest}`) : `${st.kernel.name} ${(st.kernel.version || '').split('.')[0]} · mihomo ${st.core.version || '—'}${st.core.ok ? '' : '（未运行）'}`, chev: true, onclick: () => c.open('settings/about') }),
     row({ ic: 'bug', t: '诊断', s: '出口探测、日志、复制诊断信息', chev: true, onclick: () => c.open('diag') }),
     hosted(st) && row({ ic: 'shield', t: '人机验证诊断', s: (s.fpOff || []).length ? h('span', { class: 'mid' }, `已关掉 ${(s.fpOff || []).length} 项伪装`) : '验证一直过不去时，逐项排查是哪一项引起的', chev: true, onclick: () => c.open('settings/verify') }),
