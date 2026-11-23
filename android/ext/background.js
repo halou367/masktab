@@ -108,8 +108,8 @@ function tzApply(tabId, id, force) {
   emu.setTimezone(tabId, tz).then((now) => {
     if (now == null) return;
     tzSet.set(tabId, now);
-    if (emuNoted++ < 6) console.info(`MaskTab 内核时区 tab=${tabId} #${x.no} → ${now || '系统'}`); // 模拟器冒烟靠它核对
-  }).catch((e) => { if (emuNoted++ < 6) console.warn('MaskTab 内核时区设置失败', tabId, e?.message || e); });
+    if (emuNoted++ < 12) console.info(`MaskTab 内核时区 tab=${tabId} #${x.no} → ${now || '系统'}`); // 模拟器冒烟靠它核对
+  }).catch((e) => { if (emuNoted++ < 12) console.warn('MaskTab 内核时区设置失败', tabId, e?.message || e); });
 }
 if (!emu) console.warn('MaskTab 内核时区接口不可用（实验接口没装上），时区只在页面主线程里改');
 

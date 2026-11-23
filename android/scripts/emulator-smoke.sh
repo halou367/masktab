@@ -454,25 +454,27 @@ Y
   mkdir -p $W/sys
   cat > $W/sys/sys.yaml <<'Y'
 log-level: info
-mixed-port: 18081
+mixed-port: 18083
 allow-lan: true
 bind-address: "*"
 rules: ["MATCH,DIRECT"]
 Y
-  setsid nohup $W/mh -d $W/sys -f $W/sys/sys.yaml > $W/sys.log 2>&1 < /dev/null & BGPIDS+=($!)
+  # 端口用 18083：18081 是后面下载测试的网站（dl-server.py）要用的（第一次跑撞过，run 45094931148）
+  setsid nohup $W/mh -d $W/sys -f $W/sys/sys.yaml > $W/sys.log 2>&1 < /dev/null & BGPIDS+=($!); local syspid=$!
   sleep 3
   local sc
-  sc=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -x http://127.0.0.1:18081 https://example.org/?probe=runner)
+  sc=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -x http://127.0.0.1:18083 https://example.org/?probe=runner)
   if [ "$sc" = "200" ] && grep -q "example.org" $W/sys.log; then echo "假系统代理可用（runner 上经它取 example.org：HTTP $sc，日志里有记录）"
   else echo "失败：假系统代理没起来（HTTP $sc）"; tail -5 $W/sys.log; fail=1; fi
   local sys0; sys0=$(wc -l < $W/sys.log)
-  A shell settings put global http_proxy 10.0.2.2:18081; sleep 3
+  A shell settings put global http_proxy 10.0.2.2:18083; sleep 3
   echo "模拟器系统代理：$(A shell settings get global http_proxy | tr -d '\r')"
   A shell am start -n $ACT --es mt_inst p2; sleep 4
   A shell am start -a android.intent.action.VIEW -d "https://example.org/?leak=1" -n $ACT
   sleep 25; shot 15b-leak-badnode-sysproxy
   A shell settings put global http_proxy :0; A shell settings delete global http_proxy > /dev/null 2>&1 || true
   tail -n +$((sys0 + 1)) $W/sys.log > "$OUT/sysproxy-during-leak-test.log"
+  kill $syspid 2>/dev/null
   echo "假系统代理在测试期间看到的连接："; grep -o -- '--> [^ ]*' "$OUT/sysproxy-during-leak-test.log" | sort | uniq -c | head -20
   A shell am start -n $ACT --es mt_inst p1; sleep 3
   # 订阅与地址库、设置两页（和电脑版同一份 pages.js）在有订阅时也要画得出来

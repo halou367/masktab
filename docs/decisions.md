@@ -1753,8 +1753,9 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
     只有本机回环（127.0.0.1 / localhost / [::1]）还直连：那是手机自己（核心服务、mihomo 的本机端口），不出网。日志 `MaskTab 非网页请求 <域名> 来自=… 走实例 #n 的线路`（每种域名一次，最多 20 种）。
   - 认不出实例的网页请求照旧：按来源网页猜实例（A-17 补充），猜不了就拒绝——拒绝现在真的是失败，不会再被 FlClash 兜住；“人机验证诊断”的拒绝列表可能变长，据此再补认实例。
 - **不受影响的**：app 自己的联网都不走 Gecko——核心服务（Go，订阅更新、出口探测、在线更新）、mihomo、Kotlin 里的 `HttpURLConnection`（`Util.kt`，本来就是 `Proxy.NO_PROXY` 或指定本机端口）。`network.proxy.type` 只管 GeckoView 里的网页和扩展。
-- **检查**：模拟器冒烟（`emulator-smoke.sh` 的 proxy_phase）新增泄露复现：runner 上起一个 mihomo mixed 入站当“系统代理”（先在 runner 上经它取一次 example.org，确认它能用、有日志），`settings put global http_proxy 10.0.2.2:18081`，
+- **检查**：模拟器冒烟（`emulator-smoke.sh` 的 proxy_phase）新增泄露复现：runner 上起一个 mihomo mixed 入站当“系统代理”（端口 18083；先在 runner 上经它取一次 example.org，确认它能用、有日志），`settings put global http_proxy 10.0.2.2:18083`，
   实例 #2（节点不存在）打开 `https://example.org/?leak=1`：必须加载失败（logcat `加载失败 https://example.org/?leak=1 实例 p2`），假系统代理的日志里不能有 example.org。**没有用旧版跑对照**（旧版会不会在这一步漏，靠源码推断）；真机（vivo + FlClash）没测。
+- **验证**（模拟器，run 45094931148）：假系统代理可用（runner 上经它 HTTP 200），设上以后实例 #2 打开 example.org 加载失败（代码 147），测试期间假系统代理一条连接都没收到。内核的非网页请求（`firefox-portal-detection.com`、`services.addons.mozilla.org`）出现在测试节点的日志里，即走了当前实例的线路。
 - **回退**：删掉 `network.proxy.type: 0` 一行即回到跟系统代理（不建议）。
 
 ### A-19 手机：网页语言不再被追加系统语言（2026-11-23，分支 fix/android-fp）
@@ -1764,6 +1765,7 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
   `commitLocales` 是同步的（GeckoView 160 源码），只在这一瞬间读默认语言；我们在主线程调。回到“系统语言”的分支不换（本来就要系统语言）。app 自己的界面按 `Configuration` 取资源，不受这一瞬间影响。
 - **仍然的限制**：语言是全局一份，后台实例的标签页跟着当前实例（A-10 的代价，体检问题 10）；按标签页的 `BrowsingContext.languageOverride` 会让 `navigator.languages` 只剩一项，这次没做。
 - **检查**：模拟器冒烟在 proxy_phase 开头 `cmd locale set-app-locales com.masktab.browser --locales zh-CN`（模拟系统中文），指纹自检页（`fpcheck.html?…&echo=1`）核对：主线程和 Worker 的 `navigator.languages`、`/echo` 回显的 Accept-Language 都只含实例语言（ja / de），否则 `MTFPCHECK fail`。文件服务换成 `android/scripts/smoke-http.py`（多一个 `/echo`）。
+- **验证**（模拟器，run 45094931148，app 语言 zh-CN）：#3 `navigator.languages = ja-JP/ja`、Accept-Language `ja-JP,ja;q=0.9`；#4 `de-DE/de`、`de-DE,de;q=0.9`；Worker 同。真机没测。
 
 ### A-20 手机：核数、画布、可用屏幕高度、UA 版本号不再在页面里改，交给内核（2026-11-23，分支 fix/android-fp）
 页面里的 JS 改写只管主线程，Worker、OffscreenCanvas、新建 iframe 里是内核的真值，检测站一比就对不上（体检问题 4–7，CreepJS 当场标红）。内核的指纹保护（FPP，`privacy.fingerprintingProtection: true`，安卓默认项见 `RFPTargetsDefault.inc`）已经在主线程和 Worker 里统一处理这几项：
@@ -1775,16 +1777,18 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
 - 音频噪声（`getChannelData`）这次没动：FPP 没有对应项，去掉后所有实例的音频指纹一样；它的破绽（`copyFromChannel` 不改）留待以后。
 - 人机验证诊断去掉“画布噪声”“核心数与屏幕高度”“UA 里的安卓版本号按种子换”三行（已经没有可关的东西）；“内核自带的指纹保护”仍可关。
 - **检查**：页面检查 `fp` 段改成核对 fp.js 不再改这三样、时区照改；模拟器指纹自检页核对 Worker 与主线程核数相同、只能是 4 或 8，`navigator.appVersion` 与 UA 的 Android 版本相同、Worker 的 UA 与主线程相同。
+- **验证**（模拟器，run 45094931148）：主线程 / Worker 核数都是 4（模拟器 2 核，FPP 分档）；`appVersion = 5.0 (Android 15)` 与 UA 一致；两个实例开同一页画布摘要不同（`83056616` / `e99fbf4`），同一实例两次相同——内核确实按实例随机化，所以画布 JS 噪声去掉不留。真机（8 核应报 8）没测。
 
 ### A-21 手机：时区改由内核按标签页设，Worker 里也对（2026-11-23，分支 fix/android-fp）
 - **原因**：`fp.js` 的时区改写只到主线程原型；Worker 里是系统时区（真机就是 Asia/Shanghai），`new Date(年,月,日,时)`、按本地时间解析字符串也走系统时区（体检问题 2）。
 - **评估**：GeckoView 160 有 `BrowsingContext.timezoneOverride`（`BrowsingContext.webidl`，chrome-only，WebDriver BiDi 的 `emulation.setTimezoneOverride` 用它）。设在顶层浏览上下文上：已有文档立即换（`DidSet` 调 `JS::SetRealmTimezoneOverride`），之后新建的文档在 `SetNewDocument` 时读 `Top()->GetTimezoneOverride()`，Worker / SharedWorker 继承（`WorkerPrivate` 的 `mTimezoneOverride`）。Service Worker 不跟（我们也没开 SW）。
   只有特权代码能设。用 `ensureBuiltIn` 装的内置扩展安装位置是 builtin，`Extension.getIsPrivileged` 对 builtin 返回 true，可以声明 `experiment_apis`（Fenix 的 webcompat 内置扩展也是这么做的）；不特权时内核只报警告、忽略这一项，扩展照常装上。
 - **做法**：内置扩展加实验接口 `mtEmu.setTimezone(tabId, tz)`（`android/ext/exp/`，父进程里 `tabManager.get(tabId).browser.browsingContext.top.timezoneOverride = tz`）。
-  后台在标签页登记到实例时、网页开新标签页时、以及每次顶层导航发出请求时（新文档要等响应回来才建，来得及）设一次；实例时区变了或诊断里关了时区，已开的标签页跟着改。日志 `MaskTab 内核时区 tab=… #n → 时区`（前 6 次）。
+  后台在标签页登记到实例时、网页开新标签页时、以及每次顶层导航发出请求时（新文档要等响应回来才建，来得及）设一次；实例时区变了或诊断里关了时区，已开的标签页跟着改。日志 `MaskTab 内核时区 tab=… #n → 时区`（前 12 次）。
   `fp.js` 的时区段留作兜底：它先在**网页那边**（`page.Intl`，不是内容脚本自己的环境）读当前时区，已经是实例时区就什么都不做；接口没装上、跨进程换了浏览上下文还没补上时才在主线程改。
 - 内置扩展 `manifest.json` 版本号 0.1.0 → 0.2.0：`ensureBuiltIn` 只在版本号变了才重装，老用户升级后才会读到新的 `experiment_apis`（推断：同版本号时内核沿用缓存的 manifest）。**以后改安卓内置扩展的 manifest 要把版本号加一。**
-- **检查**：模拟器指纹自检页的通过行带 `wtz=`（Worker 里的时区），冒烟脚本比对 #3 东京、#4 柏林——**只记录、不判失败**，结果写在下面“验证”。真机没测。
+- **检查**：模拟器指纹自检页的通过行带 `wtz=`（Worker 里的时区），冒烟脚本比对 #3 东京、#4 柏林——**只记录、不判失败**。
+- **验证**（模拟器，run 45094931148）：实验接口装上了（日志 `MaskTab 内核时区 … → America/Denver`），#3 Worker 时区 `Asia/Tokyo`、#4 `Europe/Berlin`，与主线程一致（体检时 Worker 是系统时区 UTC）。真机没测；老版本升级上来的情况（manifest 版本号 0.1.0 → 0.2.0 触发重装）模拟器是全新安装，没测到。
 - **回退**：manifest 删掉 `experiment_apis` 即可，`fp.js` 自动回到只改主线程。
 
 ### A-22 手机：Service Worker 仍然关着（2026-11-23，只评估）
