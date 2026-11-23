@@ -1,9 +1,11 @@
 // MaskTab 安卓版内置扩展的后台（MV2 后台页）。
 // 1. 代理分流：proxy.onRequest 按“这个请求属于哪个实例”返回该实例在 mihomo 里的本地端口；直连实例直连；认不出实例的网页请求一律拒绝（不回落直连）。
+//    不属于任何网页的请求（别的扩展、内核自己的后台请求）走当前实例的线路；只有本机回环（127.0.0.1 等）直连。内核偏好 network.proxy.type=0，
+//    没有“默认代理”可以回落（decisions A-18）。
 //    GeckoView 的 bug 1948114：details.cookieStoreId 在这里不准，所以先用 tabs.get(tabId) 取标签页的 cookieStoreId（缓存），
 //    再加上“标签页 → 实例”的登记表（新标签页 / 引导页和每个页面的内容脚本会来登记）。
 // 2. 指纹：每个容器注册一份带本实例参数的 document_start 内容脚本（同步注入，页面脚本之前生效）；注册不上时 fp-boot.js 异步兜底。
-// 3. Accept-Language：不再改写，语言由 app 用内核原生设置（决策 A-10）。
+// 3. Accept-Language：不再改写，语言由 app 用内核原生设置（决策 A-10）。时区：按标签页设内核的时区覆盖（实验接口 mtEmu，决策 A-21）。
 // 4. 自动填写（复用桌面 autofill.js）：vault:* 消息转给 app 的密码库，实例由发送方标签页决定，站点取发送方真实地址。
 // 5. Cookie 汇总：每分钟按容器统计“站点 + 条数”交给 app（不含值）。
 'use strict';
@@ -12,6 +14,7 @@ let insts = {};          // 实例 id → {id,no,port,direct,seed,tz,lang}
 let searchUrl = '';
 let off = new Set();     // 人机验证诊断里关掉的项（设置 fpOff，app 随状态一起给）
 let lastInst = '';       // 最近一个认得出实例的网页请求属于谁（诊断：“认不出的请求不拒绝”时借它的线路）
+let curInst = '';        // app 当前显示的实例（app 随状态推送）：不属于任何网页的请求走它的线路
 const blocked = { n: 0, list: [], seen: new Set() }; // 认不出实例而被拒绝（或诊断时放行）的请求：条数、最近 20 条
 const tabInst = new Map(); // tabId → 实例 id
 const tabCs = new Map();   // tabId → cookieStoreId
@@ -38,7 +41,9 @@ function applyState(s) {
   insts = m;
   if (s.searchUrl) searchUrl = s.searchUrl;
   off = new Set(Array.isArray(s.off) ? s.off : []);
+  if (typeof s.cur === 'string') curInst = s.cur;
   for (const id of Object.keys(m)) csInst.set(csOf(id), id);
+  for (const [tab, id] of tabInst) tzApply(tab, id); // 实例时区变了（或诊断里开关了时区）：已开着的标签页跟着改，下次换页生效
   for (const [cs, id] of csInst) if (!m[id]) csInst.delete(cs);
 }
 function connect() {
@@ -74,20 +79,45 @@ async function instOfTab(tabId) {
 function bind(tab, id) {
   if (!tab || !id) return;
   tabInst.set(tab.id, id);
+  tzApply(tab.id, id);
   if (tab.cookieStoreId) {
     tabCs.set(tab.id, tab.cookieStoreId);
     if (isContainer(tab.cookieStoreId)) csInst.set(tab.cookieStoreId, id);
   }
 }
-browser.tabs.onCreated.addListener((t) => { if (t.openerTabId != null && tabInst.has(t.openerTabId) && !tabInst.has(t.id)) tabInst.set(t.id, tabInst.get(t.openerTabId)); });
+browser.tabs.onCreated.addListener((t) => { if (t.openerTabId != null && tabInst.has(t.openerTabId) && !tabInst.has(t.id)) { tabInst.set(t.id, tabInst.get(t.openerTabId)); tzApply(t.id, tabInst.get(t.id)); } });
 browser.tabs.onRemoved.addListener((id) => {
-  tabInst.delete(id); tabCs.delete(id);
+  tabInst.delete(id); tabCs.delete(id); tzSet.delete(id);
   vaultBox.tabGone(id); // 录到一半、已经点过登录的照样落库；其余暂存清掉
   for (const [k, v] of [...visTab]) if (v === id) visTab.delete(k);
 });
 
+// ---------- 时区：内核按标签页覆盖（decisions A-21） ----------
+// 设在标签页的顶层浏览上下文上，之后新建的文档和 Worker 都按实例时区（页面里的 fp.js 只改得到主线程）。
+// 时机：标签页登记到实例时（引导页、新标签页）、网页开的新标签页、每次顶层导航发出请求时（新文档在响应回来以后才建，来得及）。
+// 实验接口装不上（不是特权扩展等）时什么都不做，fp.js 照旧在主线程兜底；它看到网页里的时区已经是实例时区就不再改。
+const emu = browser.mtEmu || null;
+const tzSet = new Map(); // tabId → 最近一次设成功的时区（只为少发重复的调用；内核那边换了浏览上下文时靠顶层导航时再设一次补上）
+let emuNoted = 0;
+function tzApply(tabId, id, force) {
+  if (!emu || tabId == null || tabId < 0) return;
+  const x = insts[id];
+  if (!x) return;
+  const tz = off.has('tz') ? '' : x.tz || '';
+  if (!force && tzSet.get(tabId) === tz) return;
+  emu.setTimezone(tabId, tz).then((now) => {
+    if (now == null) return;
+    tzSet.set(tabId, now);
+    if (emuNoted++ < 12) console.info(`MaskTab 内核时区 tab=${tabId} #${x.no} → ${now || '系统'}`); // 模拟器冒烟靠它核对
+  }).catch((e) => { if (emuNoted++ < 12) console.warn('MaskTab 内核时区设置失败', tabId, e?.message || e); });
+}
+if (!emu) console.warn('MaskTab 内核时区接口不可用（实验接口没装上），时区只在页面主线程里改');
+
 // ---------- 代理分流 ----------
-const BLOCK = { type: 'http', host: '127.0.0.1', port: 9, failoverTimeout: 1 }; // 拒绝：端口 9 上没人听
+// 拒绝：交给本机端口 9 上的 SOCKS（没人听，连接立刻被拒）。用 SOCKS 不用 HTTP 型：HTTP 型代理对不支持它的协议会被内核从列表里剪掉，
+// 剪空就成了直连（nsProtocolProxyService::PruneProxyInfo）；SOCKS 对所有协议都生效。proxyDNS：不在本机解析被拒绝请求的域名。
+// 内核偏好 network.proxy.type=0，代理失败不会再换下一个（decisions A-18），所以被拒绝就是失败。
+const BLOCK = { type: 'socks', host: '127.0.0.1', port: 9, proxyDNS: true, failoverTimeout: 1 };
 function routeFor(id) {
   const x = insts[id];
   if (!x) return BLOCK;
@@ -117,6 +147,7 @@ browser.proxy.onRequest.addListener(async (d) => {
   if (!id) id = idOfCs(d.cookieStoreId) || (isContainer(d.cookieStoreId) && csInst.get(d.cookieStoreId)) || null;
   if (id) {
     if (d.tabId >= 0) lastInst = id;
+    if (d.type === 'main_frame' && d.tabId >= 0) tzApply(d.tabId, id, true);
     if (d.type === 'main_frame' || d.type === 'sub_frame') noteSite(d.url, id);
     trNote(d, `走实例 #${insts[id]?.no ?? '?'} 的线路`);
     return routeFor(id);
@@ -135,10 +166,18 @@ browser.proxy.onRequest.addListener(async (d) => {
   }
   // 翻译接口只有“后台代发”这一种来路；别的来路一律拒绝，绝不直连。
   if (isTr(d.url)) { trNote(d, '已拒绝'); return BLOCK; }
-  // 不属于任何网页标签：扩展自己、app 内部的请求（来源是 moz-extension 或没有来源）直连；其余认不出实例的一律拒绝。
+  // 不属于任何网页标签：别的扩展（用户装的翻译、暗色模式这类替网页取资源的）、内核自己的后台请求（证书吊销检查、远程设置等，没有来源）。
+  // 以前一律直连——开着 FlClash 时就是从 FlClash 出去（decisions A-18）。现在：
+  // - 本机回环（127.0.0.1 / localhost / [::1]）直连：那是这台手机自己（核心服务、mihomo 的本机端口），不出网，也没有可走的“实例线路”；
+  // - 其余走 app 当前显示的实例的线路（没有就借最近一个认得出实例的网页请求的），都没有就拒绝。绝不直连出网。
   // 注意：网页里的内容脚本自己发的请求也是“没有标签页、没有来源”（模拟器实测 run 44439679859：tab=-1 cs=firefox-default），
-  // 会落到这里直连出去——所以我们自己的内容脚本一律不许自己发请求，要发就交给后台代发（translate.js、autofill.js 都是）。
-  if (d.tabId < 0 && (!from || from.startsWith('moz-extension:') || from.startsWith('resource:') || from.startsWith('chrome:'))) { trNote(d, '直连'); return { type: 'direct' }; }
+  // 会落到这里——所以我们自己的内容脚本一律不许自己发请求，要发就交给后台代发（translate.js、autofill.js 都是）。
+  if (d.tabId < 0 && (!from || from.startsWith('moz-extension:') || from.startsWith('resource:') || from.startsWith('chrome:'))) {
+    if (isLoop(d.url)) { trNote(d, '本机直连'); return { type: 'direct' }; }
+    const via = insts[curInst] ? curInst : insts[lastInst] ? lastInst : '';
+    if (via) { trNote(d, `走当前实例 #${insts[via].no} 的线路`); noteSys(d, from, via); return routeFor(via); }
+    noteBlocked(d, from, ''); trNote(d, '已拒绝'); return BLOCK;
+  }
   // 记下来（设置 → 人机验证诊断里能看到，也进诊断信息）：网页的后台线程发的请求如果认不出实例，验证组件就会卡死，这是要排查的可疑点之一
   const pass = off.has('block') && insts[lastInst] ? lastInst : '';
   noteBlocked(d, from, pass);
@@ -159,6 +198,14 @@ function noteSite(url, id) {
 function siteInst(from) {
   const v = siteMap.get(siteOf(from));
   return v && v !== '*' && insts[v] ? v : null;
+}
+// 不属于任何网页、借当前实例线路出去的请求：每种域名记一次日志（排查“谁在后台联网”用，最多 20 种）
+const sysSeen = new Set();
+function noteSys(d, from, via) {
+  let h = ''; try { h = new URL(d.url).host; } catch { /* 忽略 */ }
+  if (!h || sysSeen.has(h) || sysSeen.size >= 20) return;
+  sysSeen.add(h);
+  console.info(`MaskTab 非网页请求 ${h} 来自=${from || '—'} 走实例 #${insts[via]?.no ?? '?'} 的线路`);
 }
 function noteBlocked(d, from, pass) {
   const host = (u) => { try { return new URL(u).host; } catch { return ''; } };

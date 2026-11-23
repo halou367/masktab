@@ -1,9 +1,11 @@
 // 页面指纹（安卓版，内容脚本在 document_start 执行）。每个实例一个种子：同一实例稳定、不同实例不同。
 // 在火狐的内容脚本里通过 window.wrappedJSObject + exportFunction 改页面自己的原型（页面脚本看到的就是改过的值），
 // 不往页面插 <script>（会被网页的 CSP 拦下）。在普通页面环境（测试用）里直接改 window。
-// 覆盖：画布读回轻微噪声（getImageData / toDataURL / toBlob）、音频采样轻微噪声、hardwareConcurrency、
-// screen.availHeight 微调、时区（getTimezoneOffset、本地时间各分量、toString、toLocale*、Intl.DateTimeFormat）。
-// deviceMemory：火狐本来就不暴露，保持不暴露。
+// 覆盖：音频采样轻微噪声；时区的兜底（getTimezoneOffset、本地时间各分量、toString、toLocale*、Intl.DateTimeFormat）——
+// 时区平时由后台通过内核按标签页设（BrowsingContext.timezoneOverride，Worker 里也生效，decisions A-21），网页里读到的已经是实例时区，这里就不动；
+// 只有内核那条没生效（实验接口装不上、跨进程换了浏览上下文还没补上）时才在主线程改。
+// 不再改（decisions A-20，交给内核的指纹保护 FPP，主线程和 Worker 一致）：画布读回（FPP 按实例、会话、站点随机化）、
+// hardwareConcurrency（FPP 分档成 4 或 8）、screen.availHeight（FPP 让可用区 = 屏幕）。deviceMemory：火狐本来就不暴露。
 // 限制（见 docs/android.md）：比桌面内核级弱；新建 iframe 立即取原型这类绕法拦不全；按本地时间解析日期字符串仍用系统时区。
 (function () {
   'use strict';
@@ -16,30 +18,9 @@
     h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995) >>> 0; h ^= h >>> 15;
     return h >>> 0;
   }
-  function rng(a) {
-    return function () {
-      a = (a + 0x6d2b79f5) | 0;
-      let t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
   /** 种子 → 本实例的参数（纯函数，便于测试）。 */
   function profile(seed) {
-    const r = rng(hash32(seed, 1));
-    return {
-      cores: [4, 6, 8, 8, 8][Math.floor(r() * 5)],
-      availCut: Math.floor(r() * 5) * 8, // screen.availHeight 少 0–32 像素
-      key: hash32(seed, 2),
-    };
-  }
-  /** 画布像素噪声：按种子和位置决定，约每 53 个像素改一个颜色通道的最低位。只看位置，所以同一实例对同一内容的读回结果稳定。 */
-  function noisePixels(data, key) {
-    const n = data.length;
-    for (let i = (key % 53) * 4; i < n; i += 53 * 4) {
-      const c = (key >>> ((i >>> 2) % 29)) % 3;
-      data[i + c] ^= 1;
-    }
+    return { key: hash32(seed, 2) };
   }
   /** 音频采样噪声：先量化到 1e-6 再加一个 ±2e-7 的偏移，重复调用结果不变（幂等）。 */
   function noiseSamples(arr, key) {
@@ -107,36 +88,9 @@
       proto[name] = ex(make(orig), name, orig.length);
     });
 
-    // ---- 画布 ----
-    if (!off.has('canvas')) tryit(() => {
-      const C2 = page.CanvasRenderingContext2D.prototype;
-      const oGet = C2.getImageData;
-      method(C2, 'getImageData', (orig) => function (...a) { const img = orig.call(this, ...a); tryit(() => noisePixels(img.data, pr.key)); return img; });
-      const noisy = (cv) => {
-        const w = cv.width, h = cv.height;
-        if (!w || !h || w * h > 4e6) return cv;
-        const c2 = page.document.createElement('canvas');
-        c2.width = w; c2.height = h;
-        const x = c2.getContext('2d');
-        x.drawImage(cv, 0, 0);
-        const img = oGet.call(x, 0, 0, w, h);
-        noisePixels(img.data, pr.key);
-        x.putImageData(img, 0, 0);
-        return c2;
-      };
-      const HC = page.HTMLCanvasElement.prototype;
-      method(HC, 'toDataURL', (orig) => function (...a) { let src = this; tryit(() => { src = noisy(this); }); return orig.call(src, ...a); });
-      method(HC, 'toBlob', (orig) => function (...a) { let src = this; tryit(() => { src = noisy(this); }); return orig.call(src, ...a); });
-    });
     // ---- 音频 ----
     if (!off.has('audio')) tryit(() => {
       method(page.AudioBuffer.prototype, 'getChannelData', (orig) => function (...a) { const d = orig.call(this, ...a); tryit(() => noiseSamples(d, pr.key)); return d; });
-    });
-    // ---- 硬件、屏幕 ----
-    if (!off.has('hw')) getter(page.Navigator.prototype, 'hardwareConcurrency', function () { return pr.cores; });
-    if (!off.has('hw')) tryit(() => {
-      const d = Object.getOwnPropertyDescriptor(page.Screen.prototype, 'availHeight');
-      if (d && d.get) getter(page.Screen.prototype, 'availHeight', function () { return Math.max(0, d.get.call(this) - pr.availCut); });
     });
     // ---- 语言 ----
     // 默认不在页面里改（决策 A-10）：内容脚本改不到 Worker，主线程与 Worker 的 navigator.language 不一致会被 Cloudflare Turnstile 判 600010。
@@ -152,8 +106,10 @@
     if (cfg.tz && !off.has('tz')) tryit(() => {
       const tz = cfg.tz;
       partsFmt(tz); // 时区名不对时这里抛错，整段跳过
-      const REAL = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (REAL === tz) return;
+      // 网页那边（不是内容脚本这边）现在的时区：内核的按标签页覆盖只作用于网页的环境，内容脚本自己的环境还是系统时区
+      let REAL = '';
+      try { REAL = page.Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { REAL = Intl.DateTimeFormat().resolvedOptions().timeZone; }
+      if (REAL === tz) return; // 内核已经按实例时区给出了（含 Worker），不再叠一层
       const DP = page.Date.prototype;
       const oTime = DP.getTime;
       // 偏移按 15 分钟一格缓存：时区规则的变更点都落在整 15 分钟上，网页一秒内调上万次 getHours 也不会拖慢
@@ -219,5 +175,5 @@
     return true;
   }
 
-  window.MTFP = { run, profile, noisePixels, noiseSamples, tzOffset, hash32 };
+  window.MTFP = { run, profile, noiseSamples, tzOffset, hash32 };
 })();

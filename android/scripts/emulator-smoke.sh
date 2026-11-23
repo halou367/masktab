@@ -46,7 +46,7 @@ BGPIDS=()
 # 退出时收掉后台起的节点服务端与 HTTP 服务、端口转发，写结果
 finish() {
   for p in "${BGPIDS[@]}"; do kill "$p" 2>/dev/null; done
-  pkill -f "/tmp/mt-node/mh" 2>/dev/null; pkill -f "http.server 18080" 2>/dev/null
+  pkill -f "/tmp/mt-node/mh" 2>/dev/null; pkill -f "smoke-http.py 18080" 2>/dev/null
   timeout 10 adb forward --remove-all 2>/dev/null
   echo "$fail" > "$OUT/result.txt"
   echo "冒烟结果：fail=$fail"
@@ -366,7 +366,8 @@ proxies:
   - {name: "测试节点-runner", type: ss, server: 10.0.2.2, port: 18388, cipher: aes-128-gcm, password: masktab-test, udp: false}
 Y
   cp "$(dirname "$0")/fpcheck.html" $W/fpcheck.html
-  setsid nohup python3 -m http.server 18080 --bind 0.0.0.0 --directory $W > $W/http.log 2>&1 < /dev/null & BGPIDS+=($!)
+  # 文件服务 + /echo（回显请求头，指纹自检页拿它核对 Accept-Language）
+  setsid nohup python3 "$(dirname "$0")/smoke-http.py" 18080 $W > $W/http.log 2>&1 < /dev/null & BGPIDS+=($!)
   sleep 2
   curl -fs -m 5 http://127.0.0.1:18080/sub.yaml | head -2 || { echo "订阅 HTTP 服务没起来"; return 1; }
   grep -q "level=fatal" $W/server.log && { echo "节点服务端没起来："; cat $W/server.log; return 1; }
@@ -379,6 +380,9 @@ Y
  "subUrl":"http://10.0.2.2:18080/sub.yaml","searchUrl":"https://www.bing.com/search?q=%s","current":"p1","nextNo":5}
 Y
   A shell am force-stop $PKG; A shell am force-stop com.google.android.apps.nexuslauncher || true; sleep 1
+  # 模拟真机“系统语言中文”（decisions A-19）：只改本 app 的语言（安卓 13 起），app 进程里 LocaleList.getDefault() 就是 zh-CN。
+  # 指纹自检页再核对实例 #3（日语）/ #4（德语）的 navigator.languages 和 Accept-Language 里没有被追加 zh-CN。
+  if A shell cmd locale set-app-locales $PKG --locales zh-CN; then echo "app 语言设成 zh-CN（模拟系统中文）"; else echo "失败：设置 app 语言（set-app-locales）"; fail=1; fi
   # 状态文件：先 adb push 到 /data/local/tmp，再 run-as cp 进 app 目录（不用 stdin 管道，那种写法可能一直等输入）
   A push $W/state.json /data/local/tmp/mt-state.json || return 1
   A shell "run-as $PKG sh -c 'rm -rf files/core files/host.json files/tabs.json files/state.json.old; cp /data/local/tmp/mt-state.json files/state.json'" || { echo "run-as cp 失败"; return 1; }
@@ -437,13 +441,41 @@ Y
     local n0 k
     n0=$(A logcat -d | grep -c "MTFPCHECK")
     A shell am start -n $ACT --es mt_inst "$1"; sleep 4
-    A shell am start -a android.intent.action.VIEW -d "http://10.0.2.2:18080/fpcheck.html?$2" -n $ACT
+    A shell am start -a android.intent.action.VIEW -d "http://10.0.2.2:18080/fpcheck.html?$2\\&echo=1" -n $ACT
     for k in $(seq 1 12); do sleep 2; [ "$(A logcat -d | grep -c "MTFPCHECK")" -gt "$n0" ] && break; done
     sleep 1; shot "$3"
   }
   fpcheck p3 "tz=Asia/Tokyo\\&off=-540\\&lang=ja-JP" 13-fpcheck-tokyo
   fpcheck p4 "tz=Europe/Berlin\\&off=-60\\&lang=de-DE" 14-fpcheck-berlin
   fpcheck p3 "tz=Asia/Tokyo\\&off=-540\\&lang=ja-JP\\&again=1" 15-fpcheck-tokyo-again
+  # 泄露复现（decisions A-18）：给模拟器设一个“系统代理”（模拟开着 FlClash 时安卓给 app 的 HTTP 代理，runner 上的 mihomo mixed 入站，
+  # 日志里记每条连接），再让实例 #2（节点不存在，线路不通）打开 example.org。以前内核把系统代理接在实例线路后面当备用，
+  # 线路断了就改从它出去（网页能打开、出口是 FlClash 的）；现在必须打不开，系统代理的日志里也不能有 example.org。
+  mkdir -p $W/sys
+  cat > $W/sys/sys.yaml <<'Y'
+log-level: info
+mixed-port: 18083
+allow-lan: true
+bind-address: "*"
+rules: ["MATCH,DIRECT"]
+Y
+  # 端口用 18083：18081 是后面下载测试的网站（dl-server.py）要用的（第一次跑撞过，run 45094931148）
+  setsid nohup $W/mh -d $W/sys -f $W/sys/sys.yaml > $W/sys.log 2>&1 < /dev/null & BGPIDS+=($!); local syspid=$!
+  sleep 3
+  local sc
+  sc=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -x http://127.0.0.1:18083 https://example.org/?probe=runner)
+  if [ "$sc" = "200" ] && grep -q "example.org" $W/sys.log; then echo "假系统代理可用（runner 上经它取 example.org：HTTP $sc，日志里有记录）"
+  else echo "失败：假系统代理没起来（HTTP $sc）"; tail -5 $W/sys.log; fail=1; fi
+  local sys0; sys0=$(wc -l < $W/sys.log)
+  A shell settings put global http_proxy 10.0.2.2:18083; sleep 3
+  echo "模拟器系统代理：$(A shell settings get global http_proxy | tr -d '\r')"
+  A shell am start -n $ACT --es mt_inst p2; sleep 4
+  A shell am start -a android.intent.action.VIEW -d "https://example.org/?leak=1" -n $ACT
+  sleep 25; shot 15b-leak-badnode-sysproxy
+  A shell settings put global http_proxy :0; A shell settings delete global http_proxy > /dev/null 2>&1 || true
+  tail -n +$((sys0 + 1)) $W/sys.log > "$OUT/sysproxy-during-leak-test.log"
+  kill $syspid 2>/dev/null
+  echo "假系统代理在测试期间看到的连接："; grep -o -- '--> [^ ]*' "$OUT/sysproxy-during-leak-test.log" | sort | uniq -c | head -20
   A shell am start -n $ACT --es mt_inst p1; sleep 3
   # 订阅与地址库、设置两页（和电脑版同一份 pages.js）在有订阅时也要画得出来
   n0=$(ready exits); A shell am start -n $ACT --es mt_open exits > /dev/null; sleep 6; shot 16-exits
@@ -472,6 +504,24 @@ Y
   if grep -q "核心服务退出了\|核心服务没有响应\|核心服务没有回应" "$L"; then echo "失败：核心服务中途退出或不回话"; grep "核心服务退出了\|核心服务没有响应\|核心服务没有回应" "$L" | cut -c1-200 | head -3; fail=1; else echo "通过：核心服务全程在"; fi
   if grep -q "Killing GPU process" "$OUT/logcat-live.txt"; then echo "失败：GPU 进程卡死被杀过"; fail=1; fi
   chk "加载失败 https://example.com/\? 实例 p2\|加载失败 https://example.com 实例 p2" "实例 #2（节点不存在）打不开网页，没有直连"
+  # 泄露复现的判定（decisions A-18）
+  if grep -q "example.org" "$OUT/sysproxy-during-leak-test.log" 2>/dev/null; then echo "失败：泄露：实例 #2 线路不通时，example.org 从系统代理出去了（见 sysproxy-during-leak-test.log）"; fail=1
+  else echo "通过：设了系统代理、实例 #2 线路不通时，系统代理没有收到 example.org（没有回落到系统代理）"; fi
+  if grep -q "MaskTab 指纹参数 example.org #2" "$L"; then echo "失败：泄露：实例 #2 打开了 example.org（应当加载失败）"; fail=1
+  else chk "加载失败 https://example.org/?leak=1 实例 p2" "实例 #2 线路不通 + 有系统代理：网页加载失败"; fi
+  # 语言、核数、UA（decisions A-19、A-20）：自检页里已经逐项判过（不对就是 MTFPCHECK fail），这里把关键值打出来
+  grep "MTFPCHECK pass" "$L" | sed 's/.*MTFPCHECK pass/  /' | cut -c1-400 | head -4
+  if grep -q "MTFPCHECK pass .*lang=ja-JP .*langs=ja-JP/ja al=ja-JP,ja" "$L"; then echo "通过：系统语言 zh-CN 时，实例 #3 的 navigator.languages = ja-JP/ja、Accept-Language 只有 ja（没有追加 zh-CN）"
+  else echo "失败：实例 #3 的 navigator.languages / Accept-Language 不是只有 ja（见上面的通过行或 MTFPCHECK fail）"; fail=1; fi
+  # 时区（decisions A-21）：内核按标签页覆盖的话，Worker 里的时区和实例一样。只记录，不判失败（内核接口能否在正式版 GeckoView 里用，以这里为准）
+  grep -E "MaskTab 内核时区" "$L" | cut -c1-200 | head -6
+  if grep -q "MTFPCHECK pass .*tz=Asia/Tokyo .*wtz=Asia/Tokyo" "$L" && grep -q "MTFPCHECK pass .*tz=Europe/Berlin .*wtz=Europe/Berlin" "$L"; then echo "通过（只记录）：Worker 里的时区和实例一致（#3 东京、#4 柏林）"
+  else echo "说明（不判失败）：Worker 里的时区和实例不一致：$(grep -o 'MTFPCHECK pass .*wtz=[^ ]*' "$L" | sed 's/.* tz=\([^ ]*\).*wtz=\([^ ]*\)/主线程 \1 Worker \2/' | tr '\n' ';')"; fi
+  # 画布（decisions A-20）：页面里不再加噪声，靠内核 FPP；两个实例打开同一页，画布摘要应当不同。只记录，不判失败
+  local cv3 cv4
+  cv3=$(grep "MTFPCHECK pass .*tz=Asia/Tokyo" "$L" | head -1 | sed -n 's/.*cvh=\([^ ]*\).*/\1/p'); cv4=$(grep "MTFPCHECK pass .*tz=Europe/Berlin" "$L" | head -1 | sed -n 's/.*cvh=\([^ ]*\).*/\1/p')
+  if [ -n "$cv3" ] && [ -n "$cv4" ] && [ "$cv3" != "$cv4" ]; then echo "通过（只记录）：两个实例的画布摘要不同（$cv3 / $cv4），内核在按实例随机化画布"
+  else echo "说明（不判失败）：两个实例的画布摘要相同或缺失（$cv3 / $cv4）：内核没有按实例随机化画布"; fi
   if grep -q "MaskTab 指纹参数 example.com #2" "$L"; then echo "失败：实例 #2 的网页加载成功了（应当断流）"; fail=1; else echo "通过：实例 #2 的网页没有加载成功"; fi
   grep -E "启动步骤|加载失败|MaskTab (后台|指纹|标签页)" "$L" | cut -c1-200 | head -30
   echo "节点服务端日志里的连接："; grep -E "\[TCP\]" "$OUT/node-server.log" | sed 's/.*msg=//' | head -20

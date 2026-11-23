@@ -1755,10 +1755,65 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
 ### A-17 手机：实例线路失败不再悄悄改走直连；解析只用国内服务器（2026-11-22，分支 fix/fp-consistency，没有真机实测）
 需求方：“手机端必须开 FlClash 有些网页才可以正常用，不开靠浏览器自己的代理会出现部分网页不加载”。
 - 推断的原因：扩展给每个请求的代理写着 failoverTimeout 1 秒，内核默认 network.proxy.failover_direct = true：本机代理一秒没应答、或被我们拒绝的请求，内核会退回直连。开着 FlClash 时直连从 FlClash 出去，网页照常（但那部分请求的出口 IP 和实例不同，也是 CF 反复验证的来源之一）；不开时被墙的站点就打不开。
-- 改：Gecko 偏好 network.proxy.failover_direct = false、network.proxy.allow_bypass = false；实例线路 failoverTimeout 改 10 秒。
+- 改：Gecko 偏好 network.proxy.failover_direct = false、network.proxy.allow_bypass = false；实例线路 failoverTimeout 改 10 秒。**（failover_direct 在正式版内核里不存在，这一条没起作用；真正的修法见 A-18。）**
 - 改：宿主模式 mihomo 的 DNS 去掉 8.8.8.8 和 1.1.1.1（国内网络下 8.8.8.8 的 UDP 会被抢答成假地址、1.1.1.1 常不通），和电脑一样只用 223.5.5.5 / 119.29.29.29 / 1.12.12.12。
 - 风险：以前靠“退回直连”才打开的请求，改了以后开着 FlClash 也会失败；“设置 → 人机验证诊断”里认不出实例的请求列表能看到是哪些。
 - 补充（同日）：需求方确认不开 FlClash 也能上外网，只是部分网站有问题，判断是客户端问题。补上真正的修法：认不出标签页、也不带容器的请求（网页后台线程、预连接等），如果来源网页最近只在一个实例里打开过，就走那个实例的线路；同一站点开在两个实例里不猜，仍拒绝。这样它们不再被拒、也不会退回直连。
+### A-18 手机：内核不再有“默认代理”——线路断了、被拒绝的请求不再改从系统代理（FlClash）出去（2026-11-23，分支 fix/android-fp）
+体检（报告 `work/fp-audit-android/REPORT.md` 问题 1、9）查出 A-17 没堵住的口子，按源码（GeckoView 160）：
+- **原因**：扩展 `proxy.onRequest` 返回的代理后面，Gecko 总会接上“默认代理”当备用（`ProxyChannelFilter` 的 `defaultProxyInfo`）；默认代理来自 `network.proxy.type`，默认 5 = 跟系统，安卓上就是系统给 app 的 HTTP 代理（开着 FlClash 时就是它）。
+  实例线路断了（mihomo 关连接 = NET_RESET）或被我们拒绝（`BLOCK` 指到 127.0.0.1:9 → 连接被拒）时，`nsHttpChannel` 做代理失败切换，换到系统代理出去——网页照常，出口却是 FlClash 的。这正是“不开 FlClash 部分资源出不来、开了就好”。
+  A-17 写的 `network.proxy.failover_direct=false` 在正式版内核里不存在（StaticPrefList 里包在 `MOZ_PROXY_DIRECT_FAILOVER` 下），等于没改，**A-17 那条说法作废**。
+- **改**（`Core.writeGeckoConfig`）：`network.proxy.type: 0`。没有默认代理，而且 `nsProtocolProxyService::GetFailoverForProxy` 只在 PAC / WPAD / 系统代理配置下做切换，type 0 下代理失败就是失败（R-1）。删掉无效的 `failover_direct`。
+  另关预取、预连接（它们在本机解析域名、提前建连接，不经实例线路的 proxyDNS）：`network.dns.disablePrefetch`、`network.dns.disablePrefetchFromHTTPS`、`network.prefetch-next: false`、`network.predictor.enabled: false`、`network.predictor.enable-prefetch: false`、`network.http.speculative-parallel-limit: 0`。
+- **改**（`android/ext/background.js`）：
+  - `BLOCK` 改成 SOCKS 型（`socks 127.0.0.1:9`，`proxyDNS`）。HTTP 型代理会被不支持它的协议从列表里剪掉（`PruneProxyInfo`），剪空就是直连；SOCKS 对所有协议生效。
+  - 不属于任何网页的请求（`tabId<0` 且来源为空 / `moz-extension:` / `resource:` / `chrome:`：用户装的其他扩展、内核自己的后台请求）以前一律 `direct`。现在走 app 当前显示的实例的线路（状态里新加 `cur`；没有就借最近认得出实例的那一个），都没有就拒绝。
+    只有本机回环（127.0.0.1 / localhost / [::1]）还直连：那是手机自己（核心服务、mihomo 的本机端口），不出网。日志 `MaskTab 非网页请求 <域名> 来自=… 走实例 #n 的线路`（每种域名一次，最多 20 种）。
+  - 认不出实例的网页请求照旧：按来源网页猜实例（A-17 补充），猜不了就拒绝——拒绝现在真的是失败，不会再被 FlClash 兜住；“人机验证诊断”的拒绝列表可能变长，据此再补认实例。
+- **不受影响的**：app 自己的联网都不走 Gecko——核心服务（Go，订阅更新、出口探测、在线更新）、mihomo、Kotlin 里的 `HttpURLConnection`（`Util.kt`，本来就是 `Proxy.NO_PROXY` 或指定本机端口）。`network.proxy.type` 只管 GeckoView 里的网页和扩展。
+- **检查**：模拟器冒烟（`emulator-smoke.sh` 的 proxy_phase）新增泄露复现：runner 上起一个 mihomo mixed 入站当“系统代理”（端口 18083；先在 runner 上经它取一次 example.org，确认它能用、有日志），`settings put global http_proxy 10.0.2.2:18083`，
+  实例 #2（节点不存在）打开 `https://example.org/?leak=1`：必须加载失败（logcat `加载失败 https://example.org/?leak=1 实例 p2`），假系统代理的日志里不能有 example.org。**没有用旧版跑对照**（旧版会不会在这一步漏，靠源码推断）；真机（vivo + FlClash）没测。
+- **验证**（模拟器，run 45094931148）：假系统代理可用（runner 上经它 HTTP 200），设上以后实例 #2 打开 example.org 加载失败（代码 147），测试期间假系统代理一条连接都没收到。内核的非网页请求（`firefox-portal-detection.com`、`services.addons.mozilla.org`）出现在测试节点的日志里，即走了当前实例的线路。
+- **回退**：删掉 `network.proxy.type: 0` 一行即回到跟系统代理（不建议）。
+
+### A-19 手机：网页语言不再被追加系统语言（2026-11-23，分支 fix/android-fp）
+- **现象**（体检，模拟器 + 需求方真机 ippure）：实例语言 en-US、系统中文时 `navigator.languages = en-US,en,zh-CN`，请求头 `en-US,en;q=0.9,zh-CN;q=0.8`。
+- **原因**：`GeckoRuntimeSettings.setLocales` → `commitLocales` → `computeAcceptLanguages()` 先放请求的语言，再无条件追加 `LocaleList.getDefault()` 的每一项，然后发给内核（`intl.accept_languages`），所以 yaml 里预设这个偏好也会被盖掉。
+- **改**（`Core.applyLocale` / `withDefaultLocales`）：调 `setLocales` 时临时 `LocaleList.setDefault(实例语言列表)`，调完在 finally 里把 `LocaleList` 和 `Locale`（含 FORMAT / DISPLAY 两类）原样换回。
+  `commitLocales` 是同步的（GeckoView 160 源码），只在这一瞬间读默认语言；我们在主线程调。回到“系统语言”的分支不换（本来就要系统语言）。app 自己的界面按 `Configuration` 取资源，不受这一瞬间影响。
+- **仍然的限制**：语言是全局一份，后台实例的标签页跟着当前实例（A-10 的代价，体检问题 10）；按标签页的 `BrowsingContext.languageOverride` 会让 `navigator.languages` 只剩一项，这次没做。
+- **检查**：模拟器冒烟在 proxy_phase 开头 `cmd locale set-app-locales com.masktab.browser --locales zh-CN`（模拟系统中文），指纹自检页（`fpcheck.html?…&echo=1`）核对：主线程和 Worker 的 `navigator.languages`、`/echo` 回显的 Accept-Language 都只含实例语言（ja / de），否则 `MTFPCHECK fail`。文件服务换成 `android/scripts/smoke-http.py`（多一个 `/echo`）。
+- **验证**（模拟器，run 45094931148，app 语言 zh-CN）：#3 `navigator.languages = ja-JP/ja`、Accept-Language `ja-JP,ja;q=0.9`；#4 `de-DE/de`、`de-DE,de;q=0.9`；Worker 同。真机没测。
+
+### A-20 手机：核数、画布、可用屏幕高度、UA 版本号不再在页面里改，交给内核（2026-11-23，分支 fix/android-fp）
+页面里的 JS 改写只管主线程，Worker、OffscreenCanvas、新建 iframe 里是内核的真值，检测站一比就对不上（体检问题 4–7，CreepJS 当场标红）。内核的指纹保护（FPP，`privacy.fingerprintingProtection: true`，安卓默认项见 `RFPTargetsDefault.inc`）已经在主线程和 Worker 里统一处理这几项：
+- **核数**：删 `fp.js` 的 `hardwareConcurrency`。FPP `NavigatorHWConcurrencyTiered`：本机 ≥8 核报 8，否则 4，主线程和 Worker 一致。以前按种子给 4/6/8，6 在 FPP 下不可能出现，且约四成实例和 Worker 不一致。
+- **画布**：删 `fp.js` 的 `getImageData / toDataURL / toBlob` 噪声。FPP `CanvasRandomization` / `EfficientCanvasRandomization` 按“会话密钥 + 完整 OriginAttributes（含 GeckoView 的 contextId，即实例）+ 顶层站点”随机化（`nsRFPService::GenerateKey`），所以实例之间、站点之间不同，同一实例同一会话内稳定；app 重启后会变（Fenix 也是这样）。
+  模拟器冒烟比对两个实例打开同一页的画布摘要（`cvh=`），结果写在下面“验证”。
+- **可用屏幕高度**：删 `availHeight` 减 0–32 像素。FPP `ScreenAvailToResolution` 让可用区 = 屏幕。
+- **UA**：`Fp.userAgent` 用内核原样的 UA，不再按种子换“Android 12–15”。`navigator.appVersion` 由内核按真系统版本拼（不看会话 UA），两者以前对不上；版本号本身信息量很小（Gecko 只对 10 以上照实报）。
+- 音频噪声（`getChannelData`）这次没动：FPP 没有对应项，去掉后所有实例的音频指纹一样；它的破绽（`copyFromChannel` 不改）留待以后。
+- 人机验证诊断去掉“画布噪声”“核心数与屏幕高度”“UA 里的安卓版本号按种子换”三行（已经没有可关的东西）；“内核自带的指纹保护”仍可关。
+- **检查**：页面检查 `fp` 段改成核对 fp.js 不再改这三样、时区照改；模拟器指纹自检页核对 Worker 与主线程核数相同、只能是 4 或 8，`navigator.appVersion` 与 UA 的 Android 版本相同、Worker 的 UA 与主线程相同。
+- **验证**（模拟器，run 45094931148）：主线程 / Worker 核数都是 4（模拟器 2 核，FPP 分档）；`appVersion = 5.0 (Android 15)` 与 UA 一致；两个实例开同一页画布摘要不同（`83056616` / `e99fbf4`），同一实例两次相同——内核确实按实例随机化，所以画布 JS 噪声去掉不留。真机（8 核应报 8）没测。
+
+### A-21 手机：时区改由内核按标签页设，Worker 里也对（2026-11-23，分支 fix/android-fp）
+- **原因**：`fp.js` 的时区改写只到主线程原型；Worker 里是系统时区（真机就是 Asia/Shanghai），`new Date(年,月,日,时)`、按本地时间解析字符串也走系统时区（体检问题 2）。
+- **评估**：GeckoView 160 有 `BrowsingContext.timezoneOverride`（`BrowsingContext.webidl`，chrome-only，WebDriver BiDi 的 `emulation.setTimezoneOverride` 用它）。设在顶层浏览上下文上：已有文档立即换（`DidSet` 调 `JS::SetRealmTimezoneOverride`），之后新建的文档在 `SetNewDocument` 时读 `Top()->GetTimezoneOverride()`，Worker / SharedWorker 继承（`WorkerPrivate` 的 `mTimezoneOverride`）。Service Worker 不跟（我们也没开 SW）。
+  只有特权代码能设。用 `ensureBuiltIn` 装的内置扩展安装位置是 builtin，`Extension.getIsPrivileged` 对 builtin 返回 true，可以声明 `experiment_apis`（Fenix 的 webcompat 内置扩展也是这么做的）；不特权时内核只报警告、忽略这一项，扩展照常装上。
+- **做法**：内置扩展加实验接口 `mtEmu.setTimezone(tabId, tz)`（`android/ext/exp/`，父进程里 `tabManager.get(tabId).browser.browsingContext.top.timezoneOverride = tz`）。
+  后台在标签页登记到实例时、网页开新标签页时、以及每次顶层导航发出请求时（新文档要等响应回来才建，来得及）设一次；实例时区变了或诊断里关了时区，已开的标签页跟着改。日志 `MaskTab 内核时区 tab=… #n → 时区`（前 12 次）。
+  `fp.js` 的时区段留作兜底：它先在**网页那边**（`page.Intl`，不是内容脚本自己的环境）读当前时区，已经是实例时区就什么都不做；接口没装上、跨进程换了浏览上下文还没补上时才在主线程改。
+- 内置扩展 `manifest.json` 版本号 0.1.0 → 0.2.0：`ensureBuiltIn` 只在版本号变了才重装，老用户升级后才会读到新的 `experiment_apis`（推断：同版本号时内核沿用缓存的 manifest）。**以后改安卓内置扩展的 manifest 要把版本号加一。**
+- **检查**：模拟器指纹自检页的通过行带 `wtz=`（Worker 里的时区），冒烟脚本比对 #3 东京、#4 柏林——**只记录、不判失败**。
+- **验证**（模拟器，run 45094931148）：实验接口装上了（日志 `MaskTab 内核时区 … → America/Denver`），#3 Worker 时区 `Asia/Tokyo`、#4 `Europe/Berlin`，与主线程一致（体检时 Worker 是系统时区 UTC）。真机没测；老版本升级上来的情况（manifest 版本号 0.1.0 → 0.2.0 触发重装）模拟器是全新安装，没测到。
+- **回退**：manifest 删掉 `experiment_apis` 即可，`fp.js` 自动回到只改主线程。
+
+### A-22 手机：Service Worker 仍然关着（2026-11-23，只评估）
+- 关着的代价：真 Firefox 安卓在安全上下文里有 `navigator.serviceWorker`，缺了能被看出来；推送、离线、SW 拦截请求的站点缺功能（体检问题 8）。
+- 不开的原因：SW 发的请求没有标签页（`tabId = -1`），我们要靠 `cookieStoreId`（容器 = 实例）认实例；GeckoView 上 `details.cookieStoreId` 不准（bug 1948114，A-4），这次没有在模拟器里确认 SW 请求能否按容器认出实例。认不出的话 A-18 之后它们会被拒绝（不会再漏），但开了 SW 的网站会大面积加载失败。
+- 下一步（要做时）：诊断里打开 SW，在模拟器里让一个页面注册 SW 并由 SW 发请求，看 `proxy.onRequest` 拿到的 `cookieStoreId`；能稳定认出实例再默认打开。
 ### UI-33 弹窗先撑开、实例栏悬停再稳一点、正在打开时 ＋ 转圈（2026-11-21，分支 fix/ui-motion）
 需求方：“点击浏览器右上角的插件按钮展开的时候会出现小白条然后才展开”“鼠标靠近实例选择切换的按钮会奇怪的收缩展开”“新建实例或者顶部 ＋ 号唤醒实例也不出现进度动画”。
 - 工具栏弹窗：浏览器按页面打开那一刻的大小定窗口，那时模块脚本没跑、页面是空的 → 先出一条矮白条。theme0.js（普通脚本，最先跑）按上次记下的高度把 html 撑开（没有记录用 520），popup.js 画完第一笔去掉，并记下这次的高度；1.5 秒兜底去掉。

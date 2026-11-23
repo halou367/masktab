@@ -4,12 +4,19 @@
 // 在一个装了伪装的标签页里打开 fpcheck.html?tz=Asia/Tokyo&off=-540&lang=ja-JP，
 // 逐项调用被改过的接口——任何一项抛错（比如 Permission denied）或者值不对都算失败。
 // 结果打到控制台一行：MTFPCHECK pass … / MTFPCHECK fail …（logcat 里搜这一行），同时显示在页面上。
+// 前后一致（decisions A-19、A-20）：Worker 里的核数、语言、UA 和主线程一样；navigator.appVersion 和 UA 的安卓版本一样；
+// 带 lang 时 navigator.languages（主线程和 Worker）只含这一种语言（不能被追加系统语言）；带 echo=1 时再向本页的服务取请求头，
+// Accept-Language 同样只能含这一种语言。Worker 时区、画布摘要只记录在通过行里（wtz=、cvh=），由冒烟脚本比对。
 const want = new URLSearchParams(location.search), R = {}, bad = [];
 const T = (k, f) => { try { R[k] = f(); } catch (e) { R[k] = 'ERR ' + e.message; } };
 const draw = () => { const c = document.createElement('canvas'); c.width = 120; c.height = 40; const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 120, 40); x.fillStyle = '#069'; x.font = '16px sans-serif'; x.fillText('MaskTab fp', 4, 26); return c; };
 const d = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
 T('toDataURL', () => draw().toDataURL().length > 100);
 T('toDataURL_stable', () => draw().toDataURL() === draw().toDataURL());
+// 画布摘要：两个实例打开同一页，内核的画布随机化（FPP，按实例、会话、站点）会让它们不同；冒烟脚本比对
+T('cvh', () => { const u = draw().toDataURL(); let h = 2166136261; for (let i = 0; i < u.length; i++) h = Math.imul(h ^ u.charCodeAt(i), 16777619) >>> 0; return h.toString(16); });
+T('appver', () => navigator.appVersion);
+T('ua', () => navigator.userAgent);
 T('toDataURL_jpeg', () => draw().toDataURL('image/jpeg', 0.5).startsWith('data:image/jpeg'));
 T('getImageData', () => draw().getContext('2d').getImageData(0, 0, 120, 40).data.length);
 T('getImageData_opts', () => draw().getContext('2d').getImageData(0, 0, 10, 10, { colorSpace: 'srgb' }).data.length);
@@ -33,13 +40,21 @@ T('throws', () => { try { Date.prototype.getHours.call({}); return 'no throw'; }
 T('invalid', () => String(new Date(NaN).getHours()) + ' ' + String(new Date(NaN)));
 T('perf_ms', () => { const t0 = performance.now(), x = new Date(); let s = 0; for (let i = 0; i < 20000; i++) s += x.getHours() + x.getTimezoneOffset(); return Math.round(performance.now() - t0); });
 T('iframe', () => { const f = document.createElement('iframe'); document.body.append(f); const w = f.contentWindow; const r = [w.navigator.hardwareConcurrency, new w.Date(+d).getTimezoneOffset(), w.navigator.language].join(','); f.remove(); return r; });
-// Worker 里的语言必须和主线程一致（Turnstile 会比，决策 A-10）；时区目前改不到 Worker，只记录不判失败
-T('worker', () => { const w = new Worker(URL.createObjectURL(new Blob(['postMessage([navigator.language, Intl.DateTimeFormat().resolvedOptions().timeZone].join(","))'], { type: 'text/javascript' }))); w.onmessage = (e) => { R.worker = e.data; }; return 'pending'; });
+// Worker 里的语言、核数、UA 必须和主线程一致（Turnstile 会比，决策 A-10、A-20）；时区（A-21 内核按标签页覆盖）只记录，由冒烟脚本判
+T('worker', () => { const w = new Worker(URL.createObjectURL(new Blob(['postMessage([navigator.language, Intl.DateTimeFormat().resolvedOptions().timeZone, navigator.hardwareConcurrency, navigator.languages.join("/"), navigator.userAgent].join("|"))'], { type: 'text/javascript' }))); w.onmessage = (e) => { R.worker = e.data; }; return 'pending'; });
+if (want.get('echo') === '1') fetch('/echo', { cache: 'no-store' }).then((r) => r.json()).then((j) => { R.al = j['accept-language'] || ''; }).catch((e) => { R.al = 'ERR ' + e.message; });
 setTimeout(() => {
-  if (String(R.worker).split(',')[0] !== navigator.language) bad.push('worker_lang = ' + R.worker + '（主线程 ' + navigator.language + '）');
+  const wk = String(R.worker).split('|');
+  if (wk[0] !== navigator.language) bad.push('worker_lang = ' + R.worker + '（主线程 ' + navigator.language + '）');
+  if (wk[2] !== String(R.cores)) bad.push('worker_cores = ' + wk[2] + '（主线程 ' + R.cores + '）');
+  if (wk[3] !== navigator.languages.join('/')) bad.push('worker_langs = ' + wk[3] + '（主线程 ' + navigator.languages.join('/') + '）');
+  if (wk[4] !== navigator.userAgent) bad.push('worker_ua = ' + wk[4]);
+  const av = (s) => (String(s).match(/Android ([0-9.]+)/) || [])[1] || '';
+  if (!av(R.ua) || av(R.ua) !== av(R.appver)) bad.push('appVersion = ' + R.appver + '（UA ' + R.ua + '）');
+  if (want.get('echo') === '1' && (typeof R.al !== 'string' || !R.al || R.al.startsWith('ERR'))) bad.push('accept_language = ' + R.al);
   for (const [k, v] of Object.entries(R)) if (typeof v === 'string' && v.startsWith('ERR')) bad.push(k + ': ' + v);
   for (const k of ['toDataURL', 'toDataURL_stable', 'toDataURL_jpeg', 'toBlob', 'toBlob_cb', 'audio', 'avail', 'intl_parts']) if (R[k] !== true) bad.push(k + ' = ' + R[k]);
-  if (![4, 6, 8].includes(R.cores)) bad.push('cores = ' + R.cores);
+  if (![4, 8].includes(R.cores)) bad.push('cores = ' + R.cores + '（内核 FPP 只给 4 或 8）');
   const tz = want.get('tz'), off = want.get('off'), lang = want.get('lang');
   if (tz) {
     if (R.intl_tz !== tz) bad.push('intl_tz = ' + R.intl_tz);
@@ -49,12 +64,18 @@ setTimeout(() => {
     if (String(R.iframe).split(',')[1] !== off) bad.push('iframe = ' + R.iframe);
   }
   if (lang && !String(R.lang).startsWith(lang + ' ' + lang)) bad.push('lang = ' + R.lang);
+  if (lang) {
+    const base = lang.split('-')[0].toLowerCase(), only = (l) => l.split(/[,/]/).map((x) => x.split(';')[0].trim().toLowerCase()).filter(Boolean).every((x) => x === base || x.startsWith(base + '-'));
+    if (!only(navigator.languages.join(','))) bad.push('languages = ' + navigator.languages.join(',') + '（多了别的语言，系统语言不能追加进来）');
+    if (wk[3] && !only(wk[3])) bad.push('worker_languages = ' + wk[3]);
+    if (want.get('echo') === '1' && typeof R.al === 'string' && !R.al.startsWith('ERR') && !only(R.al)) bad.push('accept_language = ' + R.al + '（多了别的语言）');
+  }
   if (!/^function toDataURL\(\) \{ \[native code\] \} ; function getHours\(\) \{ \[native code\] \} ; function hardwareConcurrency\(\) \{ \[native code\] \} ; function resolvedOptions\(\) \{ \[native code\] \}$/.test(R.fn_str)) bad.push('fn_str = ' + R.fn_str);
   if (R.fn_name !== 'toDataURL,getHours,4') bad.push('fn_name = ' + R.fn_name);
   if (R.throws !== 'TypeError') bad.push('throws = ' + R.throws);
   if (R.invalid !== 'NaN Invalid Date') bad.push('invalid = ' + R.invalid);
   if (!(R.perf_ms < 1500)) bad.push('perf_ms = ' + R.perf_ms);
-  const line = bad.length ? 'MTFPCHECK fail ' + bad.join(' || ') : `MTFPCHECK pass cores=${R.cores} tz=${R.intl_tz} off=${R.tzo} lang=${navigator.language} perf=${R.perf_ms}ms langs=${navigator.languages.join('/')} worker=${R.worker}`;
+  const line = bad.length ? 'MTFPCHECK fail ' + bad.join(' || ') : `MTFPCHECK pass cores=${R.cores} tz=${R.intl_tz} off=${R.tzo} lang=${navigator.language} perf=${R.perf_ms}ms langs=${navigator.languages.join('/')} al=${String(R.al || '-').replace(/ /g, '')} wtz=${wk[1]} wcores=${wk[2]} cvh=${R.cvh} appver=${String(R.appver).replace(/ /g, '_')}`;
   console.info(line);
   document.title = bad.length ? 'fail' : 'pass';
   document.getElementById('out').textContent = line.replace(/ \|\| /g, '\n') + '\n\n' + JSON.stringify(R, null, 1);
