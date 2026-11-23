@@ -36,7 +36,7 @@ export function instancesView(c) {
   // 分成“运行中 / 休眠”两组（演示定稿，决策 UI-10）；拖动排序只在同一组里换位置。
   const mk = c.lite ? cardLite : card, live = st.instances.filter((i) => i.rt.running || i.rt.starting), idle = st.instances.filter((i) => !(i.rt.running || i.rt.starting));
   const group = (t, list, cls, note) => list.length > 0 && [sec([t, ' · ', list.length], note), h('div', { class: 'grid' + (c.lite ? ' lt' : '') + cls }, list.map(mk))];
-  const grid = h('div', { class: 'grids', onpointerdown: dragDown }, group('运行中', live, '', '长按卡片拖动排序'), group('休眠', idle, ' idle', live.length ? null : '长按卡片拖动排序'));
+  const grid = h('div', { class: 'grids', onpointerdown: dragDown }, group('运行中', live, '', '长按卡片拖动排序'), group('未打开', idle, ' idle', live.length ? null : '长按卡片拖动排序'));
   const out = [head, st.vault?.error ? h('div', { class: 'warn bad' }, icon('warn', 20), h('span', { class: 'tx' }, st.vault.error)) : null, grid,
     rulesBox(st)];
   const cur = sub && sub !== 'import' && st.instances.find((i) => i.id === sub);
@@ -76,6 +76,9 @@ function rulesBox(st) {
 
 // 正在关闭（核心服务的 rt.stopping）：写出来，并且这时候就能点“打开”——记下来，关完马上重新打开（rt.reopen）。
 // 以前关闭要等几秒到十几秒，这期间卡片还是“运行中”的样子，点“打开”没有任何反应。
+// 超出活跃实例上限、自动休眠了（decisions PERF-1）：窗口还在，一点就醒
+const sleepLine = (rt) => h('div', { class: 'cx slp', title: '开着的实例超过“活跃实例上限”，这个最久没用，已自动休眠：窗口、网页、登录都还在，后台标签页暂时释放，内存交给系统压缩。点“唤醒”或切到它的窗口马上恢复。实例详情里可设成常驻' },
+  icon('moon', 14), h('span', {}, rt.sleptMb > 0 ? `休眠中 · 腾出 ${rt.sleptMb} MB` : '休眠中'));
 const stopLine = (rt) => h('div', { class: 'stp stop' }, h('i', { class: 'ring' }), h('span', {}, rt.reopen ? '正在关闭，关完重新打开…' : '正在关闭…'));
 const stopBtn = (i) => (i.rt.reopen
   ? ibtn('close', '不重新打开了', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
@@ -91,13 +94,13 @@ function card(i) {
   const ex = i.proxy.state === 'on' ? shownExit(i) : null, rt = i.rt;
   const sites = cardSites(i);
   // 运行中 / 休眠不写字（决策 UI-9）：头像右上角的点、右边是“关闭”还是“打开”已经说了；只有正在启动时写进度。
-  const state = busyLine(i, ctx.st.launchSteps) || (rt.stopping ? stopLine(rt) : null);
+  const state = busyLine(i, ctx.st.launchSteps) || (rt.stopping ? stopLine(rt) : rt.asleep ? sleepLine(rt) : null);
   const warn = warnLine(i);
   const el = h('div', { class: 'cardi' + (rt.running ? ' running' : '') + (i.id === ctx.st.me?.id ? ' cur' : ''), 'data-id': i.id, style: { '--c': i.color }, title: '点开看账号与 Cookie；长按拖动排序',
     onclick: (ev) => { if (ev.target.closest('button,input,.fl') || ev.currentTarget.dataset.dragged) return; setRoute(i.id); } },
   h('div', { class: 'ct' }, face(i, false, true, true), h('div', { class: 'grow' }, h('div', { class: 'nl' }, h('span', { class: 'no' }, `#${i.no}`), h('span', { class: 'nm', title: nameOf(i) }, nameOf(i))), state || exitLine(i)),
     // 动作在名字右边（演示定稿）：运行中 = 关闭，休眠 = 打开。有改动等着重启时多一个“重启”；平时要重启，点开卡片，在详情顶上。
-    rt.stopping ? stopBtn(i) : rt.running ? [rt.needRestart?.length > 0 && ibtn('refresh', '重启（让改动生效）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`)), 'need'), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
+    rt.stopping ? stopBtn(i) : rt.running ? [rt.asleep && ibtn('play', '唤醒（窗口切到前面）', () => openInst(i)), rt.needRestart?.length > 0 && ibtn('refresh', '重启（让改动生效）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/restart`)), 'need'), ibtn('stop', '关闭（数据保留）', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))]
       : rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
         : openBtn(i)),
   sites.length > 0 && h('div', { class: 'cs' }, sites.length ? [sites.slice(0, MAXI).map((s) => { const e = siteIcon(s.d, 15); e.title = siteTip(s); if (!s.acc) e.classList.add('ckonly'); return e; }),
@@ -286,6 +289,7 @@ function drawer(i) {
           : i.rt.starting ? ibtn('close', '取消打开', () => ctx.act(() => api('POST', `/api/instances/${i.id}/stop`)))
             : openBtn(i, '')),
       h('div', { class: 'sw2', style: { padding: '4px 16px 0' }, title: '实例颜色' }, ctx.st.palette.map((c) => h('button', { class: c === i.color ? 'on' : '', style: { background: c }, title: '实例颜色', onclick: () => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { color: c })) }))),
+      !ctx.lite && row({ ic: 'moon', t: '常驻', s: i.keepAwake ? '不会自动休眠（仍占一个活跃名额）' : '开着的实例超过上限时，最久没用的会自动休眠，一点就醒', trail: sw(!!i.keepAwake, '常驻（不自动休眠）', (v) => ctx.act(() => api('PATCH', `/api/instances/${i.id}`, { keepAwake: v }))) }),
       netRows(i),
       mailRows({ ...ctx, load: ctx.load }, i),
       pwRows(i, accts.id === i.id ? accts.mode : null),

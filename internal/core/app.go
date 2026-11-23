@@ -54,6 +54,8 @@ type Runtime struct {
 	Step         int              `json:"step,omitempty"`     // 启动中正在进行的步骤（LaunchSteps 的序号，从 1 开始）
 	Stopping     bool             `json:"stopping,omitempty"` // 正在关闭（关完之前 running 仍为真）
 	Reopen       bool             `json:"reopen,omitempty"`   // 正在关闭时用户点了“打开”：关完会马上重新打开
+	Asleep       bool             `json:"asleep,omitempty"`   // 超出活跃实例上限，已自动休眠（窗口还在，一点就醒；sleep.go）
+	SleptMB      int              `json:"sleptMb,omitempty"`  // 休眠时腾出的物理内存（MB，工作集差）
 
 	active      bool          // 是否已写入 mihomo 配置
 	refused     bool          // Error 是“组件没准备好，开不了”；组件好了以后清掉
@@ -67,6 +69,8 @@ type Runtime struct {
 	done        chan struct{}
 	startedAt   int64           // 本次启动时刻（毫秒），用来判断伴随扩展后台是否一直没起来
 	seenExit    map[string]bool // "换一个"这一轮已经轮到过的出口
+	usedAt      int64           // 最近一次被用（窗口到前台、切标签页、点打开）的时刻（毫秒）；休眠按它排先后
+	sleptAt     int64           // 休眠的时刻；休眠中隔一阵再压一次
 }
 
 // Setup 是组件准备的进度。Error 只表示"浏览器内核没准备好"（此时任何窗口都开不了）；
@@ -129,10 +133,11 @@ type App struct {
 	tune      tuneState           // 入口优选：每个入口按小时的表现、当天用量（tune.go，落盘在 state/tune.json，decisions N-6）
 	tuneOnce  sync.Once
 	// 信箱（mail.go，decisions MB-1）：实例 id → 收信状态。锁的次序：a.mu 在外、mailMu 在里
-	mailMu   sync.Mutex
-	mail     map[string]*mailBox
-	mailWake chan struct{}
-	mailOnce sync.Once
+	mailMu    sync.Mutex
+	mail      map[string]*mailBox
+	mailWake  chan struct{}
+	sleepWake chan struct{} // 活跃实例上限：有实例被用 / 开关时叫醒 sleepLoop（sleep.go）
+	mailOnce  sync.Once
 
 	cfgMu     sync.Mutex
 	cfgGen    atomic.Int64 // 每次 mihomo 重载配置加一（重载会重置全部策略组，进行中的测速据此重试）
@@ -239,7 +244,7 @@ type fileWrap[T any] struct {
 // Open 载入数据目录；首次运行创建普通实例 #0。
 func Open(dir, exeDir, version string, host ...HostOpts) (*App, error) {
 	a := &App{Dir: dir, ExeDir: exeDir, Version: version, rt: map[string]*Runtime{}, scan: map[string]*model.NodeScan{}, scanning: map[string]bool{}, pipVia: map[string]string{}, scanProg: map[string]*scanProg{}, speed: map[string]*speedJob{}, scannedAt: map[string]int64{},
-		kernelUp: make(chan struct{}), waiters: map[chan struct{}]bool{}, connSeen: map[string][2]int64{}, token: randToken(24)}
+		kernelUp: make(chan struct{}), sleepWake: make(chan struct{}, 1), waiters: map[chan struct{}]bool{}, connSeen: map[string][2]int64{}, token: randToken(24)}
 	for _, d := range []string{"config", "kernel", "profiles", "extensions", "ext-master", "runtime", "core", "state"} {
 		if err := os.MkdirAll(a.p(d), 0o755); err != nil {
 			return nil, err

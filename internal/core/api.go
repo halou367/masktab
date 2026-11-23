@@ -352,12 +352,14 @@ type proxyPatch struct {
 }
 
 type instPatch struct {
-	No     *int // 改编号；被别的实例占着就和它对调
-	Name   *string
-	Color  *string
-	Proxy  *proxyPatch
-	TZ     *model.TZ
-	Locale *model.Locale
+	No    *int // 改编号；被别的实例占着就和它对调
+	Name  *string
+	Color *string
+	// KeepAwake：常驻，不受活跃实例上限影响（decisions PERF-1）
+	KeepAwake *bool
+	Proxy     *proxyPatch
+	TZ        *model.TZ
+	Locale    *model.Locale
 	// FollowExit：时区 / 语言改回“每次启动跟着出口走”（旧行为，有代价，见 decisions SI-1）；false = 固定身份（默认）。
 	FollowExit *bool
 	// IdentReset：按现在的出口重新定身份（实例确实要搬到别的国家时用）。网站会把它看成换了一台机器。
@@ -412,6 +414,10 @@ func (a *App) PatchInstance(id string, p instPatch) error {
 	}
 	if p.Name != nil && *p.Name != in.Name {
 		in.Name = *p.Name
+	}
+	if p.KeepAwake != nil && *p.KeepAwake != in.KeepAwake {
+		in.KeepAwake = *p.KeepAwake
+		defer a.sleepPoke()
 	}
 	if p.Color != nil && *p.Color != in.Color {
 		in.Color = *p.Color
@@ -687,6 +693,11 @@ func (a *App) routes(mux *http.ServeMux) {
 		}
 		a.mu.Unlock()
 		reply(w, map[string]int{"changed": n}, nil)
+	})
+	// 伴随扩展：本实例的窗口到了前台 / 切了标签页（活跃实例上限按它排先后，休眠中的就此醒来；decisions PERF-1）
+	mux.HandleFunc("POST /api/used", func(w http.ResponseWriter, r *http.Request) {
+		a.touch(me(r))
+		reply(w, nil, nil)
 	})
 	mux.HandleFunc("PATCH /api/instances/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var p instPatch
@@ -985,6 +996,7 @@ func (a *App) routes(mux *http.ServeMux) {
 		pathChanged := a.Settings.PathTemplate != s.PathTemplate || a.Settings.ChainPath != s.ChainPath
 		a.Settings = s
 		a.saveLocked("settings")
+		a.sleepPoke()
 		a.bumpLocked("state", "")
 		a.mu.Unlock()
 		tabbar.Poke()

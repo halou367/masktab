@@ -18,7 +18,7 @@ export function face(i, big, withDot, noFlag) {
   const tx = letterOf(i);
   return h('span', { class: 'face' + (big ? ' big' : '') + (tx.length > 2 ? ' l3' : tx.length > 1 ? ' l2' : ''), style: { background: i.color } }, tx,
     ex?.country && flag(ex.country),
-    withDot && h('i', { class: 'run' + (i.rt.running ? ' on' : i.rt.starting || launching(i) ? ' st' : '') }));
+    withDot && h('i', { class: 'run' + (i.rt.running ? ' on' + (i.rt.asleep ? ' zz' : '') : i.rt.starting || launching(i) ? ' st' : '') }));
 }
 // 启动进度：第几步 / 共几步 + 当前步骤名，配一条进度条。
 export function stepLine(i, steps) {

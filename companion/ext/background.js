@@ -198,11 +198,38 @@ async function handle(e, c) {
     return;
   }
   if (e.type === 'wizard' && e.inst === c.instanceId) { await wizardWindow(); return; } // 合并窗口“＋ → 新建实例”：核心服务叫最近在前台的实例弹向导
+  if (e.type === 'sleep' && e.inst === c.instanceId) { await sleepTabs(); return; } // 超出活跃实例上限（decisions PERF-1）
   if (e.type === 'focus' && e.inst === c.instanceId) {
     const w = await chrome.windows.getLastFocused().catch(() => null);
     if (w) await chrome.windows.update(w.id, { focused: true, drawAttention: true });
   }
 }
+
+// ---------- 活跃实例上限（decisions PERF-1） ----------
+// 本实例的窗口到了前台、切了标签页：报给核心服务（按它排“最近用过”，休眠中的就此醒来）。十秒内只报一次。
+let usedAt = 0;
+const used = () => { const t = Date.now(); if (t - usedAt < 10_000) return; usedAt = t; api('POST', '/api/used').catch(() => { usedAt = 0; }); };
+chrome.windows.onFocusChanged.addListener((w) => { if (w !== chrome.windows.WINDOW_ID_NONE) used(); });
+chrome.tabs.onActivated.addListener(used);
+// 用户在网页里填过东西的标签页（autofill.js 报的）：休眠时不丢。记在 storage.session（后台被回收也不丢，浏览器关掉清空）。
+const dirtyGet = async () => new Set((await chrome.storage.session.get('dirty')).dirty || []);
+const dirtySet = (s) => chrome.storage.session.set({ dirty: [...s] });
+async function dirtyMark(id, on) { const s = await dirtyGet(); if (on === s.has(id)) return; on ? s.add(id) : s.delete(id); await dirtySet(s); }
+chrome.tabs.onRemoved.addListener((id) => { dirtyMark(id, false).catch(() => {}); });
+chrome.tabs.onUpdated.addListener((id, ch) => { if (ch.status === 'loading' && ch.url) dirtyMark(id, false).catch(() => {}); }); // 换了网页：填的东西已经没了
+// 休眠：把后台标签页丢掉（浏览器自带的“丢弃”：标签页留在原处，点到时重新加载）。
+// 不丢：每个窗口当前的标签页、正在出声的、填过东西的、扩展自己的页面和新标签页。
+async function sleepTabs() {
+  usedAt = 0; // 下次一到前台马上报，立刻醒
+  const dirty = await dirtyGet().catch(() => new Set());
+  let n = 0;
+  for (const t of await chrome.tabs.query({})) {
+    if (t.active || t.audible || t.discarded || dirty.has(t.id) || !/^https?:/.test(t.url || '')) continue;
+    if (await chrome.tabs.discard(t.id).catch(() => null)) n++;
+  }
+  return n;
+}
+globalThis.sleepTabs = sleepTabs; // 冒烟测试从调试端口调用
 
 // 新建向导的小窗口（决策 UI-25、UI-31）：只有向导一页（wizard.html，只装向导要的代码，开得快），建好 / 取消就自己关掉。已经开着一个就把它提到前面。
 async function wizardWindow() {
@@ -382,6 +409,7 @@ chrome.runtime.onMessage.addListener((m, sender, send) => {
     api('POST', '/api/ipq/cf', { ip: String(m.ip || ''), risk: Number(m.risk) }).then(() => send({ ok: true }), (e) => send({ ok: false, error: e.message }));
     return true;
   }
+  if (m && m.t === 'dirty') { if (sender.id === chrome.runtime.id && sender.tab) dirtyMark(sender.tab.id, true).catch(() => {}); return false; }
   if (m === 'wake') { loop(); send(true); return false; } // 扩展页面打开时叫醒后台
   if (m === 'repaint') { loop(); refresh().then(() => send(true), () => send(false)); return true; }
   return false;

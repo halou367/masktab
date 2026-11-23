@@ -273,3 +273,24 @@ func cmdline(h syscall.Handle) string {
 	}
 	return syscall.UTF16ToString(u16)
 }
+
+var emptyWS = kernel32.NewProc("K32EmptyWorkingSet")
+
+// Trim 把这些进程的工作集清空（EmptyWorkingSet）：页面交给系统（Windows 10 起先进“内存压缩”），
+// 进程照常运行，再用到时按需调回来。返回清之前、之后的工作集合计（字节）。（decisions PERF-1）
+func Trim(pids []int) (before, after int64) {
+	const setQuota, queryInfo = 0x0100, 0x0400
+	for _, pid := range pids {
+		h, err := syscall.OpenProcess(setQuota|queryInfo|queryLimited, false, uint32(pid))
+		if err != nil {
+			continue
+		}
+		ws0, _ := memWS(h)
+		emptyWS.Call(uintptr(h))
+		ws1, _ := memWS(h)
+		syscall.CloseHandle(h)
+		before += ws0
+		after += ws1
+	}
+	return
+}

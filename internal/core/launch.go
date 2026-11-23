@@ -161,6 +161,7 @@ func (a *App) Launch(id string) error {
 		a.bumpLocked("focus", id)
 		a.mu.Unlock()
 		tabbar.Focus(id) // 合并窗口：它的窗口可能正藏着，切过去
+		a.touch(id)      // 休眠中的一点就醒（decisions PERF-1）
 		return nil
 	}
 	// 这两种情况窗口确实开不了（没有浏览器；没有代理内核时伪装实例一出网就是真实 IP，硬规则 R-1）。
@@ -182,7 +183,8 @@ func (a *App) Launch(id string) error {
 	r.gen++
 	gen := r.gen // 这一次启动的编号：中途被叫停（关闭 / 删除）时 r.gen 会变，见 stale
 	r.Starting, r.Error, r.NeedRestart, r.Notice, r.Step = true, "", nil, "", 1
-	r.Cut = "启动中" // 浏览器起来之前主通道一律 REJECT
+	r.usedAt, r.Asleep, r.SleptMB = now(), false, 0 // 刚打开的算最近用过（活跃实例上限，sleep.go）
+	r.Cut = "启动中"                                   // 浏览器起来之前主通道一律 REJECT
 	// 打开之前先把指向空处的代理选择修好（订阅被删了、节点没了…，见 heal.go）
 	if note, ch := a.healLocked(in); note != "" || ch {
 		if note != "" {
@@ -526,6 +528,7 @@ func (a *App) watch(id string, cmd *exec.Cmd, logf *os.File) {
 	r.Running, r.Pid, r.cmd, r.active, r.Cut, r.NeedRestart = false, 0, nil, false, "", nil
 	reopen := r.Reopen && !a.quitting && in != nil
 	r.Stopping, r.Reopen = false, false
+	r.Asleep, r.SleptMB = false, 0
 	done := r.done
 	if !a.quitting {
 		a.saveLocked("runtime") // 正常关闭的实例从恢复列表里移除；程序退出时保留列表用于下次恢复
@@ -536,6 +539,7 @@ func (a *App) watch(id string, cmd *exec.Cmd, logf *os.File) {
 		close(done)
 	}
 	_ = a.applyConfig()
+	a.sleepPoke() // 空出一个名额：休眠的可以醒了
 	log.Printf("实例 #%d 已退出", no)
 	if reopen { // 关到一半时用户点了“打开”
 		go func() {

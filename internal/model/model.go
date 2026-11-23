@@ -11,6 +11,7 @@ type Instance struct {
 	Color      string    `json:"color"` // #RRGGBB
 	CreatedAt  int64     `json:"createdAt"`
 	LastUsedAt int64     `json:"lastUsedAt"`
+	KeepAwake  bool      `json:"keepAwake,omitempty"` // 常驻：不受活跃实例上限影响，永不自动休眠（decisions PERF-1）
 	Port       int       `json:"port"`
 	Proxy      InstProxy `json:"proxy"`
 	FP         FP        `json:"fp"`
@@ -304,6 +305,9 @@ type Settings struct {
 	EntryPin string `json:"entryPin,omitempty"`
 	// 信箱：邮件里的远程图片。"" = 总是加载（默认，需求方 2026-11-19：“就像真的邮件一样”）；"ask" = 先不加载，点了才加载
 	MailImages string `json:"mailImages,omitempty"`
+	// 活跃实例上限（decisions PERF-1）：开着的实例超过这么多个时，最久没用的自动休眠（不关窗口：后台标签页释放、内存交给系统压缩），
+	// 一点就醒。0 = 不限。不带 omitempty：默认是 6，关掉时 0 要真的写进文件。
+	ActiveMax int `json:"activeMax"`
 }
 
 // Bookmark 是新标签页上的一个书签。
@@ -320,6 +324,7 @@ func DefaultSettings() Settings {
 		IPInfoEndpoints: []string{"https://ipinfo.io/{ip}/json", "https://ipwho.is/{ip}", "http://ip-api.com/json/{ip}"},
 		TZSourceDefault: "exit-cf",
 		MergeWindows:    true, MergeCompact: true,
+		ActiveMax: 6,
 	}
 }
 

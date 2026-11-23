@@ -203,6 +203,7 @@ func (a *App) ensureKernel(onDownload func()) error {
 		go a.exitRefreshLoop()
 		go a.taskbarLoop()
 		go a.mergeLoop()
+		go a.sleepLoop() // 活跃实例上限（decisions PERF-1）
 	}
 	return nil
 }

@@ -629,3 +629,9 @@
   mo.observe(document.documentElement, { childList: true, subtree: true });
   tryFill();
 })();
+// 活跃实例上限（decisions PERF-1）：这一页用户亲手填过东西，就告诉后台；实例自动休眠时不丢这个标签页，免得填了一半的内容没了。
+document.addEventListener('input', function dirty(e) {
+  if (!e.isTrusted) return;
+  document.removeEventListener('input', dirty, true);
+  try { const p = chrome.runtime.sendMessage({ t: 'dirty' }); if (p && p.catch) p.catch(() => {}); } catch { /* 扩展刚换新 */ }
+}, true);

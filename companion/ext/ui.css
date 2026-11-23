@@ -170,7 +170,8 @@ html.pc .sw { transform: scale(.85); }
 .face.big { --s: 56px; } .face.l2 { font-size: calc(var(--s) * .38); letter-spacing: -.5px; } .face.l3 { font-size: calc(var(--s) * .30); letter-spacing: -.5px; }
 .face .flag { position: absolute; right: calc(var(--s) * -.12); bottom: calc(var(--s) * -.06); width: calc(var(--s) * .5); height: calc(var(--s) * .37); box-shadow: 0 0 0 1.5px var(--ring, var(--bg)); }
 .face .run { position: absolute; right: -1px; top: -1px; width: calc(var(--s) * .3); height: calc(var(--s) * .3); border-radius: 50%; background: var(--on3); box-shadow: 0 0 0 2px var(--ring, var(--bg)); }
-.face .run.on { background: var(--good); } .face .run.st { background: var(--acc); animation: ind2 .6s ease-in-out infinite alternate; }
+.face .run.on { background: var(--good); } .face .run.on.zz { background: var(--on3); } /* 休眠中（decisions PERF-1） */
+.cx.slp { color: var(--on2); gap: 4px; } .face .run.st { background: var(--acc); animation: ind2 .6s ease-in-out infinite alternate; }
 .site { width: 24px; height: 24px; border-radius: 50%; background: var(--surf3); display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--on2); overflow: hidden; }
 .site img { width: 16px; height: 16px; }
 .site.ckonly { opacity: .45; }

@@ -88,6 +88,10 @@ export function settingsAdv(c) {
     !host && row({ ic: 'dl', t: 'GitHub 下载镜像前缀', s: s.mirror || '直连', chev: true, onclick: text('GitHub 下载镜像前缀', 'mirror', '留空为直连', 'https://ghfast.top/') }),
     !host && sec('启动'),
     !host && row({ ic: 'ext', t: '新扩展的数据模式', s: name(O.ext, s.newExtData), drop: true, onclick: () => pick('新扩展的数据模式', O.ext, s.newExtData, 'newExtData') }),
+    // 活跃实例上限（decisions PERF-1）
+    !host && row({ ic: 'moon', t: '活跃实例上限', s: s.activeMax > 0 ? `${s.activeMax} 个 · 超过时最久没用的自动休眠，一点就醒` : '不限', drop: true,
+      title: '开着的实例超过这么多个时，最久没用的自动休眠：窗口、网页、登录都还在，后台标签页暂时释放、内存交给系统压缩；切到它的窗口马上恢复。实例详情里可把某个实例设成常驻',
+      onclick: () => pick('活跃实例上限', [[0, '不限'], [3, '3 个'], [4, '4 个'], [6, '6 个（默认）'], [8, '8 个'], [10, '10 个'], [15, '15 个'], [20, '20 个']], s.activeMax, 'activeMax') }),
     !host && row({ ic: 'history', t: '启动时恢复上次的实例', trail: sw(s.restoreOnStart, '恢复上次的实例', (v) => set(c, 'restoreOnStart', v)) }),
     // 合并窗口（决策 UI-15）：只有 Windows 桌面版做了
     !host && st.os === 'windows' && row({ ic: 'layers', t: '合并窗口', s: '各实例的窗口叠在同一个位置，顶上多一排实例标签，点标签切换',

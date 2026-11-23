@@ -117,3 +117,6 @@ func CloseWindows(root int) int {
 	}
 	return 0
 }
+
+// Trim 只有 Windows 做（见 procs_windows.go）；别的系统什么都不做。
+func Trim(pids []int) (before, after int64) { return 0, 0 }
