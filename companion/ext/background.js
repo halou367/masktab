@@ -241,7 +241,7 @@ chrome.tabs.onRemoved.addListener(async (id) => { const m = await tabUsedGet().c
 let powerAt = 0, power = null;
 async function powerSettings() {
   if (power && Date.now() - powerAt < 300_000) return power; // 五分钟取一次设置；改了设置最多五分钟后生效
-  const s = await api('GET', '/api/settings');
+  const s = (await api('GET', '/api/state')).settings || {};
   power = { saver: s.power !== 'perf', keep: s.tabKeep > 0 ? s.tabKeep : 3, idle: (s.tabIdleMin > 0 ? s.tabIdleMin : 10) * 60_000 };
   powerAt = Date.now();
   return power;
