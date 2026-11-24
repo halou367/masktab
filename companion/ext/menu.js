@@ -103,7 +103,7 @@ export function menuView(st, nav) {
   // 以前只在“节点与出口”里提示，工具栏按钮上虽然有个 ↻，点开却找不到在哪重启（需求方 2026-11-17）。
   if (rt.running && rt.needRestart?.length) kids.push(h('div', { class: 'warn need' }, icon('refresh', 20), h('span', { class: 'tx' }, restartText(rt)),
     h('button', { class: 'lk', onclick: () => run(() => api('POST', restartPath(st, me)), '正在重启…') }, '立即重启')));
-  const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic, 22), h('span', { class: 'grow' }, label), k != null && k !== '' && h('span', { class: 'k' }, k), h('span', { class: 'chev' }, icon('chevR', 20)));
+  const mi = (ic, label, fn, k, tip, noChev) => h('button', { class: 'mi', onclick: fn, title: tip || null }, icon(ic, 22), h('span', { class: 'grow' }, label), k != null && k !== '' && h('span', { class: 'k' }, k), !noChev && h('span', { class: 'chev' }, icon('chevR', 20)));
   // 四个入口包在一起：手机上还是一行一个；电脑弹窗里排成两列（弹窗最高 600，省下的高度给下面的实例列表，决策 UI-13）
   // 账号管理和录入登录合成一项（需求方 2026-11-24：“账号管理功能有重复”）：点这一项进账号管理，右边的圆点按钮 = 录入当前网页的登录。
   const recBtn = nav.record && h('span', { class: 'ib sm rec', role: 'button', tabindex: '0', title: `录入当前网页的登录${rules ? `（已标记 ${rules} 个网站）` : ''}`, 'aria-label': '录入当前网页的登录',
@@ -112,9 +112,18 @@ export function menuView(st, nav) {
     mi('globe', '节点与出口', nav.node, ex ? [flag(ex.country), h('span', { class: 'cn' }, cname(ex.country))] : on ? '' : '直连'),
     me.kind !== 'normal' && mi('finger', '指纹与伪装', nav.fp, dz.total ? `${dz.pass}/${dz.total}` : ''),
     me.mail && mi('mail', '信箱', () => nav.open(`mail/${me.id}`), me.mail.unread ? h('span', { class: 'mdot n' }, String(me.mail.unread)) : '')].filter(Boolean); // 信箱：设了卡密才有（decisions MB-1）
-  // 共享扩展：两列凑不满时补进来；凑满了就放到下面那排小图标里，弹窗不多占一行
-  const extIn = !st.host && items.length % 2 === 1;
-  if (extIn) items.push(extItem(st, me, mi, nav));
+  // 共享扩展、节能 / 性能也做成同样的长条（需求方 2026-11-24：工具栏太挤，翻译不用放这里，共享扩展该是按钮）。
+  // 节能 / 性能（decisions PERF-2）：点一下就切换，不进下一页，所以没有右箭头。
+  if (!st.host) {
+    items.push(extItem(st, me, mi, nav));
+    const saver = st.settings?.power !== 'perf';
+    items.push(mi(saver ? 'moon' : 'bolt', saver ? '节能模式' : '性能模式',
+      () => run(() => api('PATCH', '/api/settings', { power: saver ? 'perf' : '' }), saver ? '已切到性能模式' : '已切到节能模式'), '切换',
+      saver ? '节能模式：闲置标签页和超出上限的实例自动休眠（点击切到性能模式）' : '性能模式：全部照常运行（点击切到节能模式）', true));
+  }
+  // 两列凑不满时把“导入邮箱”补进来，工具栏里就不再放它
+  const mailIn = items.length % 2 === 1;
+  if (mailIn) items.push(mi('mail', '导入邮箱', () => nav.open('instances/import')));
   kids.push(h('div', { class: 'mis' }, items));
 
   // 开着的排在前面（和实例页“运行中 / 休眠”两组一个次序），组内还是拖出来的次序：要切过去的多半是开着的。
@@ -143,15 +152,11 @@ export function menuView(st, nav) {
     (to || (ev.key === 'ArrowUp' ? document.querySelector('.qs input') : null))?.focus();
   };
   search.oninput = () => { q = search.value; nav.render(); const s = document.querySelector('.qs input'); if (s) { s.focus(); s.setSelectionRange(q.length, q.length); } };
-  // 标题这一行右边：管理实例、导入邮箱、设置、关闭这个实例（图标，悬停有字）和“新建实例”。演示定稿里菜单底下不再有一串文字项。
+  // 标题这一行右边：管理实例、（导入邮箱）、设置、关闭这个实例；翻译只留 Alt+T 快捷键（需求方 2026-11-24）（图标，悬停有字）和“新建实例”。演示定稿里菜单底下不再有一串文字项。
   const tool = (ic, tip, fn) => h('button', { class: 'ib sm', title: tip, 'aria-label': tip, onclick: fn }, icon(ic, 19));
   kids.push(h('div', { class: 'lbl' }, h('span', { title: MOBILE ? null : '直接打字就能搜索（编号 / 名称 / 邮箱），回车切换到第一个' }, `其它实例（${others.length}）`),
       h('span', { class: 'tools' },
-        nav.translate && tool('lang', '翻译此页 / 显示原文（Alt+T）', nav.translate), // 决策 UI-27
-        tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), !extIn && !st.host && tool('ext', `共享扩展：本实例用着 ${extMine(st, me)} 个，在这里重载、停用、改范围${extStale(me) ? '（有新加的扩展，重启本实例后出现）' : ''}`, () => nav.open('extensions')),
-        // 节能 / 性能总开关（decisions PERF-2）：月亮 = 节能，闪电 = 性能，点一下切换
-        !st.host && (() => { const saver = st.settings?.power !== 'perf'; return tool(saver ? 'moon' : 'bolt', saver ? '节能模式：闲置标签页和超出上限的实例自动休眠（点击切到性能模式）' : '性能模式：全部照常运行（点击切到节能模式）',
-          () => run(() => api('PATCH', '/api/settings', { power: saver ? 'perf' : '' }), saver ? '已切到性能模式' : '已切到节能模式')); })(),
+        tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), !mailIn && tool('mail', '导入邮箱', () => nav.open('instances/import')),
         tool('gear', '设置', () => nav.open('settings')),
         me.kind !== 'normal' && tool('power', '关闭这个实例', () => run(() => api('POST', `/api/instances/${me.id}/stop`))),
         h('button', { class: 'btn tonal sm', title: '新建实例' + (MOBILE ? '' : '（Ctrl+M）'), onclick: () => newWizard(st, () => nav.render()) }, icon('add', 16), h('span', { class: 'bt' }, '新建实例')))), // 新建走向导（决策 UI-25）

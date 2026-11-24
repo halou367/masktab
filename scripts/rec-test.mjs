@@ -259,7 +259,7 @@ await page.click('input[name=user]');
 await sleep(500);
 check('聚焦输入框也不再冒“录入”按钮', await u.btn.count() === 0);
 await page.evaluate(() => window.__mtL.forEach((f) => f({ t: 'mt:rec-start' }, { id: 'x' }, () => {})));
-check('实例菜单的“录入登录”仍然能开始录入', await u.bar.count() === 1);
+check('实例菜单“账号管理”右边的录入按钮仍然能开始录入', await u.bar.count() === 1);
 console.log(`[${kind}]    登录用的弹出窗口：点了登录、窗口随即关掉，也要入库`);
 await page.locator('input[name=user]').pressSequentially('popuser');
 await page.locator('input[name=pass]').pressSequentially('poppass');
