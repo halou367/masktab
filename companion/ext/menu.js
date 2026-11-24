@@ -113,13 +113,16 @@ export function menuView(st, nav) {
     me.kind !== 'normal' && mi('finger', '指纹与伪装', nav.fp, dz.total ? `${dz.pass}/${dz.total}` : ''),
     me.mail && mi('mail', '信箱', () => nav.open(`mail/${me.id}`), me.mail.unread ? h('span', { class: 'mdot n' }, String(me.mail.unread)) : '')].filter(Boolean); // 信箱：设了卡密才有（decisions MB-1）
   // 共享扩展、节能 / 性能也做成同样的长条（需求方 2026-11-24：工具栏太挤，翻译不用放这里，共享扩展该是按钮）。
+  // 次序：节能 / 性能插在信箱前面，好让“共享扩展”还是紧挨信箱右边（需求方 2026-11-23）。
   // 节能 / 性能（decisions PERF-2）：点一下就切换，不进下一页，所以没有右箭头。
   if (!st.host) {
-    items.push(extItem(st, me, mi, nav));
     const saver = st.settings?.power !== 'perf';
-    items.push(mi(saver ? 'moon' : 'bolt', saver ? '节能模式' : '性能模式',
+    const pw = mi(saver ? 'moon' : 'bolt', saver ? '节能模式' : '性能模式',
       () => run(() => api('PATCH', '/api/settings', { power: saver ? 'perf' : '' }), saver ? '已切到性能模式' : '已切到节能模式'), '切换',
-      saver ? '节能模式：闲置标签页和超出上限的实例自动休眠（点击切到性能模式）' : '性能模式：全部照常运行（点击切到节能模式）', true));
+      saver ? '节能模式：闲置标签页和超出上限的实例自动休眠（点击切到性能模式）' : '性能模式：全部照常运行（点击切到节能模式）', true);
+    const at = me.mail ? items.length - 1 : items.length;
+    items.splice(at, 0, pw);
+    items.push(extItem(st, me, mi, nav));
   }
   // 两列凑不满时把“导入邮箱”补进来，工具栏里就不再放它
   const mailIn = items.length % 2 === 1;

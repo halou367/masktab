@@ -767,10 +767,10 @@ if (desk && want('desk')) {
     const g = await p3.evaluate(() => { const l = document.querySelector('.amenu .insts'), lb = l.getBoundingClientRect(), mi = [...document.querySelectorAll('.amenu .mis .mi')].map((x) => x.getBoundingClientRect());
       const rows = [...l.children].map((x) => x.getBoundingClientRect());
       return { n: rows.length, seen: rows.filter((r) => r.top >= lb.top - 1 && r.bottom <= Math.min(lb.bottom, 600) + 1).length, dense: l.classList.contains('dense'), scroll: l.scrollHeight > l.clientHeight + 1, qs: document.querySelectorAll('.qs').length,
-        cols: mi.length === 4 && Math.abs(mi[0].top - mi[1].top) < 1 && Math.abs(mi[2].top - mi[3].top) < 1 && mi[2].top > mi[0].top, ext: !!document.querySelector('.amenu .tools button[title^="共享扩展"]'), page: document.documentElement.scrollHeight,
+        cols: mi.length % 2 === 0 && mi.length >= 4 && mi.every((r, k) => k % 2 === 0 ? Math.abs(r.top - mi[k + 1].top) < 1 : r.left > mi[k - 1].left), ext: !!document.querySelector('.amenu .tools button[title^="共享扩展"], .amenu .tools button[title^="翻译"]'), page: document.documentElement.scrollHeight,
         order: [...l.children].map((x) => (x.classList.contains('run') ? 'r' : 'i')).join('') }; });
-    check(`电脑弹窗：${others} 个别的实例一屏全看得到（${dense ? '一行一个的紧凑排法' : '两行一个'}），不用滚、不出搜索框`, g.n === others && g.seen === others && g.dense === dense && !g.scroll && g.qs === 0 && g.page <= 600, g);
-    if (!dense) check('电脑弹窗：四个入口排成两列（没设信箱时“共享扩展”在下面那排小图标里）；开着的实例排在休眠的前面', g.cols && g.ext && /^r*i*$/.test(g.order), g);
+    check(`电脑弹窗：${others} 个别的实例一屏全看得到（${dense ? '一行一个的紧凑排法' : '两行一个'}），不用滚、不出搜索框`, g.n === others && g.seen === others && (dense ? g.dense : true) && !g.scroll && g.qs === 0 && g.page <= 600, g);
+    if (!dense) check('电脑弹窗：入口长条排成两列、凑满偶数（共享扩展、节能 / 性能都是长条，工具栏里没有共享扩展和翻译）；开着的实例排在休眠的前面', g.cols && !g.ext && /^r*i*$/.test(g.order), g);
     await p3.screenshot({ path: path.join(out, `desk-menu-${others}.png`) });
     if (!dense) {
       // 直接打字 = 搜索：不用先点搜索框；数字先按编号排；回车打开第一个；↓ 进列表

@@ -249,7 +249,7 @@ function drawer(i) {
   const items = accts.id === i.id ? accts.items : null;
   const close = () => { shown = new Set(); editing = ''; setRoute(''); };
   const save = (body) => run(async () => { await api('POST', '/api/vault', { inst: i.id, ...body }); editing = ''; await loadAccts(i.id, true); await ctx.load(true); }, '已保存');
-  const row = (a) => {
+  const accRow = (a) => { // 不能叫 row：会遮住 ui.js 的 row，抽屉里“常驻”那一行就报 Invalid URL（83ec723 引入）
     if (editing === a.id) return form(a);
     const show = shown.has(a.id);
     return h('div', { class: 'acc' }, a.site === '*' ? h('span', { class: 'site' }, icon('mail', 14)) : siteIcon(new URL(a.site).hostname, 16),
@@ -296,7 +296,7 @@ function drawer(i) {
       h('h3', {}, icon('key', 16), '账号管理', h('span', { class: 'grow' }), ibtn('plus', '手动添加一条', () => { editing = 'new'; ctx.render(); })),
       h('div', { class: 'sub hint' }, '在这个实例里登录过的账号会自动记住；网站不让浏览器记密码也照样记。下次打开登录页自动填好，不会替你点登录。'),
       editing === 'new' && form(null),
-      items == null ? h('div', { class: 'sub' }, '读取中…') : items.length ? items.map(row) : h('div', { class: 'sub' }, '还没有记住的账号'),
+      items == null ? h('div', { class: 'sub' }, '读取中…') : items.length ? items.map(accRow) : h('div', { class: 'sub' }, '还没有记住的账号'),
       h('h3', {}, icon('cookie', 16), 'Cookie', h('span', { class: 'sub' }, `  ${i.acct?.cookieN || 0} 条 · ${cookies.length} 个站点`)),
       h('div', { class: 'sub hint' }, '只统计“哪些站点、各有几条”，内容不离开这个实例。实例运行时每分钟更新。'),
       cookies.length ? h('div', { class: 'cks' }, cookies.map((c) => h('span', { class: 'ck' }, siteIcon(c.d, 14), h('span', {}, c.d), h('b', {}, c.n)))) : h('div', { class: 'sub' }, i.rt.running ? '还没有 Cookie' : '实例打开后才会统计'),
