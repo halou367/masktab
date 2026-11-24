@@ -932,7 +932,38 @@ func (a *App) prepareProfile(in *model.Instance, l kernel.Launch) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	return nil
+	if l.ProfileDir == "" {
+		return nil
+	}
+	return lockNativeProfiles(l.ProfileDir)
+}
+
+// lockNativeProfiles 关掉内核自带的“添加资料”“访客”和启动时的资料选择页（decisions K-10）。
+// 一个实例只有一个资料：指纹、代理、时区、语言都是启动参数，整个进程共用，从原生菜单新建的资料会和本实例同指纹、同 IP，
+// 等于串号。这三项是 Local State（用户数据目录根下）里的普通偏好，不是受保护偏好，
+// 写进去内核就把对应入口藏起来；不用写注册表策略，也就不会出“由贵单位管理”，不影响本机其他 Chromium。
+func lockNativeProfiles(profileDir string) error {
+	path := filepath.Join(profileDir, "Local State")
+	st := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil {
+		if json.Unmarshal(b, &st) != nil {
+			return nil // 读不懂就不动，内核自己会处理
+		}
+	}
+	pr, ok := st["profile"].(map[string]any)
+	if !ok {
+		pr = map[string]any{}
+		st["profile"] = pr
+	}
+	pr["add_person_enabled"] = false
+	pr["browser_guest_enabled"] = false
+	pr["picker_availability_on_startup"] = 1 // 1 = 启动时不显示资料选择页
+	b, _ := json.Marshal(st)
+	tmp := path + ".masktab.tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // writeCompanion 生成本实例的伴随扩展副本并写入 config.json（8.9 第 6 步）。返回要加载的扩展目录。

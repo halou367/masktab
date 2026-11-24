@@ -1984,3 +1984,8 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
 - `Settings.Power`：空 = 节能（默认），`perf` = 性能。性能模式不做实例休眠（PERF-1 上限视为不限）、不丢标签页、内核不额外关功能。
 - 标签页闲置休眠（伴随扩展，keepalive 每 30 秒查一次）：每个实例保最近用过的 `tabKeep` 个标签页（默认 3，含每个窗口当前那个），其余闲置超过 `tabIdleMin` 分钟（默认 10）用 `chrome.tabs.discard` 丢弃，点开自动重新加载。不丢：出声的、填过表单的、固定的、非 http(s) 页。设置五分钟取一次。
 - 内核后台服务：节能模式下并进唯一的 `--disable-features`：OptimizationHints 系列、OptimizationGuide 模型下载/端侧模型、新标签页推荐流、SegmentationPlatform。都是网页读不到的浏览器自有服务，不改指纹；不关翻译（网页翻译要用）、不关组件更新（影响 Widevine 等）。实例下次启动生效。
+
+### K-10 关掉内核自带的“添加资料”“访客”和启动资料选择页（不编译、不写注册表）
+- 需求方 2026-11-24 问能否把原生账号切换整合成实例。结论：不编译做不到。原生资料只分 Cookie/数据，指纹种子、`--proxy-server`、时区、语言都是启动参数，同一进程里的资料共用一套；从原生菜单建的新资料和本实例同指纹、同 IP，等于串号。真要整合得改内核按资料区分，上游每次升级都要重打补丁，不做。
+- 改为堵住串号入口：启动前在用户数据目录的 `Local State` 里写 `profile.add_person_enabled=false`、`profile.browser_guest_enabled=false`、`profile.picker_availability_on_startup=1`。这是普通偏好（不是受保护偏好），不用注册表策略，不会出“由贵单位管理”，也不影响本机其他 Chromium。切换实例继续走伴随扩展的头像菜单。
+- 沙盒 Chromium（Playwright 自带）实测：写入后 chrome://profile-picker 的“添加”和“访客”按钮都不显示，不写时都显示。fingerprint-chromium 148 在 Windows 上未实测。原生头像菜单里的“管理资料”还在（只打开选择页，没有新建入口）。
