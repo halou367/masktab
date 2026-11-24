@@ -520,7 +520,7 @@
     const tx = el('span', 'tx'); tx.append(el('b', '', '录入这个网站的登录？'), el('span', 's', '照常登录一次，MaskTab 记住账号，下次自动填'));
     const y = el('button', 'y', '录入'), n = el('button', 'n', '不用');
     y.onclick = () => { const a = document.activeElement, p = pwFields()[0]; startRec(false, isField(a) ? a : (p && userFieldFor(p)) || loneUserField() || p || null); };
-    n.title = '这个网站 30 天内不再问；实例菜单里的“录入登录”随时可以录';
+    n.title = '这个网站 30 天内不再问；实例菜单“账号管理”右边的录入按钮随时可以录';
     n.onclick = () => { hideAsk(); recOff = true; send({ t: 'vault:rec-set', rec: null, off: true }); };
     askEl.append(tx, y, n); root.append(askEl);
   }

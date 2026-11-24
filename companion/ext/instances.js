@@ -66,12 +66,12 @@ function rulesBox(st) {
   const rules = st.vault?.rules || [];
   return h('div', { class: 'rules' },
     h('h3', {}, icon('rec', 16), '已标记的网站', h('span', { class: 'sub' }, rules.length ? `  ${rules.length} 个 · 全部实例共用` : ''),
-      h('span', { class: 'sub tipq', title: '在网站的登录框旁点“录入”，或从实例菜单点“录入登录”，然后照常登录一次：\n登录成功后，这个网站怎么登录（哪个框填邮箱 / 账号 / 手机号 / 密码）会记在这里，账号记进当前实例。\n别的实例打开已标记的网站会自动进入录入，登录一次就记住各自的账号。' }, '怎么用？')),
+      h('span', { class: 'sub tipq', title: '在网站的登录框旁点“录入”，或点实例菜单“账号管理”右边的录入按钮，然后照常登录一次：\n登录成功后，这个网站怎么登录（哪个框填邮箱 / 账号 / 手机号 / 密码）会记在这里，账号记进当前实例。\n别的实例打开已标记的网站会自动进入录入，登录一次就记住各自的账号。' }, '怎么用？')),
     rules.length ? h('div', { class: 'cks' }, rules.map((r) => h('span', { class: 'ck rule', title: `${r.site}\n由 ${r.by > 0 ? '#' + r.by : '已删除的实例'} 录入` },
       siteIcon(r.host, 14), h('span', {}, siteName(r.host)),
       h('b', { title: '登录时填的内容' }, (r.kinds || []).map((k) => KIND[k]).filter(Boolean).join(' + ')),
       h('button', { class: 'x', title: '取消标记（不删已记住的账号）', onclick: () => ctx.act(() => api('DELETE', `/api/vault/rule?site=${encodeURIComponent(r.site)}`), '已取消标记') }, icon('x', 12)))))
-      : h('div', { class: 'sub' }, '还没有。打开要登录的网站，在登录框旁点“录入”（或从实例菜单点“录入登录”），登录成功后自动记下。'));
+      : h('div', { class: 'sub' }, '还没有。打开要登录的网站，在登录框旁点“录入”（或点实例菜单“账号管理”右边的录入按钮），登录成功后自动记下。'));
 }
 
 // 正在关闭（核心服务的 rt.stopping）：写出来，并且这时候就能点“打开”——记下来，关完马上重新打开（rt.reopen）。

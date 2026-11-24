@@ -105,12 +105,17 @@ export function menuView(st, nav) {
     h('button', { class: 'lk', onclick: () => run(() => api('POST', restartPath(st, me)), '正在重启…') }, '立即重启')));
   const mi = (ic, label, fn, k) => h('button', { class: 'mi', onclick: fn }, icon(ic, 22), h('span', { class: 'grow' }, label), k != null && k !== '' && h('span', { class: 'k' }, k), h('span', { class: 'chev' }, icon('chevR', 20)));
   // 四个入口包在一起：手机上还是一行一个；电脑弹窗里排成两列（弹窗最高 600，省下的高度给下面的实例列表，决策 UI-13）
-  kids.push(h('div', { class: 'mis' }, mi('key', '账号管理', () => nav.open(`instances/${me.id}`), me.acct?.count ? String(me.acct.count) : ''),
+  // 账号管理和录入登录合成一项（需求方 2026-11-24：“账号管理功能有重复”）：点这一项进账号管理，右边的圆点按钮 = 录入当前网页的登录。
+  const recBtn = nav.record && h('span', { class: 'ib sm rec', role: 'button', tabindex: '0', title: `录入当前网页的登录${rules ? `（已标记 ${rules} 个网站）` : ''}`, 'aria-label': '录入当前网页的登录',
+    onclick: (ev) => { ev.stopPropagation(); nav.record(); }, onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); nav.record(); } } }, icon('rec', 18));
+  const items = [mi('key', '账号管理', () => nav.open(`instances/${me.id}`), [me.acct?.count ? String(me.acct.count) : '', recBtn]),
     mi('globe', '节点与出口', nav.node, ex ? [flag(ex.country), h('span', { class: 'cn' }, cname(ex.country))] : on ? '' : '直连'),
     me.kind !== 'normal' && mi('finger', '指纹与伪装', nav.fp, dz.total ? `${dz.pass}/${dz.total}` : ''),
-    nav.record && mi('rec', '录入登录', nav.record, rules ? String(rules) : ''),
-    me.mail && mi('mail', '信箱', () => nav.open(`mail/${me.id}`), me.mail.unread ? h('span', { class: 'mdot n' }, String(me.mail.unread)) : ''), // 设了卡密才有（decisions MB-1）
-    me.mail && extItem(st, me, mi, nav))); // 紧挨信箱右边（两列刚好填满）；没设信箱的实例放到下面那排小图标里，弹窗不多占一行
+    me.mail && mi('mail', '信箱', () => nav.open(`mail/${me.id}`), me.mail.unread ? h('span', { class: 'mdot n' }, String(me.mail.unread)) : '')].filter(Boolean); // 信箱：设了卡密才有（decisions MB-1）
+  // 共享扩展：两列凑不满时补进来；凑满了就放到下面那排小图标里，弹窗不多占一行
+  const extIn = !st.host && items.length % 2 === 1;
+  if (extIn) items.push(extItem(st, me, mi, nav));
+  kids.push(h('div', { class: 'mis' }, items));
 
   // 开着的排在前面（和实例页“运行中 / 休眠”两组一个次序），组内还是拖出来的次序：要切过去的多半是开着的。
   // 次序在菜单打开时定一次（决策 UI-32）：开着菜单点“打开”某一个，它不会从下面跳到最上面去，还在原处转进度；下次打开菜单才按新的排。
@@ -143,7 +148,10 @@ export function menuView(st, nav) {
   kids.push(h('div', { class: 'lbl' }, h('span', { title: MOBILE ? null : '直接打字就能搜索（编号 / 名称 / 邮箱），回车切换到第一个' }, `其它实例（${others.length}）`),
       h('span', { class: 'tools' },
         nav.translate && tool('lang', '翻译此页 / 显示原文（Alt+T）', nav.translate), // 决策 UI-27
-        tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), !me.mail && !st.host && tool('ext', `共享扩展：本实例用着 ${extMine(st, me)} 个，在这里重载、停用、改范围${extStale(me) ? '（有新加的扩展，重启本实例后出现）' : ''}`, () => nav.open('extensions')),
+        tool('layers', '管理实例' + (MOBILE ? '' : '（Ctrl+Shift+M）'), () => nav.open('instances')), tool('mail', '导入邮箱', () => nav.open('instances/import')), !extIn && !st.host && tool('ext', `共享扩展：本实例用着 ${extMine(st, me)} 个，在这里重载、停用、改范围${extStale(me) ? '（有新加的扩展，重启本实例后出现）' : ''}`, () => nav.open('extensions')),
+        // 节能 / 性能总开关（decisions PERF-2）：月亮 = 节能，闪电 = 性能，点一下切换
+        !st.host && (() => { const saver = st.settings?.power !== 'perf'; return tool(saver ? 'moon' : 'bolt', saver ? '节能模式：闲置标签页和超出上限的实例自动休眠（点击切到性能模式）' : '性能模式：全部照常运行（点击切到节能模式）',
+          () => run(() => api('PATCH', '/api/settings', { power: saver ? 'perf' : '' }), saver ? '已切到性能模式' : '已切到节能模式')); })(),
         tool('gear', '设置', () => nav.open('settings')),
         me.kind !== 'normal' && tool('power', '关闭这个实例', () => run(() => api('POST', `/api/instances/${me.id}/stop`))),
         h('button', { class: 'btn tonal sm', title: '新建实例' + (MOBILE ? '' : '（Ctrl+M）'), onclick: () => newWizard(st, () => nav.render()) }, icon('add', 16), h('span', { class: 'bt' }, '新建实例')))), // 新建走向导（决策 UI-25）

@@ -874,3 +874,5 @@ html.pc .mrow { min-height: 58px; padding: 8px 14px; }
 .wz .wzpwr .tg { min-height: 36px; }
 .modal .pwnote { margin: 0 0 8px; line-height: 1.5; }
 .modal .frow .pwuse { font-size: 14px; color: var(--on2); min-width: 0; }
+.mi .k .rec { margin: -6px -2px -6px 2px; color: var(--on2); border-radius: 50%; }
+.mi .k .rec:hover { background: var(--hover, rgba(0,0,0,.08)); color: #d93025; }
