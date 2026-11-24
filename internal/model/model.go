@@ -308,7 +308,17 @@ type Settings struct {
 	// 活跃实例上限（decisions PERF-1）：开着的实例超过这么多个时，最久没用的自动休眠（不关窗口：后台标签页释放、内存交给系统压缩），
 	// 一点就醒。0 = 不限。不带 omitempty：默认是 6，关掉时 0 要真的写进文件。
 	ActiveMax int `json:"activeMax"`
+	// 总开关（decisions PERF-2）："" = 节能（默认）：实例休眠、标签页闲置休眠、内核关掉用不到的后台服务；
+	// "perf" = 性能：以上全部不做，一切照常运行。
+	Power string `json:"power,omitempty"`
+	// 节能模式下每个实例保持活跃的标签页数（含当前那个）；0 = 默认 3
+	TabKeep int `json:"tabKeep,omitempty"`
+	// 节能模式下其余标签页闲置多少分钟后休眠；0 = 默认 10
+	TabIdleMin int `json:"tabIdleMin,omitempty"`
 }
+
+// Saver 报告是否处于节能模式（decisions PERF-2）。
+func (s Settings) Saver() bool { return s.Power != "perf" }
 
 // Bookmark 是新标签页上的一个书签。
 type Bookmark struct {

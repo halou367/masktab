@@ -88,8 +88,17 @@ export function settingsAdv(c) {
     !host && row({ ic: 'dl', t: 'GitHub 下载镜像前缀', s: s.mirror || '直连', chev: true, onclick: text('GitHub 下载镜像前缀', 'mirror', '留空为直连', 'https://ghfast.top/') }),
     !host && sec('启动'),
     !host && row({ ic: 'ext', t: '新扩展的数据模式', s: name(O.ext, s.newExtData), drop: true, onclick: () => pick('新扩展的数据模式', O.ext, s.newExtData, 'newExtData') }),
+    // 总开关（decisions PERF-2）
+    !host && row({ ic: 'moon', t: '节能模式', s: s.power === 'perf' ? '关（性能模式）：全部实例和标签页照常运行' : '开：超出上限的实例休眠、闲置标签页休眠、关掉后台服务',
+      title: '性能模式下一切照常运行，不做任何休眠。内核后台服务的开关在实例下次启动时生效',
+      trail: sw(s.power !== 'perf', '节能模式', (v) => set(c, 'power', v ? '' : 'perf')) }),
+    !host && s.power !== 'perf' && row({ ic: 'moon', t: '每个实例保持活跃的标签页', s: `${s.tabKeep || 3} 个 · 其余闲置 ${s.tabIdleMin || 10} 分钟后休眠，点开自动重新加载`, drop: true,
+      title: '出声的、填过表单的、固定的标签页不会休眠',
+      onclick: async () => { const v = await choose('每个实例保持活跃的标签页', [[0, '3 个（默认）'], [1, '1 个'], [2, '2 个'], [5, '5 个'], [8, '8 个']], s.tabKeep || 0); if (v != null && v !== (s.tabKeep || 0)) set(c, 'tabKeep', v); } }),
+    !host && s.power !== 'perf' && row({ ic: 'history', t: '标签页闲置多久休眠', s: `${s.tabIdleMin || 10} 分钟`, drop: true,
+      onclick: async () => { const v = await choose('标签页闲置多久休眠', [[0, '10 分钟（默认）'], [5, '5 分钟'], [30, '30 分钟'], [60, '1 小时']], s.tabIdleMin || 0); if (v != null && v !== (s.tabIdleMin || 0)) set(c, 'tabIdleMin', v); } }),
     // 活跃实例上限（decisions PERF-1）
-    !host && row({ ic: 'moon', t: '活跃实例上限', s: s.activeMax > 0 ? `${s.activeMax} 个 · 超过时最久没用的自动休眠，一点就醒` : '不限', drop: true,
+    !host && s.power !== 'perf' && row({ ic: 'moon', t: '活跃实例上限', s: s.activeMax > 0 ? `${s.activeMax} 个 · 超过时最久没用的自动休眠，一点就醒` : '不限', drop: true,
       title: '开着的实例超过这么多个时，最久没用的自动休眠：窗口、网页、登录都还在，后台标签页暂时释放、内存交给系统压缩；切到它的窗口马上恢复。实例详情里可把某个实例设成常驻',
       onclick: () => pick('活跃实例上限', [[0, '不限'], [3, '3 个'], [4, '4 个'], [6, '6 个（默认）'], [8, '8 个'], [10, '10 个'], [15, '15 个'], [20, '20 个']], s.activeMax, 'activeMax') }),
     !host && row({ ic: 'history', t: '启动时恢复上次的实例', trail: sw(s.restoreOnStart, '恢复上次的实例', (v) => set(c, 'restoreOnStart', v)) }),

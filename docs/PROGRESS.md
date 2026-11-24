@@ -786,3 +786,6 @@ v0.1.55 只套了 UI-9 的四条规则，页面还是旧样子，需求方不认
 ## 动效（2026-11-21，分支 fix/ui-motion，UI-33）
 - 基于最新 main（94ec99c）合入 fix/ui-jank（UI-32、悬停意图延迟），再加：弹窗先按上次高度撑开（去小白条）、离开收起 0.18 秒、实例启动中 ＋ 转圈 + 色条走光。
 - go test ./internal/tabbar ./internal/core 通过（沙箱 linux）；Windows 真机未测。
+## 节能 / 性能总开关（2026-11-24，分支 feat/hibernate，PERF-2）
+- 设置里加“节能模式”开关（默认开）、每实例保持活跃标签页数（默认 3）、标签页闲置休眠时间（默认 10 分钟）；性能模式下全部照常运行。
+- go test ./internal/...、GOOS=windows go vet 通过（沙箱 linux）；tabIdlePlan 用 node 单测通过。Windows 开发机实测见下一条。

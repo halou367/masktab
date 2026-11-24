@@ -56,6 +56,22 @@ func TestSleepPlan(t *testing.T) {
 	}
 }
 
+// 性能模式（decisions PERF-2）：不管上限，全部醒着；休眠中的叫醒。
+func TestSleepPlanPerf(t *testing.T) {
+	const T = int64(10_000_000)
+	a := &App{rt: map[string]*Runtime{}}
+	a.Settings.ActiveMax, a.Settings.Power = 1, "perf"
+	for i := 1; i <= 3; i++ {
+		id := fmt.Sprintf("i%d", i)
+		a.Instances = append(a.Instances, &model.Instance{ID: id, No: i})
+		a.rt[id] = &Runtime{Running: true, Asleep: i == 1, usedAt: T - int64(7-i)*60_000}
+	}
+	sleep, wake, _ := a.sleepPlanLocked(T)
+	if sleep != nil || !reflect.DeepEqual(wake, []string{"i1"}) {
+		t.Fatalf("性能模式：sleep=%v wake=%v", sleep, wake)
+	}
+}
+
 func TestActiveMaxDefault(t *testing.T) {
 	if model.DefaultSettings().ActiveMax != 6 {
 		t.Fatal("活跃实例上限默认应为 6")

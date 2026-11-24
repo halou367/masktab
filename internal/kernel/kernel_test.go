@@ -39,6 +39,15 @@ func TestArgs(t *testing.T) {
 			t.Errorf("%s：--disable-features 应该正好有一个、里面有 ExtensionDisableUnsupportedDeveloper（有 %d 个，含=%v）", k, n, ok)
 		}
 	}
+	// 节能模式（decisions PERF-2）：后台服务并进同一个 --disable-features；性能模式不带
+	l.Saver = true
+	if !has(Get("fingerprint-chromium").Args(l), disableFeatures(true)) || !strings.Contains(disableFeatures(true), ",OptimizationHints,") {
+		t.Errorf("节能模式应关掉后台服务：%s", disableFeatures(true))
+	}
+	l.Saver = false
+	if !has(Get("fingerprint-chromium").Args(l), "--disable-features=ExtensionDisableUnsupportedDeveloper") {
+		t.Errorf("性能模式只应关 ExtensionDisableUnsupportedDeveloper")
+	}
 	l.Normal = true
 	for _, x := range Get("fingerprint-chromium").Args(l) {
 		if strings.HasPrefix(x, "--fingerprint") || strings.HasPrefix(x, "--timezone") {

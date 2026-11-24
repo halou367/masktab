@@ -231,6 +231,43 @@ async function sleepTabs() {
 }
 globalThis.sleepTabs = sleepTabs; // 冒烟测试从调试端口调用
 
+// ---------- 标签页闲置休眠（decisions PERF-2，节能模式） ----------
+// 每个实例保持最近用过的 tabKeep 个标签页活跃（每个窗口当前的那个总算在内），其余闲置超过 tabIdleMin 分钟就丢弃（点到时重新加载）。
+// 不丢：出声的、填过东西的、固定的、扩展页和新标签页。性能模式（settings.power = "perf"）什么都不做。
+const tabUsedGet = async () => (await chrome.storage.session.get('tabUsed')).tabUsed || {};
+async function tabTouch(id) { const m = await tabUsedGet(); m[id] = Date.now(); await chrome.storage.session.set({ tabUsed: m }); }
+chrome.tabs.onActivated.addListener(({ tabId }) => { tabTouch(tabId).catch(() => {}); });
+chrome.tabs.onRemoved.addListener(async (id) => { const m = await tabUsedGet().catch(() => null); if (m && id in m) { delete m[id]; chrome.storage.session.set({ tabUsed: m }).catch(() => {}); } });
+let powerAt = 0, power = null;
+async function powerSettings() {
+  if (power && Date.now() - powerAt < 300_000) return power; // 五分钟取一次设置；改了设置最多五分钟后生效
+  const s = await api('GET', '/api/settings');
+  power = { saver: s.power !== 'perf', keep: s.tabKeep > 0 ? s.tabKeep : 3, idle: (s.tabIdleMin > 0 ? s.tabIdleMin : 10) * 60_000 };
+  powerAt = Date.now();
+  return power;
+}
+// 纯计算，给测试用：返回该丢的标签页 id。tabs 是 chrome.tabs.query 的结果，used 是 {id: 上次用的毫秒}。
+function tabIdlePlan(tabs, used, dirty, keep, idle, now) {
+  const at = (t) => (t.active ? now : used[t.id] || t.lastAccessed || 0);
+  const live = tabs.filter((t) => !t.discarded).sort((a, b) => at(b) - at(a));
+  const out = [];
+  live.forEach((t, k) => {
+    if (t.active || k < keep || t.audible || t.pinned || dirty.has(t.id) || !/^https?:/.test(t.url || '')) return;
+    if (now - at(t) > idle) out.push(t.id);
+  });
+  return out;
+}
+globalThis.tabIdlePlan = tabIdlePlan;
+async function tabIdleCheck() {
+  const p = await powerSettings();
+  if (!p.saver) return 0;
+  const [tabs, used, dirty] = await Promise.all([chrome.tabs.query({}), tabUsedGet(), dirtyGet().catch(() => new Set())]);
+  let n = 0;
+  for (const id of tabIdlePlan(tabs, used, dirty, p.keep, p.idle, Date.now())) if (await chrome.tabs.discard(id).catch(() => null)) n++;
+  return n;
+}
+globalThis.tabIdleCheck = tabIdleCheck;
+
 // 新建向导的小窗口（决策 UI-25、UI-31）：只有向导一页（wizard.html，只装向导要的代码，开得快），建好 / 取消就自己关掉。已经开着一个就把它提到前面。
 async function wizardWindow() {
   const url = chrome.runtime.getURL('wizard.html');
@@ -385,7 +422,7 @@ globalThis.trFetch = trFetch; globalThis.translateTab = translateTab; // 测试�
 function trMenu() { try { chrome.contextMenus.removeAll(() => chrome.contextMenus.create({ id: 'mt-translate', title: '翻译此页 / 显示原文（MaskTab）', contexts: ['page', 'selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] }, () => void chrome.runtime.lastError)); } catch { /* 没有右键菜单权限 */ } }
 chrome.contextMenus?.onClicked.addListener((info, tab) => { if (info.menuItemId === 'mt-translate' && tab?.id >= 0) translateTab(tab.id); });
 
-chrome.alarms.onAlarm.addListener(() => { loop(); reportCookies().catch(() => {}); });
+chrome.alarms.onAlarm.addListener(() => { loop(); reportCookies().catch(() => {}); tabIdleCheck().catch(() => {}); });
 chrome.runtime.onInstalled.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); trMenu(); loop(); });
 chrome.runtime.onStartup.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); trMenu(); loop(); });
 chrome.runtime.onMessage.addListener((m, sender, send) => {

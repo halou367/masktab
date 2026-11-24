@@ -347,6 +347,7 @@ func (a *App) Launch(id string) error {
 		Seed: seed32(in.FP.Seed), HardwareConcurrency: cores(in), PlatformVersion: in.FP.PlatformVersion, Platform: in.FP.Platform, Brand: in.FP.Brand,
 		DisableSpoofing: in.FP.DisableSpoofing, Timezone: tz, Lang: lang,
 		NewTabURL: "chrome-extension://" + companion.ID + "/newtab.html", Bounds: bounds,
+		Saver: a.Settings.Saver(),
 	}
 	if lang != "" {
 		l.AcceptLang = lang

@@ -25,6 +25,7 @@ type Launch struct {
 	Platform            string // 空 = 与本机一致
 	Brand               string // 空 = Chrome
 	DisableSpoofing     []string
+	Saver               bool // 节能模式：关掉内核里网页用不到的后台服务（decisions PERF-2）
 	Timezone            string
 	Lang                string
 	AcceptLang          string
@@ -95,7 +96,7 @@ func commonArgs(l Launch) []string {
 		// 开发者模式是“受保护偏好”，从外面写不进去（decisions U-2），所以用内核自己的开关把这项检查关掉。
 		// 已经被这样停用的，带上这个参数重开就自己好了。每次冒烟都实测（scripts/ext-reload-e2e.mjs）。
 		// 注意：内核只认最后一个 --disable-features，以后要再关别的功能得写在同一个参数里（用逗号隔开）。
-		"--disable-features=ExtensionDisableUnsupportedDeveloper",
+		disableFeatures(l.Saver),
 	}
 	if b := l.Bounds; b != nil && b[2] >= 300 && b[3] >= 200 {
 		a = append(a, fmt.Sprintf("--window-position=%d,%d", b[0], b[1]), fmt.Sprintf("--window-size=%d,%d", b[2], b[3]))
@@ -121,6 +122,22 @@ func commonArgs(l Launch) []string {
 		a = append(a, "--accept-lang="+l.AcceptLang)
 	}
 	return a
+}
+
+// saverFeatures 是节能模式下额外关掉的内核功能：都是浏览器自己的后台服务（优化提示、模型下载、新标签页推荐流等），
+// 网页里读不到，关掉不改变指纹；不关翻译（网页翻译要用）、不关组件更新（会影响 Widevine 等组件）。
+var saverFeatures = []string{
+	"OptimizationHints", "OptimizationHintsFetching", "OptimizationTargetPrediction", "OptimizationGuideModelDownloading",
+	"OptimizationGuideOnDeviceModel", "InterestFeedContentSuggestions", "NtpModulesLoad", "SegmentationPlatform",
+}
+
+// disableFeatures 合成唯一的 --disable-features 参数（内核只认最后一个）。
+func disableFeatures(saver bool) string {
+	f := []string{"ExtensionDisableUnsupportedDeveloper"}
+	if saver {
+		f = append(f, saverFeatures...)
+	}
+	return "--disable-features=" + strings.Join(f, ",")
 }
 
 func extDataDirs(profileDir, extID string) []string {

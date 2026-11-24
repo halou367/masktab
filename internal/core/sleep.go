@@ -65,6 +65,9 @@ func (a *App) sleepLoop() {
 // sleepPlan 算出：该去休眠的、该醒的（名额空出来了）、该再压一次的。纯计算，调用方持锁。
 func (a *App) sleepPlanLocked(t int64) (sleep, wake, retrim []string) {
 	max := a.Settings.ActiveMax
+	if !a.Settings.Saver() { // 性能模式：全部醒着（decisions PERF-2）
+		max = 0
+	}
 	type item struct {
 		id   string
 		used int64
