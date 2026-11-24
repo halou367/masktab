@@ -1988,4 +1988,4 @@ UI-10 加磁贴时写的是不带前缀的 `.acc { width: 88px; flex-direction: 
 ### K-10 关掉内核自带的“添加资料”“访客”和启动资料选择页（不编译、不写注册表）
 - 需求方 2026-11-24 问能否把原生账号切换整合成实例。结论：不编译做不到。原生资料只分 Cookie/数据，指纹种子、`--proxy-server`、时区、语言都是启动参数，同一进程里的资料共用一套；从原生菜单建的新资料和本实例同指纹、同 IP，等于串号。真要整合得改内核按资料区分，上游每次升级都要重打补丁，不做。
 - 改为堵住串号入口：启动前在用户数据目录的 `Local State` 里写 `profile.add_person_enabled=false`、`profile.browser_guest_enabled=false`、`profile.picker_availability_on_startup=1`。这是普通偏好（不是受保护偏好），不用注册表策略，不会出“由贵单位管理”，也不影响本机其他 Chromium。切换实例继续走伴随扩展的头像菜单。
-- 沙盒 Chromium（Playwright 自带）实测：写入后 chrome://profile-picker 的“添加”和“访客”按钮都不显示，不写时都显示。fingerprint-chromium 148 在 Windows 上未实测。原生头像菜单里的“管理资料”还在（只打开选择页，没有新建入口）。
+- 沙盒 Chromium（Playwright 自带）实测：写入后 chrome://profile-picker 的“添加”和“访客”按钮都不显示，不写时都显示。2026-11-24 需求方电脑开发版实测：实例 #2 启动后 Local State 三项保留未被内核改回；用同版 fingerprint-chromium 148.0.7778.215 + 该 Local State 开 chrome://profile-picker，“添加”“访客”都不显示（不写时都显示）。原生头像弹出菜单本身没截图核对。原生头像菜单里的“管理资料”还在（只打开选择页，没有新建入口）。
